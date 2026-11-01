@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #e8e8ec; font: 11px sans-serif; }
+  #wrap { position: relative; }
+  #cv { display: block; }
+  .cap { position: absolute; top: 2px; left: 4px; color: #222; font-weight: bold;
+         background: rgba(255,255,255,.65); padding: 0 3px; border-radius: 3px; }
+  .cap small { font-weight: normal; color: #555; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas><div id="caps"></div></div>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script>
+/* 全量动画盘点页：模型只加载一次，每个 clip × 每个相位各渲染一格（scissor 分格）。
+   clip 名来自 --ids（gust_XXXXX），相位取 clip 时长的百分比（--fracs=0.25,0.5,...）。 */
+const QS = new URLSearchParams(location.search)
+const IDS = (QS.get('ids') || '').split(',').filter(Boolean)
+const FRACS = (QS.get('fracs') || '0.5').split(',').map(Number).filter((x) => isFinite(x))
+const COLS = Number(QS.get('cols') || 6)
+const VRM_URL = QS.get('vrm') || 'vrm.vrm'
+const CW = Number(QS.get('cw') || 240), CH = Number(QS.get('ch') || 168)
+const ZOOM = Number(QS.get('zoom') || 1)   // <1 相机拉近，用来看清姿态
+
+window.__probe = { notes: [], done: false }
+window.__angles = () => []
+
+async function main () {
+  const THREE = window.AuraLibs.THREE
+  const { VRMLoaderPlugin, VRMUtils } = window.AuraLibs.THREEVRM
+  const canvas = document.getElementById('cv')
+  const rows = Math.ceil(IDS.length * FRACS.length / COLS)
+  canvas.width = COLS * CW
+  canvas.height = rows * CH
+  canvas.style.width = canvas.width + 'px'
+  canvas.style.height = canvas.height + 'px'
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true })
+  renderer.setScissorTest(true)
+  const scene = new THREE.Scene()
+  const camera = new THREE.PerspectiveCamera(22, CW / CH, 0.1, 50)
+  // 竖向视野按格高缩放：格子越矮相机越远，全身入格
+  camera.position.set(0, 1.0, 3.2 * (300 / CH) * ZOOM)
+  camera.lookAt(0, 0.78, 0)
+  scene.add(new THREE.AmbientLight(0xffffff, 1.4))
+  const dl = new THREE.DirectionalLight(0xffffff, 1.2)
+  dl.position.set(-1, 2, 2)
+  scene.add(dl)
+
+  const loader = new window.AuraLibs.GLTFLoader()
+  loader.register((p) => new VRMLoaderPlugin(p))
+  const gltf = await loader.loadAsync(VRM_URL)
+  const vrm = gltf.userData.vrm
+  try { vrm.humanoid.autoUpdateHumanBones = false } catch (e) {}
+  VRMUtils.rotateVRM0(vrm)
+  scene.add(vrm.scene)
+  const clips = gltf.animations || []
+  const byName = new Map(clips.map((c) => [String(c.name || ''), c]))
+  const mixer = new THREE.AnimationMixer(vrm.scene)
+
+  const caps = document.getElementById('caps')
+  let cell = 0
+  for (const id of IDS) {
+    const clip = byName.get(id)
+    for (const frac of FRACS) {
+      const col = cell % COLS
+      const row = Math.floor(cell / COLS)
+      const x0 = col * CW, y0 = row * CH
+      const cap = document.createElement('div')
+      cap.className = 'cap'
+      cap.style.left = (x0 + 4) + 'px'
+      cap.style.top = (y0 + 2) + 'px'
+      caps.appendChild(cap)
+      if (!clip) {
+        cap.textContent = id + ': 无此clip'
+        window.__probe.notes.push(id + ': 无此clip')
+        cell++
+        continue
+      }
+      const target = clip.duration * frac
+      const act = mixer.clipAction(clip)
+      act.setLoop(THREE.LoopOnce, 1) // 不循环，防止 time 取模
+      act.reset().play()             // 必须 play()，否则 mixer 跳过未激活 action
+      act.enabled = true
+      // mixer.update(0) 不求值（deltaTime=0 直接跳过），用小步长推进到目标相位
+      act.time = Math.max(0, Math.min(target, clip.duration - 0.001) - 1 / 60)
+      mixer.update(1 / 60)
+      vrm.update(0.016)
+      if (cell < 4) {
+        try {
+          const hips = vrm.scene.getObjectByName('SK_Hips') || vrm.scene.getObjectByName('J_Bip_C_Hips')
+          const q = hips && hips.quaternion ? Array.from(hips.quaternion).map((x) => +x.toFixed(3)).join(',') : 'none'
+          window.__probe.notes.push(id + ' target=' + target.toFixed(3) + ' act.time=' + act.time.toFixed(3) + ' hips=[' + q + ']')
+        } catch (e) {}
+      }
+      renderer.setViewport(x0, canvas.height - y0 - CH, CW, CH)
+      renderer.setScissor(x0, canvas.height - y0 - CH, CW, CH)
+      renderer.render(scene, camera)
+      cap.innerHTML = id + ' <small>' + (frac * 100).toFixed(0) + '% · ' + clip.duration.toFixed(2) + 's</small>'
+      cell++
+    }
+  }
+  window.__probe.done = true
+}
+main().catch((e) => { window.__probe.notes.push('FATAL: ' + e.message); window.__probe.done = true })
+</script>
+</body>
+</html>

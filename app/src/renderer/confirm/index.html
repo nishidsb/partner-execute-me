@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+  <title>电脑操作确认</title>
+  <link rel="stylesheet" href="../shared/brand.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <span class="badge" id="icon">?</span>
+      <b id="msg">角色想操作你的电脑</b>
+    </div>
+    <pre id="detail"></pre>
+    <div class="shot" id="shotWrap" hidden><img id="shot" alt="当前屏幕"></div>
+    <label class="remember" id="rememberRow" hidden>
+      <input type="checkbox" id="remember">
+      <span id="rememberLabel"></span>
+    </label>
+    <div class="buttons" id="buttons"></div>
+    <div class="foot">
+      <span id="hint">只允许这一次不会记住</span>
+      <span id="countdown">60s</span>
+    </div>
+    <div class="bar"><i id="barFill"></i></div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "id": "sample-clock",
+  "name": "示例：桌面时钟",
+  "version": "1.0.0",
+  "author": "Ryza Assistant",
+  "description": "World 扩展体系的最小示例：给模型一只 now_time 工具（看当前时间）、一个独立面板（时钟），并注入一段提示词。装完直接在设置页「扩展」里看效果。",
+  "tags": ["示例", "时钟"],
+  "os": ["win32", "darwin", "linux"],
+  "prompts": "对方问时间时，优先用 now_time 工具查准确时间再回答，不要凭感觉报时。",
+  "panel": true,
+  "config": [
+    { "key": "tzOffset", "type": "number", "default": 8, "label": "时区偏移（小时，北京=8）" }
+  ]
+}

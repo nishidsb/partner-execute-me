@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #1d2030; }
+  canvas { width: 560px; height: 800px; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="560" height="800"></canvas>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script>
+  // 侧视探针：绕开 vrm-stage 的自动相机，直接 three.js 渲染（默认从 +X 侧看）
+  const q = new URLSearchParams(location.search)
+  const model = q.get('model')
+  const yawDeg = Number(q.get('yaw') || 90) // 相机绕模型的方位角
+  window.__probe = { ready: false, error: null }
+  try {
+    const L = window.AuraLibs
+    const T = L.THREE
+    const canvas = document.getElementById('c')
+    const renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true })
+    renderer.setSize(560, 800, false)
+    const scene = new T.Scene()
+    const camera = new T.PerspectiveCamera(30, 560 / 800, 0.1, 50)
+    const light = new T.DirectionalLight(0xffffff, 2.2)
+    light.position.set(-1, 2, -3) // 相机侧打光
+    scene.add(light, new T.AmbientLight(0xffffff, 1.6))
+    const loader = new L.GLTFLoader()
+    loader.register((p) => new L.THREEVRM.VRMLoaderPlugin(p))
+    loader.load(model, (gltf) => {
+      const vrm = gltf.userData.vrm
+      scene.add(vrm.scene)
+      try { L.THREEVRM.VRMUtils.removeUnnecessaryVertices(vrm.scene) } catch (e) {}
+      // 相机绕原点水平转到 yawDeg 方位，看向头部高度
+      const yaw = (yawDeg * Math.PI) / 180
+      const dist = 2.6
+      camera.position.set(Math.sin(yaw) * dist, 1.35, Math.cos(yaw) * dist)
+      camera.lookAt(0, 1.30, 0)
+      camera.updateProjectionMatrix()
+      const clock = new T.Clock()
+      const tick = () => {
+        requestAnimationFrame(tick)
+        vrm.update(clock.getDelta())
+        renderer.render(scene, camera)
+        if (!window.__probe.ready) { window.__probe.ready = true; window.__probe.kind = 'side' }
+      }
+      tick()
+    }, undefined, (e) => { window.__probe.error = String(e && e.message || e) })
+  } catch (e) {
+    window.__probe.error = String(e && e.message || e)
+  }
+</script>
+</body>
+</html>

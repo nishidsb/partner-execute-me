@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #1d2030; color: #9aa4c0; font: 12px/1.4 "Segoe UI", sans-serif; }
+  #row { display: flex; gap: 4px; padding: 6px; align-items: flex-end; }
+  .cell { text-align: center; }
+  canvas { width: 216px; height: 392px; display: block; background: #171a26; border-radius: 4px; }
+  .cap { padding-top: 4px; font-size: 11px; color: #7f8aa8; }
+</style>
+</head>
+<body>
+<div id="row"></div>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script src="../../src/renderer/shared/vrm-stage.js"></script>
+<script>
+  /* 站姿 / 手势 / 走路 对照图（自查用，不参与应用运行）
+     每个格子一个独立的 fake clock，时钟真实推进（模拟运行），
+     加载完成后按各自剧本摆姿势，tools/pose-sheet.js 一次截图看全部。 */
+  const q = new URLSearchParams(location.search)
+  const model = q.get('model')
+  const row = document.getElementById('row')
+  window.__probe = { ready: false, error: null, n: 0, notes: [] }
+
+  const CELLS = [
+    { cap: 'idle', setup () {} },
+    { cap: 'stretch', setup (st) { st.playGesture('stretch', 2000) } },
+    { cap: 'handHip', setup (st) { st.playGesture('handHip', 2000) } },
+    { cap: 'lookAside', setup (st) { st.playGesture('lookAside', 2000) } },
+    { cap: 'clap', setup (st) { st.playGesture('clap', 2000) } },
+    { cap: 'armsCross', setup (st) { st.playGesture('armsCross', 2000) } },
+    { cap: 'coverFace', setup (st) { st.playGesture('coverFace', 2000) } },
+    { cap: 'cheer', setup (st) { st.playGesture('cheer', 2000) } },
+    { cap: 'bow', setup (st) { st.playGesture('bow', 2000) } },
+    { cap: 'think', setup (st) { st.playGesture('think', 2000) } },
+    { cap: 'beckon', setup (st) { st.playGesture('beckon', 2000) } },
+    { cap: 'wave', setup (st) { st.playGesture('wave', 2000) } }
+  ]
+
+  const insts = []
+  try {
+    CELLS.forEach((c, i) => {
+      const cell = document.createElement('div')
+      cell.className = 'cell'
+      const cv = document.createElement('canvas')
+      const cap = document.createElement('div')
+      cap.className = 'cap'
+      cap.textContent = c.cap
+      cell.appendChild(cv)
+      cell.appendChild(cap)
+      row.appendChild(cell)
+
+      const clk = { t: 0 }
+      const st = window.AuraVrm.create({
+        canvas: cv,
+        libs: window.AuraLibs,
+        url: model,
+        fps: 20,
+        now: () => clk.t,
+        // 真实 setTimer 会被 fps 调度调用；这里换成每 40ms 推 40ms 的假时钟
+        setTimer: (fn) => setInterval(() => { clk.t += 40; fn() }, 40),
+        clearTimer: (t) => clearInterval(t)
+      })
+      insts.push({ st, clk, cell: c })
+      st.ready.then(() => {
+        // 空转 0.4s（让 springbone / 取景稳定）就按剧本摆姿势；
+        // 截图端在 ready 后再等 0.7s = 动作进行到 40% 左右（峰值区）。
+        // 之前 1.2s 触发 + 0.7s 等待 = 截图时动作还没开始，全程拍成待机（踩过）。
+        setTimeout(() => {
+          try { c.setup(st) } catch (e) { window.__probe.notes.push(c.cap + ': ' + e.message) }
+        }, 400)
+        window.__probe.n++
+        if (window.__probe.n === CELLS.length) {
+          window.__probe.ready = true
+          document.title = 'READY ' + CELLS.length
+        }
+      }).catch((e) => {
+        window.__probe.error = String((e && e.message) || e)
+        document.title = 'ERR'
+      })
+    })
+  } catch (e) {
+    window.__probe.error = String((e && e.message) || e)
+    document.title = 'ERR'
+  }
+
+  // 暴露给截图脚本：某个格子当前的骨骼关键角度（判断姿态有没有真的生效）
+  window.__angles = () => insts.map((it) => {
+    const s = it.st.state
+    const r = s.rig || {}
+    const g = (n, a) => (r[n] ? Number(r[n].rotation[a].toFixed(3)) : null)
+    return {
+      cap: it.cell.cap,
+      gesture: it.st.gesture,
+      walkAmt: Number((s.walk.amt || 0).toFixed(2)),
+      sideAmt: s.side ? Number(s.side.amt.toFixed(2)) : null,
+      rootY: s.root ? Number(s.root.rotation.y.toFixed(2)) : null,
+      autoUpd: s.root ? s.root.matrixAutoUpdate : null,
+      armLz: g('leftUpperArm', 'z'),
+      kneeL: g('leftLowerLeg', 'x'),
+      hipLz: g('leftUpperLeg', 'z'),
+      headZ: g('head', 'z'),
+      headY: g('head', 'y')
+    }
+  })
+  /* 手部世界坐标（归一化）：x = 相对中轴的横向偏移（占身高比例），
+     y = 离地高度（占身高比例）。胸口≈0.72、脸≈0.86、举过头≈1.0。
+     用数字校准手势，比肉眼看截图靠谱（模型腰间有挂件，容易看走眼）。 */
+  window.__hands = () => insts.map((it) => {
+    const s = it.st.state
+    const r = s.rig || {}
+    if (!r.leftHand || !r.hips) return { cap: it.cell.cap, err: 'no hand bone' }
+    r.leftHand.updateWorldMatrix(true, false)
+    r.rightHand.updateWorldMatrix(true, false)
+    r.hips.updateWorldMatrix(true, false)
+    const T = window.AuraLibs.THREE
+    const a = new T.Vector3(), b = new T.Vector3(), c = new T.Vector3()
+    r.leftHand.getWorldPosition(a)
+    r.rightHand.getWorldPosition(b)
+    r.hips.getWorldPosition(c)
+    const h = s.height || 1.55
+    return {
+      cap: it.cell.cap,
+      gesture: it.st.gesture,
+      L: [Number(((a.x - c.x) / h).toFixed(2)), Number((a.y / h).toFixed(2))],
+      R: [Number(((b.x - c.x) / h).toFixed(2)), Number((b.y / h).toFixed(2))]
+    }
+  })
+</script>
+</body>
+</html>

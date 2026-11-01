@@ -1,0 +1,59 @@
+{
+  "_note": "接线审计基线：这里每一项都是「确认过可以接受」的。新增项必须先在代码里修，修不掉再用 --prune 并写清 reason。",
+  "allow": {
+    "testOnly:src/main/companion/inner.js:setJudge": {
+      "reason": "测试注入判读器的钩子（inner.test.js 用假判读器跑判定流程）。产品代码走 getInterpreter() 懒建，不需要外部设置；留着是为以后换成「本地小模型只做判读」时可以整体替换。"
+    },
+    "testOnly:src/main/companion/screentext/segment.js:isJapanese": {
+      "reason": "中日双语字幕分轨的判定工具（假名占比 ≥15%）。现在 segment 判相似度走 kanaCount，没用到它；单测在跑，等真做「一行中日双语」分家时再接。"
+    },
+    "testOnly:src/main/companion/ttsLocal.js:_sovitsState": {
+      "reason": "GPT-SoVITS 子进程的排障探针，只有测试读；产品侧看 status() 汇总后的字段。"
+    },
+    "testOnly:src/main/figures/pack.js:setBaseDir": {
+      "reason": "测试里换形象包素材根目录用；产品侧根目录由 userData 决定，不需要外部设置。"
+    },
+    "testOnly:src/main/launcher.js:_setWindows": {
+      "reason": "测试注入窗口列表用（launcher 内部自己维护 windows）。"
+    },
+    "testOnly:src/main/profile/index.js:_buildProfileMd": {
+      "reason": "画像 md 的纯渲染函数，测试验格式；产品侧画像走 promptBlock / summaryFor，不落 md 文件。"
+    },
+    "testOnly:src/main/profile/keys.js:_init": {
+      "reason": "键盘记录测试的接缝：只设落盘目录、不拉起 PowerShell worker（测试机不能真的装键盘钩子）。产品侧走 start()。"
+    },
+    "testOnly:src/main/profile/keys.js:_onKey": {
+      "reason": "键盘记录测试的接缝：直接喂 E 行事件测计数与遮挡，不依赖真实按键。产品侧由 worker 的 stdout 驱动。"
+    },
+    "testOnly:src/main/profile/keys.js:_onFocus": {
+      "reason": "键盘记录测试的接缝：直接喂 X 行 JSON 测差分与密码遮挡。产品侧由 worker 的 stdout 驱动。"
+    },
+    "testOnly:src/main/profile/keys.js:_flush": {
+      "reason": "键盘记录测试的接缝：手动触发按键计数落盘，不等 60 秒定时器。产品侧由 start() 里的 setInterval 驱动。"
+    },
+    "testOnly:src/main/profile/keys.js:_reset": {
+      "reason": "键盘记录测试的接缝：清内存态，保证用例互相独立。产品侧对应 stop() 的清理。"
+    },
+    "unusedCfg:musicFolders": {
+      "reason": "AuraDesk 遗留：音乐播放（本地曲库 / SMTC / SteamGridDB 封面）在 0.22.0 整块删除，设置项没跟着删。值恒为空，不参与任何逻辑。"
+    },
+    "unusedCfg:musicIndex": {
+      "reason": "同上：AuraDesk 音乐播放遗留，曲库索引已无消费方。"
+    },
+    "unusedCfg:musicSource": {
+      "reason": "同上：AuraDesk 音乐播放遗留（smtc / local 二选一），已无消费方。"
+    },
+    "unusedCfg:sgdbKey": {
+      "reason": "同上：SteamGridDB 封面 API Key，封面抓取功能已删。"
+    },
+    "unusedCfg:widgetIds": {
+      "reason": "AuraDesk 桌面小组件遗留，渲染层已无对应 UI；store 的 v3 迁移还会读它剔掉 w_steam，删要连带改迁移逻辑，单独一版处理。"
+    },
+    "unusedCfg:topIds": {
+      "reason": "AuraDesk 顶栏快捷方式遗留，渲染层已无对应 UI。"
+    },
+    "unusedCfg:gameOrder": {
+      "reason": "游戏库拖拽排序的遗留字段，顺序现在由 launcher 自己的数组决定；hydrate 里有类型校验，删要一起改。"
+    }
+  }
+}

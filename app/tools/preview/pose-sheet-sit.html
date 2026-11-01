@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #1d2030; color: #9aa4c0; font: 12px/1.4 "Segoe UI", sans-serif; }
+  #row { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; align-items: flex-end; }
+  .cell { text-align: center; }
+  canvas { width: 320px; height: 580px; display: block; background: #171a26; border-radius: 4px; }
+  .cap { padding-top: 4px; font-size: 13px; color: #aab4cf; }
+</style>
+</head>
+<body>
+<div id="row"></div>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script src="../../src/renderer/shared/vrm-stage.js"></script>
+<script>
+  /* 0.45.54 坐姿手势对照图（自查用，不参与应用运行）
+     用户「坐着没动作」→ 新增 phoneCheck / legBounce / lookAroundBig 之后，
+     必须先看清剪影对不对（手抬到哪、头低多少），再上机。 */
+  const q = new URLSearchParams(location.search)
+  const model = q.get('model')
+  const row = document.getElementById('row')
+  window.__probe = { ready: false, error: null, n: 0, notes: [] }
+
+  // setup: 先坐下（0.9s 过渡），900ms 后播手势 → 截图时正好在动作 45% 处
+  const sit = (st, g) => {
+    st.setPose('sit', 'stool')
+    if (g) setTimeout(() => { try { st.playGesture(g, 2600) } catch (e) { window.__probe.notes.push(g + ':' + e.message) } }, 900)
+  }
+  const CELLS = [
+    { cap: 'sit-idle', setup (st) { sit(st) } },
+    { cap: 'phoneCheck', setup (st) { sit(st, 'phoneCheck') } },
+    { cap: 'lookAroundBig', setup (st) { sit(st, 'lookAroundBig') } },
+    { cap: 'legBounce', setup (st) { sit(st, 'legBounce') } },
+    { cap: 'think', setup (st) { sit(st, 'think') } },
+    { cap: 'handHip', setup (st) { sit(st, 'handHip') } },
+    { cap: 'fixHair', setup (st) { sit(st, 'fixHair') } },
+    { cap: 'lookAside', setup (st) { sit(st, 'lookAside') } }
+  ]
+
+  const insts = []
+  try {
+    CELLS.forEach((c) => {
+      const cell = document.createElement('div')
+      cell.className = 'cell'
+      const cv = document.createElement('canvas')
+      const cap = document.createElement('div')
+      cap.className = 'cap'
+      cap.textContent = c.cap
+      cell.appendChild(cv)
+      cell.appendChild(cap)
+      row.appendChild(cell)
+
+      const clk = { t: 0 }
+      const st = window.AuraVrm.create({
+        canvas: cv,
+        libs: window.AuraLibs,
+        url: model,
+        fps: 20,
+        now: () => clk.t,
+        setTimer: (fn) => setInterval(() => { clk.t += 40; fn() }, 40),
+        clearTimer: (t) => clearInterval(t)
+      })
+      insts.push({ st, clk, cell: c })
+      st.ready.then(() => {
+        setTimeout(() => { try { c.setup(st) } catch (e) { window.__probe.notes.push(c.cap + ': ' + e.message) } }, 300)
+        window.__probe.n++
+        if (window.__probe.n === CELLS.length) {
+          window.__probe.ready = true
+          document.title = 'READY ' + CELLS.length
+        }
+      }).catch((e) => {
+        window.__probe.error = String((e && e.message) || e)
+        document.title = 'ERR'
+      })
+    })
+  } catch (e) {
+    window.__probe.error = String((e && e.message) || e)
+    document.title = 'ERR'
+  }
+
+  window.__hands = () => insts.map((it) => {
+    const s = it.st.state
+    const r = s.rig || {}
+    if (!r.leftHand || !r.hips) return { cap: it.cell.cap, err: 'no hand bone' }
+    r.leftHand.updateWorldMatrix(true, false)
+    r.rightHand.updateWorldMatrix(true, false)
+    r.hips.updateWorldMatrix(true, false)
+    const T = window.AuraLibs.THREE
+    const a = new T.Vector3(), b = new T.Vector3(), c = new T.Vector3()
+    r.leftHand.getWorldPosition(a)
+    r.rightHand.getWorldPosition(b)
+    r.hips.getWorldPosition(c)
+    const h = s.height || 1.55
+    return {
+      cap: it.cell.cap,
+      gesture: it.st.gesture,
+      sit: Number((s.sitAmt || 0).toFixed(2)),
+      L: [Number(((a.x - c.x) / h).toFixed(2)), Number((a.y / h).toFixed(2))],
+      R: [Number(((b.x - c.x) / h).toFixed(2)), Number((b.y / h).toFixed(2))],
+      headX: r.head ? Number(r.head.rotation.x.toFixed(2)) : null,
+      headY: r.head ? Number(r.head.rotation.y.toFixed(2)) : null
+    }
+  })
+</script>
+</body>
+</html>

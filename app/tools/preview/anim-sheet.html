@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #e8e8ec; font: 12px sans-serif; }
+  #grid { display: grid; grid-template-columns: repeat(6, 1fr); }
+  .cell { position: relative; width: 100%; height: 46vh; background: #f2f3f7; }
+  .cell canvas { width: 100%; height: 100%; display: block; }
+  .cap { position: absolute; top: 4px; left: 6px; color: #333; font-weight: bold; }
+  .err { color: #b00; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script>
+/* 动画烘入验证页：每格加载同一 VRM、播放指定名字的 clip。
+   独立于 vrm-stage（那里 clip 逻辑简单可信），专门验证 g1a->VRM 烘入是否正确。 */
+const QS = new URLSearchParams(location.search)
+const CAPS = QS.get('clips') || 'idle,walk,walkfast,run,runfast'
+const VRM_URL = QS.get('vrm') || 'vrm.vrm'
+// --seeks=0.05,0.2,... ：第 i 格把 clip seek 到该时刻（看动画循环的相位变化）
+const SEEKS = (QS.get('seeks') || '').split(',').map(Number).filter((x) => isFinite(x))
+
+window.__probe = { notes: [], done: false }
+window.__angles = () => []
+
+async function main () {
+  const THREE = window.AuraLibs.THREE
+  const { VRMLoaderPlugin, VRMUtils } = window.AuraLibs.THREEVRM
+  const names = CAPS.split(',').filter(Boolean)
+  const grid = document.getElementById('grid')
+  const cells = []
+  for (const n of names) {
+    const cell = document.createElement('div')
+    cell.className = 'cell'
+    cell.innerHTML = '<canvas></canvas><div class="cap">' + n + '</div>'
+    grid.appendChild(cell)
+    cells.push({ name: n, canvas: cell.querySelector('canvas'), cap: cell.querySelector('.cap') })
+  }
+  // 每格独立 scene/camera/mixer；模型只加载一次然后 clone？three-vrm clone 麻烦，直接每格独立加载
+  for (const c of cells) {
+    try {
+      const renderer = new THREE.WebGLRenderer({ canvas: c.canvas, alpha: true, antialias: true, preserveDrawingBuffer: true })
+      renderer.setSize(c.canvas.clientWidth || 300, c.canvas.clientHeight || 430, false)
+      const scene = new THREE.Scene()
+      const camera = new THREE.PerspectiveCamera(22, 1, 0.1, 50)
+      camera.position.set(0, 1.0, 3.2)
+      camera.lookAt(0, 0.78, 0)
+      scene.add(new THREE.AmbientLight(0xffffff, 1.4))
+      const dl = new THREE.DirectionalLight(0xffffff, 1.2)
+      dl.position.set(-1, 2, 2)
+      scene.add(dl)
+      const loader = new window.AuraLibs.GLTFLoader()
+      loader.register((p) => new VRMLoaderPlugin(p))
+      const gltf = await loader.loadAsync(VRM_URL)
+      const vrm = gltf.userData.vrm
+      // 实验开关：autoUpdateHumanBones 每帧把 normalized(=rest) 姿态拷回 raw，
+      // 会覆盖 mixer 写入的动画（腿不动但手臂动的诡异现象）
+      if ((new URLSearchParams(location.search)).get('noauto') === '1') {
+        try { vrm.humanoid.autoUpdateHumanBones = false } catch (e) {}
+      }
+      VRMUtils.rotateVRM0(vrm)
+      scene.add(vrm.scene)
+      const clips = (gltf.animations || [])
+      const clip = clips.find((x) => String(x.name || '') === c.name) || clips[0]
+      if (!clip) throw new Error('无 clip')
+      const mixer = new THREE.AnimationMixer(vrm.scene)
+      const act = mixer.clipAction(clip)
+      act.play()
+      const seek = SEEKS[cells.indexOf(c)]
+      if (isFinite(seek) && seek > 0) { act.time = seek % clip.duration; mixer.update(0) }
+      c.cap.textContent = c.name + ' (' + clip.name + ', ' + clips.length + 'clips)'
+      c._vrm = vrm
+      c.tick = (dt) => { mixer.update(dt); if ((new URLSearchParams(location.search)).get('novrmupdate') !== '1') vrm.update(dt); renderer.render(scene, camera) }
+    } catch (e) {
+      c.cap.classList.add('err')
+      c.cap.textContent = c.name + ': ' + e.message
+      window.__probe.notes.push(c.name + ': ' + e.message)
+    }
+  }
+  let last = performance.now()
+  const clock = { t: 0 }
+  setInterval(() => {
+    const now = performance.now()
+    const dt = Math.min(0.1, (now - last) / 1000)
+    last = now
+    clock.t += dt
+    for (const c of cells) if (c.tick) c.tick(dt)
+    window.__probe.t = clock.t
+  }, 33)
+  window.__angles = () => cells.slice(0, 1).map((c) => {
+    const out = { cap: c.name }
+    try {
+      const vrm = c._vrm
+      out.all = []
+      vrm.scene.traverse((o) => { if (o.name === 'SK_L_UpLeg') out.all.push({ type: o.type, q: o.quaternion.toArray().map((x) => Number(x.toFixed(3))), parent: o.parent ? o.parent.name || o.parent.type : '?' }) })
+      out.autoUpd = vrm.humanoid ? vrm.humanoid.autoUpdateHumanBones : 'no humanoid'
+      if (vrm.humanoid) {
+        const raw = vrm.humanoid.getRawBoneNode('leftUpperLeg')
+        const norm = vrm.humanoid.getNormalizedBoneNode('leftUpperLeg')
+        out.raw = raw ? raw.quaternion.toArray().map((x) => Number(x.toFixed(3))) : null
+        out.norm = norm ? norm.quaternion.toArray().map((x) => Number(x.toFixed(3))) : null
+        out.normName = norm ? norm.name : null
+      }
+    } catch (e) { out.err = e.message }
+    return out
+  })
+  window.__probe.done = true
+}
+main().catch((e) => window.__probe.notes.push('main: ' + e.message))
+</script>
+</body>
+</html>

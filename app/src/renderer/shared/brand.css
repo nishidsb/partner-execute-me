@@ -1,0 +1,70 @@
+/* ============================================================
+ * Partner.execute(me); · 品牌基底层
+ * 所有窗口在自身 style.css 之前引入本文件。
+ * 视觉语言（对齐 MV）：炭黑 + 骨白高对比、竖条纹噪点、
+ * 方角面板、等宽字体点缀、电源符号动机。
+ *
+ * 名字出处：程序名 Partner.execute(me); 致敬 Mili 的歌曲
+ * 《world.execute(me);》（专辑《Miracle Milk》，2016）。
+ * 视觉语言（炭黑单色 + 电源符号 + 代码感排版）同样取自该曲 MV。
+ * ============================================================ */
+
+:root {
+  /* 品牌令牌：别的样式表可引用 */
+  --wem-bg: #0b0b0c;
+  --wem-bg2: #131316;
+  --wem-panel: #101012;
+  --wem-fg: #e9e7e2;
+  --wem-fg-dim: #8a8880;
+  --wem-line: #2a2a2e;
+  --wem-accent: #e9e7e2;
+  --wem-danger: #c95656;
+  --wem-ok: #6fae7c;
+  --wem-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+}
+
+/* ---- 通用细节 ---- */
+::selection { background: rgba(233, 231, 226, .25); }
+:focus-visible { outline: 1px solid rgba(233, 231, 226, .7); outline-offset: 1px; }
+
+/* 滚动条：细、方、灰 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2e2e32; border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: #444449; }
+
+/* 原生控件跟品牌走 */
+input[type="checkbox"], input[type="radio"] { accent-color: #e9e7e2; }
+button { font-family: inherit; }
+
+/* ---- 品牌纹理：竖条纹噪点（叠加在既有底色上，极淡） ----
+ * 用法：给需要「机器质感」的面板加 .wem-texture */
+.wem-texture {
+  background-image:
+    repeating-linear-gradient(90deg,
+      rgba(255, 255, 255, .022) 0 1px,
+      rgba(255, 255, 255, 0) 1px 4px,
+      rgba(255, 255, 255, .012) 4px 5px,
+      rgba(255, 255, 255, 0) 5px 9px),
+    repeating-linear-gradient(90deg,
+      rgba(0, 0, 0, .16) 0 2px,
+      rgba(0, 0, 0, 0) 2px 7px);
+}
+
+/* ---- 品牌铭牌：等宽小字，像 MV 里的段落标题 ----
+ * <span class="wem-tag">Partner.execute(me);</span> */
+.wem-tag {
+  font-family: var(--wem-mono);
+  font-size: 11px;
+  letter-spacing: .08em;
+  color: var(--wem-fg-dim);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* 电源符号（文字形式）：标题栏 / 空状态装饰用 */
+.wem-power {
+  font-family: var(--wem-mono);
+  color: var(--wem-fg);
+  user-select: none;
+}

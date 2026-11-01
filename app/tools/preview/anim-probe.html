@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>anim-probe</title></head>
+<body>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script>
+/* 探针页：只算骨骼世界坐标，不渲染（show:false 的窗口里也能跑）。 */
+const QS = new URLSearchParams(location.search)
+const IDS = (QS.get('ids') || '').split(',').filter(Boolean)
+const FRACS = (QS.get('fracs') || '0.5').split(',').map(Number).filter((x) => isFinite(x))
+const VRM_URL = QS.get('vrm') || 'vrm.vrm'
+window.__probe = { rows: [], done: false }
+
+async function main () {
+  const THREE = window.AuraLibs.THREE
+  const { VRMLoaderPlugin, VRMUtils } = window.AuraLibs.THREEVRM
+  const loader = new window.AuraLibs.GLTFLoader()
+  loader.register((p) => new VRMLoaderPlugin(p))
+  const gltf = await loader.loadAsync(VRM_URL)
+  const vrm = gltf.userData.vrm
+  try { vrm.humanoid.autoUpdateHumanBones = false } catch (e) {}
+  VRMUtils.rotateVRM0(vrm)
+
+  // 找真实骨骼节点（raw），这才是 mixer 写入的对象
+  const find = (name) => {
+    let hit = null
+    vrm.scene.traverse((o) => { if (!hit && o.name === name) hit = o })
+    return hit
+  }
+  const bones = {
+    hip: find('SK_Hips'), head: find('SK_Head'),
+    handL: find('SK_L_Hand'), handR: find('SK_R_Hand'),
+    footL: find('SK_L_Foot'), footR: find('SK_R_Foot'),
+    skel: find('SK_Skeleton')
+  }
+  const mixer = new THREE.AnimationMixer(vrm.scene)
+  const byName = new Map((gltf.animations || []).map((c) => [String(c.name || ''), c]))
+  const v = new THREE.Vector3()
+  const pos = (o) => { if (!o) return null; o.getWorldPosition(v); return [v.x, v.y, v.z] }
+
+  for (const id of IDS) {
+    const clip = byName.get(id)
+    if (!clip) { window.__probe.rows.push({ id, err: 'no-clip' }); continue }
+    const act = mixer.clipAction(clip)
+    act.reset().play()
+    for (const frac of FRACS) {
+      const t = clip.duration * frac
+      // mixer.update 的 deltaTime 必须 > 0，这里直接 setTime 再 update(0) 不可靠，用步进
+      act.time = 0
+      mixer.setTime(0)
+      mixer.update(t)
+      const row = { id, t: Number(t.toFixed(2)) }
+      for (const [k, o] of Object.entries(bones)) {
+        const p = pos(o)
+        row[k] = p ? p.map((n) => Number(n.toFixed(3))) : null
+      }
+      row.headUp = bones.head && bones.skel
+        ? (() => { const a = pos(bones.head); const b = pos(bones.skel); return [a[0] - b[0], a[1] - b[1], a[2] - b[2]].map((n) => Number(n.toFixed(3))) })()
+        : null
+      window.__probe.rows.push(row)
+    }
+    act.stop()
+  }
+  window.__probe.done = true
+}
+main().catch((e) => { window.__probe.error = String(e && e.stack || e); window.__probe.done = true })
+</script>
+</body>
+</html>

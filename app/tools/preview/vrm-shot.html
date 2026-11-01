@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #1d2030; }
+  #wrap { display: flex; justify-content: center; align-items: flex-end; height: 900px; }
+  canvas { width: 520px; height: 820px; display: block; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script src="../../src/renderer/shared/vrm-stage.js"></script>
+<script>
+  // 自查页：把 vrm-stage 单独拉起来渲染一个模型，供 tools/vrm-shot.js 截图
+  const q = new URLSearchParams(location.search)
+  const model = q.get('model')
+  window.__probe = { ready: false, error: null, kind: '' }
+  try {
+    const st = window.AuraVrm.create({
+      canvas: document.getElementById('c'),
+      libs: window.AuraLibs,
+      url: model,
+      grid: true,
+      fps: 20
+    })
+    window.__stage = st
+    // handle.ready 是 Promise，不是布尔——以前写成 `if (st.ready)` 恒真，
+    // 截图在模型加载完之前就拍了，出来永远是空背景（0.27.x 排查时踩到）。
+    const t0 = Date.now()
+    st.ready.then(() => {
+      window.__probe.ready = true
+      window.__probe.kind = st.vrm ? 'vrm' : 'glb'
+      document.title = 'READY ' + window.__probe.kind
+    }).catch((e) => {
+      window.__probe.error = String((e && e.message) || e)
+      document.title = 'ERR'
+    })
+    const tick = () => {
+      if (window.__probe.ready || window.__probe.error) return
+      if (Date.now() - t0 > 20000) { window.__probe.error = 'timeout'; document.title = 'ERR'; return }
+      setTimeout(tick, 120)
+    }
+    tick()
+  } catch (e) {
+    window.__probe.error = String(e && e.message || e)
+    document.title = 'ERR'
+  }
+</script>
+</body>
+</html>

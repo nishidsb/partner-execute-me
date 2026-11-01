@@ -1,0 +1,92 @@
+/* 原生控件（select 下拉、滚动条、checkbox）跟随暗色主题——否则下拉弹层白底白字 */
+html { color-scheme: dark; }
+
+/* 电脑操作确认窗：跟聊天窗同一套深色配色，尺寸小、信息密度高 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: #1f2022;
+  color: #eaeaec;
+  font: 13px/1.5 "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  overflow: hidden;
+}
+.card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 0;
+  border: 1px solid #313337;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #222427, #1c1d20);
+}
+.head { display: flex; align-items: center; gap: 9px; }
+.badge {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: #4e5158; color: #e6e7e8;
+  font-weight: 700; font-size: 13px;
+}
+.badge.warning { background: #5a3a2a; color: #ffd7b0; }
+#msg { font-size: 14px; font-weight: 600; }
+pre {
+  margin-top: 10px;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #0e0e10;
+  border: 1px solid #2b2d30;
+  color: #b4b7bc;
+  font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* 带截图时：让用户自己看一眼再放行（模型读不了图时这是唯一的把关手段） */
+.shot {
+  margin-top: 10px;
+  flex: 0 1 auto;
+  max-height: 55%;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid #2b2d30;
+  background: #131315;
+  display: grid;
+  place-items: center;
+}
+.shot img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.remember { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: #c2c4c8; font-size: 12px; }
+.remember input { accent-color: #9da0a9; }
+.buttons { display: flex; gap: 8px; margin: 12px 0 10px; flex-wrap: wrap; }
+button {
+  flex: 1 1 0;
+  min-width: 84px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid #3a3c41;
+  background: #282a2e;
+  color: #e6e7e9;
+  font-size: 13px;
+  cursor: pointer;
+}
+button:hover { background: #323439; border-color: #46494f; }
+button.primary { background: #888b95; border-color: #888b95; color: #fff; }
+button.primary:hover { background: #979aa2; }
+button.danger { background: #29272b; border-color: #423a3f; color: #e8b4c8; }
+button.danger:hover { background: #352f33; }
+.foot { display: flex; justify-content: space-between; color: #848991; font-size: 11px; padding-bottom: 8px; }
+.bar { height: 3px; background: #27282b; border-radius: 0 0 10px 10px; overflow: hidden; margin: 0 -16px; }
+.bar i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #9da0a9, #b9bbc0); transition: width .25s linear; }
+
+/* Windows 下 select 原生弹层不认 html 的 color-scheme（跟随系统亮暗），
+   必须直接给 option 上色：弹层按每个选项自身的背景/文字色绘制，必定生效 */
+select { color-scheme: dark; }
+select option, select optgroup {
+  background-color: #151517;
+  color: #e9e7e2;
+}

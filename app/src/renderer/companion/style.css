@@ -1,0 +1,629 @@
+/* 原生控件（select 下拉、滚动条、checkbox）跟随暗色主题——否则下拉弹层白底白字 */
+html { color-scheme: dark; }
+
+/* AI 伴侣面板：透明玻璃、随桌面层视觉语言 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  background: transparent;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  color: #e9e7e2;
+  font-size: 13px;
+  overflow: hidden;
+}
+#app {
+  position: relative;
+  height: 100vh;
+  display: flex; flex-direction: column;
+  background: rgba(17, 17, 19, .82);
+  border: 1px solid rgba(235, 233, 226, .28);
+  border-radius: 6px;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, .5);
+  overflow: hidden;
+}
+
+/* 顶栏（自绘，可拖动窗口） */
+#titlebar {
+  -webkit-app-region: drag;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 10px;
+  background: rgba(235, 233, 226, .1);
+  border-bottom: 1px solid rgba(235, 233, 226, .18);
+  user-select: none;
+}
+#titlebar button { -webkit-app-region: no-drag; }
+#titleLeft, #titleRight { display: flex; align-items: center; gap: 6px; }
+#charName { font-weight: 600; color: #e9e7e2; margin-right: 4px; }
+/* 视图 tab：聊天 / 角色（同一个窗口里的两个视图） */
+.vtabs { display: flex; gap: 4px; margin-left: 2px; }
+.vtab.on { background: rgba(235, 233, 226, .42); color: #fff; }
+/* 工具调用状态条 */
+#cpToolChip {
+  position: absolute; left: 14px; right: 14px; bottom: 66px;
+  padding: 5px 9px; border-radius: 4px;
+  background: rgba(235, 233, 226, .2);
+  border: 1px solid rgba(235, 233, 226, .34);
+  color: #dedcd6; font-size: 12px; text-align: center;
+  pointer-events: none; z-index: 4;
+}
+#cpToolChip[hidden] { display: none; }
+.tb-btn {
+  border: 0; background: rgba(255, 255, 255, .06);
+  color: rgba(255, 255, 255, .75);
+  border-radius: 7px; padding: 3px 8px;
+  font-size: 12px; cursor: pointer;
+  transition: background .12s;
+}
+.tb-btn:hover { background: rgba(235, 233, 226, .3); color: #fff; }
+.tb-btn.rec { background: rgba(220, 80, 80, .55); color: #fff; animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .55; } }
+
+/* 形象区：0.45.43 用户拍板整个移除——聊天窗口只留聊天记录（桌面形象由桌宠层负责） */
+#stage {
+  display: none;
+}
+#stillImg { max-height: 100%; max-width: 100%; object-fit: contain; }
+#spineCanvas, #vrmCanvas { width: 100%; height: 100%; }
+#stageFallback { font-size: 64px; color: rgba(235, 233, 226, .4); }
+#speaking #stage::after {
+  content: "♪";
+  position: absolute; right: 12px; bottom: 8px;
+  color: rgba(235, 233, 226, .7);
+  animation: pulse .9s infinite;
+}
+
+/* 聊天区 */
+#chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(235, 233, 226,.35) transparent;
+}
+#chat::-webkit-scrollbar { width: 5px; }
+#chat::-webkit-scrollbar-thumb { background: rgba(235, 233, 226,.35); border-radius: 3px; }
+
+.msg {
+  max-width: 86%;
+  padding: 7px 11px;
+  border-radius: 6px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: mIn .18s ease backwards;
+}
+@keyframes mIn { from { opacity: 0; transform: translateY(6px); } }
+.msg.user {
+  align-self: flex-end;
+  background: rgba(235, 233, 226, .32);
+  border: 1px solid rgba(235, 233, 226, .4);
+  border-bottom-right-radius: 4px;
+}
+.msg.ai {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, .07);
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-bottom-left-radius: 4px;
+}
+.msg.narr { opacity: .62; font-style: italic; font-size: 12px; background: none; border: 0; padding: 2px 11px; }
+.msg .tools { margin-top: 5px; font-size: 11px; color: rgba(196, 199, 202, .75); }
+.msg .tools::before { content: "⚙ "; }
+.msg.typing::after { content: "▍"; animation: blink 1s infinite; color: #d2d1d6; }
+@keyframes blink { 50% { opacity: 0; } }
+.syserr {
+  align-self: center;
+  font-size: 11.5px;
+  color: #ffb3b3;
+  background: rgba(120, 40, 40, .4);
+  border: 1px solid rgba(220, 120, 120, .35);
+  padding: 5px 10px; border-radius: 9px;
+}
+/* 空对话提示（不是错误，用中性灰） */
+.msg.sysnote {
+  align-self: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .45);
+  background: rgba(255, 255, 255, .04);
+  border: 1px dashed rgba(255, 255, 255, .12);
+  padding: 8px 12px; border-radius: 5px;
+}
+
+/* 输入栏 */
+#inputbar {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 9px 10px;
+  border-top: 1px solid rgba(255, 255, 255, .07);
+  background: rgba(255, 255, 255, .03);
+}
+#input {
+  flex: 1;
+  resize: none;
+  max-height: 88px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  background: rgba(255, 255, 255, .06);
+  color: #e9e7e2;
+  border-radius: 5px;
+  padding: 8px 10px;
+  font: inherit;
+  outline: none;
+}
+#input:focus { border-color: rgba(235, 233, 226, .55); }
+#btnSend, #btnStop {
+  border: 0; border-radius: 5px;
+  width: 38px; height: 34px;
+  background: rgba(235, 233, 226, .4); color: #fff;
+  font-size: 14px; cursor: pointer;
+}
+#btnStop { background: rgba(220, 90, 90, .5); }
+#btnSend:hover, #btnStop:hover { filter: brightness(1.2); }
+
+/* 0.18.0 第一批：上下文圆环（对话页输入框左侧，conic-gradient 画占用比例） */
+.ctxring {
+  width: 22px; height: 22px; flex: 0 0 auto;
+  border-radius: 50%;
+  align-self: center;
+  background: conic-gradient(#e9e7e2 calc(var(--p, 0) * 1%), rgba(255, 255, 255, .13) 0);
+  position: relative;
+  cursor: default;
+  transition: filter .2s ease;
+}
+.ctxring::after {
+  content: '';
+  position: absolute; inset: 4px;
+  border-radius: 50%;
+  background: #1d1d21;
+}
+.ctxring.warn { filter: drop-shadow(0 0 4px rgba(255, 176, 80, .8)); }
+.ctxring.full { filter: drop-shadow(0 0 5px rgba(230, 90, 90, .9)); }
+body[data-theme="light"] .ctxring::after { background: #f7f7f7; }
+
+/* 角色抽屉 */
+#charDrawer {
+  position: absolute; inset: 0;
+  z-index: 5;
+  background: rgba(20, 21, 23, .97);
+  overflow-y: auto;
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+#charDrawer[hidden] { display: none; }
+.cd-head { display: flex; gap: 6px; align-items: center; }
+#charSelect { flex: 1; padding: 5px; border-radius: 7px; border: 1px solid rgba(255,255,255,.14); background: #202125; color: #fff; }
+.cd-btn {
+  border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06);
+  color: #dedcd6; border-radius: 7px; padding: 4px 9px; cursor: pointer; font-size: 12px;
+}
+.cd-btn:hover { background: rgba(235, 233, 226,.3); }
+.cd-btn.wide { width: 100%; padding: 7px; }
+/* 注意：这条老规则只针对抽屉里的「标题在上、输入框在下」型 label；
+ * 必须排除 .cd-check，否则会把开关行（toggle + 文字）挤成竖排居中 */
+#charDrawer label:not(.cd-check) { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: rgba(255,255,255,.6); }
+#charDrawer input, #charDrawer textarea {
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
+  color: #e9e7e2; border-radius: 4px;
+  padding: 7px 9px; font: inherit; resize: vertical; outline: none;
+}
+#charDrawer textarea:focus, #charDrawer input:focus { border-color: rgba(235, 233, 226,.5); }
+#worldList { display: flex; flex-direction: column; gap: 6px; }
+.world-item { display: flex; flex-direction: column; gap: 4px; background: rgba(255,255,255,.04); border-radius: 4px; padding: 7px; }
+.world-item input, .world-item textarea { font-size: 12px; }
+.world-item textarea { min-height: 52px; }
+.world-item .del { align-self: flex-end; }
+.seg { display: flex; gap: 5px; }
+/* 分段控件（标准/高级、人设/形象…）：等宽小胶囊 */
+.seg button {
+  flex: 1; padding: 6px 4px; border-radius: 4px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.04);
+  color: rgba(255,255,255,.6); font-size: 12px;
+  transition: background .14s, color .14s, border-color .14s;
+}
+.seg button:hover { background: rgba(235, 233, 226,.16); color: #efeff0; }
+.seg button.on { background: rgba(235, 233, 226,.35); color: #fff; border-color: rgba(235, 233, 226,.55); }
+
+/* ---------- 设置页导航（0.18.0 UI 重构：带图标的网格，不再一排小按钮） ---------- */
+#spNav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
+#spNav button {
+  flex: none;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 7px 3px 5px;
+  font-size: 11.5px; line-height: 1.25;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,.045);
+  color: rgba(255,255,255,.55);
+  cursor: pointer;
+  transition: background .14s, color .14s, border-color .14s;
+}
+#spNav button::before { font-size: 15px; line-height: 1; filter: grayscale(1) brightness(1.5) contrast(1.05); opacity: .92; }
+#spNav button[data-sp="general"]::before { content: '⚙️'; }
+#spNav button[data-sp="model"]::before { content: '🧠'; }
+#spNav button[data-sp="pet"]::before { content: '🐾'; }
+#spNav button[data-sp="voice"]::before { content: '🎙️'; }
+#spNav button[data-sp="bili"]::before { content: '📺'; }
+#spNav button[data-sp="im"]::before { content: '💬'; }
+#spNav button[data-sp="world"]::before { content: '🧩'; }
+#spNav button:hover { background: rgba(235, 233, 226,.18); color: #efeff0; }
+#spNav button.on {
+  background: rgba(235, 233, 226,.3);
+  color: #fff;
+  border-color: rgba(235, 233, 226,.55);
+  box-shadow: 0 0 0 1px rgba(235, 233, 226,.15) inset;
+}
+
+/* ---------- 设置页分组标题（每页内部按功能分块） ---------- */
+#tabSettings .sp-sec {
+  display: flex; align-items: center; gap: 7px;
+  margin: 18px 0 2px;
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  color: #e9e7e2;
+}
+#tabSettings .sp-sec::before {
+  content: ''; flex: none;
+  width: 3px; height: 13px; border-radius: 2px;
+  background: linear-gradient(#c7c6cd, #94929f);
+}
+#tabSettings .sp-sec:first-of-type { margin-top: 2px; }
+
+/* 通用横排容器（旧代码里 .row / .btn-row 一直没样式，导致本该一行排开的元素竖着堆） */
+.row, .btn-row, .sp-inline {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+/* .row 里的输入框几乎都写了内联宽度（70px/110px…），不要拉伸它们 */
+.row > input, .btn-row > input { flex: 0 0 auto; }
+.sp-inline > input[type=time] { flex: 0 0 108px; }
+.sp-inline > input[type=text], .sp-inline > input:not([type]) { flex: 1 1 140px; min-width: 0; }
+.sp-inline .cd-btn { flex: none; }
+.sp-nowrap { flex: none; white-space: nowrap; margin: 0 !important; }
+.sp-val { flex: none; width: 44px; text-align: right; font-size: 11px; color: rgba(255,255,255,.45); }
+
+.hint { font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.4); }
+.field-label { font-size: 12px; font-weight: 600; color: rgba(255,255,255,.85); margin-top: 8px; }
+.field-label small { font-weight: 400; color: rgba(255,255,255,.45); margin-left: 6px; }
+.cd-save {
+  position: sticky; bottom: 0;
+  margin-top: 16px;
+  border: 0; border-radius: 5px; padding: 10px;
+  background: linear-gradient(180deg, rgba(235, 233, 226,.62), rgba(164, 162, 162,.62));
+  color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.cd-save:hover { filter: brightness(1.15); }
+
+/* ---- 长期记忆账本 ---- */
+.mem-list { display: flex; flex-direction: column; gap: 5px; max-height: 220px; overflow-y: auto; }
+.mem-item {
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(255,255,255,.04); border-radius: 4px; padding: 6px 8px; font-size: 12px;
+}
+.mem-cat {
+  flex: none; font-size: 10px; padding: 2px 7px; border-radius: 99px;
+  background: rgba(235, 233, 226,.3); color: #e8e8ea;
+}
+.mem-cat.c-preference { background: rgba(90,210,130,.28); color: #c9f2d6; }
+.mem-cat.c-promise { background: rgba(255,190,90,.28); color: #ffe9c4; }
+.mem-cat.c-relation { background: rgba(255,120,150,.28); color: #ffd4de; }
+.mem-cat.c-task { background: rgba(168, 173, 173,.28); color: #e6e7e8; }
+.mem-text { flex: 1; color: #e9e7e2; word-break: break-all; }
+.mem-del {
+  flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%;
+  background: none; color: rgba(255,255,255,.35); cursor: pointer; font-size: 10px;
+}
+.mem-del:hover { background: rgba(200,60,60,.7); color: #fff; }
+.mem-empty { font-size: 11px; color: rgba(255,255,255,.35); padding: 4px 2px; }
+
+/* ---- 抽屉 tab（人设 / 形象 / 设置 / 游戏） ---- */
+#drawerTabs { margin: 10px 12px 4px; }
+#tabPersona, #tabVisual, #tabSettings, #tabGame { padding: 0 12px 14px; overflow-y: auto; }
+#tabPersona label, #tabVisual label, #tabGame label { display: block; font-size: 12px; color: rgba(255,255,255,.6); margin: 10px 0 0; }
+#tabGame input:not([type=range]):not([type=checkbox]), #tabGame select {
+  display: block; width: 100%; margin-top: 4px; box-sizing: border-box;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 4px; color: #e9e7e2; padding: 7px 9px; font-size: 12px; outline: none;
+}
+#tabSettings input:focus, #tabSettings select:focus,
+#tabGame input:focus, #tabGame select:focus { border-color: rgba(235, 233, 226,.7); }
+#tabSettings input::placeholder, #tabSettings textarea::placeholder { color: rgba(255,255,255,.28); }
+#tabGame input[type=range] { width: 100%; margin-top: 6px; accent-color: #e9e7e2; }
+#tabGame .cd-check { margin-top: 9px; }
+#gmList { max-height: 240px; }
+#gmPickList { max-height: 200px; }
+#gmState { display: block; margin-top: 6px; line-height: 1.5; }
+
+/* ---------- 设置页设置项（0.18.0 UI 重构） ---------- */
+#tabSettings .sp-page { display: flex; flex-direction: column; }
+#tabSettings .sp-page[hidden] { display: none; }
+/* 每一项：说明在上、控件在下；底部细分隔线让长列表有节奏 */
+#tabSettings .sp-page label:not(.cd-check) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 10px 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255,255,255,.7);
+  border-bottom: 1px solid rgba(255,255,255,.045);
+}
+#tabSettings .sp-page label:not(.cd-check):hover { color: rgba(255,255,255,.86); }
+#tabSettings .sp-page > label:last-child { border-bottom: 0; }
+/* 只含「一句说明 + 一个下拉」的项 → 左标题 / 右控件，省一半纵向空间 */
+#tabSettings .sp-page > label:has(> select):not(:has(> select ~ select)):not(:has(> input)):not(:has(> textarea)):not(:has(> button)):not(:has(> .row)):not(:has(> .mem-row)):not(:has(> .hint)):not(:has(> span)) {
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 50%);
+  align-items: center;
+  gap: 10px;
+}
+/* 滑块项：标题与数值同一行，滑块独占一行 */
+#tabSettings .sp-page > label:has(> input[type=range]) {
+  display: flex; flex-direction: row; flex-wrap: wrap;
+  align-items: center; gap: 4px 8px;
+}
+#tabSettings .sp-page > label:has(> input[type=range]) > input[type=range] { flex: 1 0 100%; }
+#tabSettings .sp-page > label > .row,
+#tabSettings .sp-page > label > .mem-row,
+#tabSettings .sp-page > label > .hint { grid-column: 1 / -1; }
+
+/* 设置页里少数「行内小勾选」（没挂 .cd-check 类，如 IM 页的「私聊也回」「FF14 工具…」）：
+ * 它们是「开关 + 一句短语」，必须横排，不能当成整项设置竖着堆 */
+#tabSettings .sp-page label:has(> input[type=checkbox]):not(.cd-check) {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 0;
+  border-bottom: 0;
+}
+#tabSettings .sp-page label:has(> input[type=checkbox]):not(.cd-check) > span { min-width: 0; }
+
+/* 长标题自动拆成「短标题 + 灰色描述」后的两行结构（见 app.js refineSettingLabels） */
+#tabSettings .sp-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+#tabSettings .sp-t {
+  font-size: 12.5px; font-weight: 600;
+  color: rgba(255,255,255,.92); line-height: 1.4;
+}
+#tabSettings .sp-d {
+  font-size: 11px; line-height: 1.5;
+  color: rgba(255,255,255,.42);
+}
+#tabSettings .sp-page > label:hover .sp-t { color: #fff; }
+
+/* 输入控件统一外观（不含开关与滑块） */
+#tabSettings input:not([type=checkbox]):not([type=range]),
+#tabSettings select,
+#tabSettings textarea {
+  width: 100%; box-sizing: border-box; margin: 0;
+  background: rgba(255,255,255,.055);
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 4px;
+  color: #e9e7e2; padding: 7px 9px; font-size: 12px; outline: none;
+  transition: border-color .14s, background .14s;
+}
+#tabSettings textarea { resize: vertical; line-height: 1.5; }
+#tabSettings input:not([type=checkbox]):not([type=range]):hover,
+#tabSettings select:hover,
+#tabSettings textarea:hover { border-color: rgba(255,255,255,.2); }
+#tabSettings input[type=range] { width: 100%; height: 18px; accent-color: #e9e7e2; }
+#tabSettings .row > input[type=range] { flex: 1 1 100px; }
+
+/* ---------- 开关：原生 checkbox 变滑动开关（零 HTML 改动） ---------- */
+#tabSettings input[type=checkbox],
+#tabGame input[type=checkbox],
+#guideBody input[type=checkbox] {
+  -webkit-appearance: none; appearance: none;
+  width: 34px !important; height: 19px !important;
+  flex: 0 0 auto; margin: 0 !important;
+  border-radius: 99px;
+  background: rgba(255,255,255,.42);
+  border: 1px solid rgba(0,0,0,.35);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.35);
+  position: relative; cursor: pointer; outline: none;
+  transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+#tabSettings input[type=checkbox]::after,
+#tabGame input[type=checkbox]::after,
+#guideBody input[type=checkbox]::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35);
+  transition: transform .16s ease;
+}
+#tabSettings input[type=checkbox]:checked,
+#tabGame input[type=checkbox]:checked,
+#guideBody input[type=checkbox]:checked {
+  background: linear-gradient(180deg, #c3c2c9, #a3a1ac);
+  border-color: transparent;
+}
+#tabSettings input[type=checkbox]:checked::after,
+#tabGame input[type=checkbox]:checked::after,
+#guideBody input[type=checkbox]:checked::after { transform: translateX(15px); }
+#tabSettings input[type=checkbox]:focus-visible,
+#tabGame input[type=checkbox]:focus-visible { box-shadow: 0 0 0 2px rgba(235, 233, 226,.45); }
+
+.cd-check { display: flex !important; align-items: center; gap: 9px; color: #e5e6e8 !important; font-size: 12px; cursor: pointer; }
+/* 只约束开关/单选（34px 滑动开关尺寸）。0.45.64：这条原先是 `.cd-check input`
+ * 一刀切，把同容器里的数字输入框也压成 34px —— 减去左右 padding 后内容区归零，
+ * 只剩上下箭头、数字完全看不见（设置页「离开多久算没人 / 安全上限 / 每天最多」实锤）。 */
+.cd-check input[type=checkbox], .cd-check input[type=radio] {
+  width: 34px !important; margin: 0 !important; accent-color: #e9e7e2;
+}
+/* 行内数字框：不许被 flex 压窄（flex-shrink:0），给足内容宽度。
+ * 必须带 #tabSettings 前缀 —— 否则 `#tabSettings input:not(...)`（id 选择器）的
+ * padding:7px 9px 会赢，56px 宽的框被左右 padding 吃掉后数字照样看不见。 */
+#tabSettings .cd-check input[type=number], #tabSettings .cd-check input[type=text],
+#tabGame .cd-check input[type=number], #tabGame .cd-check input[type=text] {
+  flex: 0 0 auto; width: 88px !important; min-width: 88px;
+  padding: 6px 4px; text-align: center; margin: 0 !important;
+}
+/* 多选按钮组（悬停按钮 / 音效分类）：等宽小卡片，自动换行 */
+#cpHoverBtns, #cpSoundKinds {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px;
+}
+#cpHoverBtns .cd-check, #cpSoundKinds .cd-check {
+  flex: 1 1 30%; min-width: 88px;
+  padding: 6px 8px; border-radius: 4px;
+  background: rgba(255,255,255,.045);
+  border: 1px solid rgba(255,255,255,.07);
+  transition: background .14s, border-color .14s;
+}
+#cpHoverBtns .cd-check:hover, #cpSoundKinds .cd-check:hover { background: rgba(235, 233, 226,.14); border-color: rgba(235, 233, 226,.28); }
+/* 闹钟列表项 */
+#cpAlarmList { flex-direction: column; gap: 6px; }
+#cpAlarmList:empty { display: none; }
+/* 被上级开关关掉的整块设置：置灰并挡住点击，一眼看出「现在不生效」 */
+#tabSettings .sp-dim { opacity: .42; pointer-events: none; filter: grayscale(.4); transition: opacity .2s; }
+#cpSaveTip { color: #7bd88f; font-size: 11px; padding: 4px 2px; }
+
+/* ---- 对话时间线 ---- */
+.tl-item { display: flex; align-items: baseline; gap: 6px; background: rgba(255,255,255,.03); border-radius: 4px; padding: 5px 8px; font-size: 11px; }
+.tl-role { flex: none; font-size: 10px; padding: 1px 6px; border-radius: 99px; }
+.tl-role.me { background: rgba(168, 171, 171,.3); color: #e6e7e8; }
+.tl-role.ai { background: rgba(235, 233, 226,.3); color: #eae9ec; }
+.tl-time { flex: none; color: rgba(255,255,255,.3); font-size: 10px; }
+#timelineList { max-height: 180px; overflow-y: auto; }
+#cpFishPreview { width: 100%; box-sizing: border-box; margin-top: 4px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); border-radius: 4px; color: #e9e7e2; padding: 7px 9px; font-size: 12px; resize: vertical; }
+#cpFish input[type=range] { width: 100%; accent-color: #e9e7e2; margin-top: 6px; }
+
+/* ---------------- S4：记忆页（PARTNER.md + 历史） ---------------- */
+#tabMemory { padding: 0 12px 14px; overflow-y: auto; }
+#tabMemory label { display: block; font-size: 12px; color: rgba(255, 255, 255, .6); margin: 10px 0 0; }
+#memDoc {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 5px;
+  background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 9px; color: #e9e7e2; padding: 9px 10px; font-size: 12px; line-height: 1.55;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; outline: none; resize: vertical;
+}
+#memDoc:focus { border-color: rgba(235, 233, 226, .7); }
+.mem-row { display: flex; gap: 6px; margin-top: 8px; }
+.mem-row .cd-btn { flex: 1; }
+.mem-hist {
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(255, 255, 255, .04); border-radius: 4px; padding: 6px 8px; font-size: 11.5px;
+}
+.mem-hist-who {
+  flex: none; font-size: 10px; padding: 2px 7px; border-radius: 99px;
+  background: rgba(235, 233, 226, .3); color: #e8e8ea;
+}
+.mem-hist-who.w-user { background: rgba(168, 173, 177, .3); color: #e6e7e8; }
+.mem-hist-who.w-app { background: rgba(255, 255, 255, .14); color: #d9dadd; }
+.mem-hist-msg { flex: 1; color: #e9e7e2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-hist-time { flex: none; color: rgba(255, 255, 255, .35); font-size: 10.5px; }
+.mem-mini {
+  flex: none; border: 1px solid rgba(255, 255, 255, .16); background: rgba(255, 255, 255, .05);
+  color: #d6d7db; border-radius: 6px; font-size: 10.5px; padding: 2px 6px; cursor: pointer;
+}
+.mem-mini:hover { background: rgba(235, 233, 226, .3); color: #fff; }
+#memTip { color: #7bd88f; font-size: 11px; padding: 4px 2px; min-height: 15px; }
+
+/* ---------------- 7.6 新手引导（8 步向导遮罩层） ---------------- */
+#guide {
+  position: fixed; inset: 0; z-index: 300;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(13, 13, 15, .62);
+}
+#guide[hidden] { display: none; }
+#guideCard {
+  width: min(430px, 88vw); max-height: 80vh; overflow-y: auto;
+  background: #141414; border: 1px solid rgba(235, 233, 226, .35); border-radius: 6px;
+  padding: 18px 20px 14px; box-shadow: 0 18px 60px rgba(0, 0, 0, .5);
+}
+#guideSteps { font-size: 11px; letter-spacing: .08em; color: rgba(255, 255, 255, .45); margin-bottom: 4px; }
+#guideTitle { font-size: 17px; margin: 0 0 10px; color: #f4f4f5; }
+#guideBody label { display: block; margin: 8px 0; font-size: 12.5px; color: #e2e3e6; }
+#guideBody input, #guideBody select {
+  width: 100%; margin-top: 5px; box-sizing: border-box;
+  background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 4px; padding: 7px 9px; color: #e9e7e2; font-size: 12.5px;
+}
+#guideBody .hint { margin: 8px 0; }
+#guideNav { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+#guideSkip { color: rgba(255, 255, 255, .5); }
+
+/* Windows 下 select 原生弹层不认 html 的 color-scheme（跟随系统亮暗），
+   必须直接给 option 上色：弹层按每个选项自身的背景/文字色绘制，必定生效 */
+select { color-scheme: dark; }
+select option, select optgroup {
+  background-color: #0e0e10;
+  color: #e9e7e2;
+}
+
+/* ---------- 0.25.0 用量页（区间 × 粒度 × 指标 × 分组 + 活跃度格子图） ---------- */
+.u-wrap { display: flex; flex-direction: column; gap: 8px; }
+.u-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.u-seg { flex: 1 1 auto; min-width: 0; }
+.u-seg button { padding: 5px 6px; font-size: 11.5px; white-space: nowrap; }
+.u-lab { font-size: 11px; color: rgba(255, 255, 255, .45); }
+.u-sel, .u-rate, .u-date {
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 4px; padding: 5px 7px; color: #e9e7e2; font-size: 11.5px;
+}
+.u-rate { width: 68px; }
+.u-dash { color: rgba(255, 255, 255, .35); }
+/* 柱状图：高度用 flex 撑，柱顶圆角，悬停高亮 */
+.u-bars {
+  display: flex; gap: 3px; align-items: flex-end;
+  height: 96px; padding: 6px 4px 0;
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 5px; overflow-x: auto; overflow-y: hidden;
+}
+.u-bar { flex: 1 0 14px; min-width: 10px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+.u-bar > i {
+  display: block; width: 72%; min-height: 2px;
+  background: linear-gradient(180deg, #e9e7e2, #83818f);
+  border-radius: 3px 3px 0 0; transition: background .12s;
+}
+.u-bar:hover > i { background: linear-gradient(180deg, #d2d1d6, #b2b1ba); }
+.u-bar > b { font-size: 9px; font-weight: 400; color: rgba(255, 255, 255, .45); margin-top: 3px; white-space: nowrap; }
+.u-bar.u-empty > i { background: rgba(255, 255, 255, .09); }
+/* 分组明细表 */
+.u-table { display: flex; flex-direction: column; gap: 3px; }
+.u-tr { display: grid; grid-template-columns: 1fr 64px 62px 54px; gap: 6px; align-items: center; font-size: 11.5px; }
+.u-tr.u-th { color: rgba(255, 255, 255, .4); font-size: 10.5px; }
+.u-tr > span:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.u-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-track { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .08); margin-top: 3px; }
+.u-track > i { display: block; height: 100%; border-radius: 2px; background: #e9e7e2; }
+/* 活跃度格子图：每格一天 */
+.u-heat { display: grid; grid-template-columns: repeat(15, 1fr); gap: 3px; }
+.u-cell { aspect-ratio: 1 / 1; border-radius: 3px; background: rgba(255, 255, 255, .06); }
+.u-cell[data-lv="1"] { background: rgba(235, 233, 226, .28); }
+.u-cell[data-lv="2"] { background: rgba(235, 233, 226, .45); }
+.u-cell[data-lv="3"] { background: rgba(235, 233, 226, .66); }
+.u-cell[data-lv="4"] { background: rgba(235, 233, 226, .9); }
+
+/* ---------- 0.25.0 记忆页分页签 ---------- */
+.mtab { margin-bottom: 8px; }
+.mtab button { padding: 6px 4px; font-size: 11.5px; }
+.mpane { display: block; }
+/* hidden 属性要压过这些容器的 flex/grid 布局（否则 .u-row{display:flex} 会把 hidden 顶掉） */
+.u-row[hidden], .u-table[hidden], .mpane[hidden] { display: none; }
+
+/* ===== Partner.execute(me); 品牌层：竖条纹面板 + 电源符号 ===== */
+#app {
+  background-color: rgba(11, 11, 12, .92);
+  background-image: repeating-linear-gradient(90deg,
+    rgba(255, 255, 255, .02) 0 1px,
+    rgba(255, 255, 255, 0) 1px 5px,
+    rgba(255, 255, 255, .011) 5px 6px,
+    rgba(255, 255, 255, 0) 6px 10px);
+  border-color: rgba(233, 231, 226, .16);
+  border-radius: 6px;
+}
+#titlebar {
+  background: rgba(233, 231, 226, .05);
+  border-bottom-color: rgba(233, 231, 226, .1);
+}
+#charName { color: #e9e7e2; }
+.wem-power { margin-right: 2px; font-size: 13px; opacity: .9; }

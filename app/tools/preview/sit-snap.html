@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #1d2030; color: #9aa4c0; font: 12px/1.4 "Segoe UI", sans-serif; }
+  canvas { width: 300px; height: 520px; display: block; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script src="../../src/renderer/shared/vrm-stage.js"></script>
+<script>
+  /* 0.45.73 坐下瞬跳探针（自查用）：复刻真机的「走路(VRMA) → 到点 → 坐下」序列，
+     逐帧量每根骨骼的世界四元数变化。目的：把「坐下之前有一段奇怪的动作」
+     从「感觉」变成「哪根骨头在第几帧转了多少度」。
+     判定口径：单帧转角 > 25° = 肉眼可见的抽搐（正常过渡每帧 <5°）。 */
+  const q = new URLSearchParams(location.search)
+  const model = q.get('model')
+  const walk = q.get('walk')
+  const cv = document.getElementById('cv')
+  const clk = { t: 0 }
+  window.__samples = []
+  window.__err = null
+  window.__phase = 'boot'
+  window.__notes = []
+  window.__bones = null
+
+  const T = () => window.AuraLibs.THREE
+  const BONES = ['hips', 'spine', 'chest', 'neck', 'head',
+    'leftUpperArm', 'leftLowerArm', 'leftHand', 'rightUpperArm', 'rightLowerArm', 'rightHand',
+    'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'rightUpperLeg', 'rightLowerLeg', 'rightFoot']
+  let prev = {}
+
+  function quatAngle (a, b) {
+    if (!a || !b) return 0
+    let d = Math.abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w)
+    d = Math.min(1, d)
+    return 2 * Math.acos(d) * 180 / Math.PI
+  }
+
+  function sample (st) {
+    try {
+      const hm = st.state.vrm && st.state.vrm.humanoid
+      if (!hm || !hm.getRawBoneNode) return
+      const T3 = T()
+      const cur = {}
+      const pos = {}
+      for (const n of BONES) {
+        const b = hm.getRawBoneNode(n)
+        if (!b) continue
+        cur[n] = b.quaternion.clone()
+        const v = new T3.Vector3()
+        b.getWorldPosition(v)
+        pos[n] = [+v.x.toFixed(4), +v.y.toFixed(4), +v.z.toFixed(4)]
+      }
+      const delta = {}
+      let maxDeg = 0; let maxBone = ''
+      for (const n in cur) {
+        if (!prev[n]) continue
+        const d = quatAngle(prev[n], cur[n])
+        delta[n] = +d.toFixed(1)
+        if (d > maxDeg) { maxDeg = d; maxBone = n }
+      }
+      prev = cur
+      const hand = pos.leftHand
+      const prevHand = window.__prevHand
+      window.__prevHand = hand
+      const handJump = (hand && prevHand)
+        ? +Math.hypot(hand[0] - prevHand[0], hand[1] - prevHand[1], hand[2] - prevHand[2]).toFixed(4)
+        : null
+      /* 膝/大腿向量：判断「坐姿到底有没有落到可见骨架上」
+         · raw 腿是弯的但 normalized 不是 → 拷贝没开/被盖
+         · 两边都是直的 → 程序化目标值根本没写进去 */
+      let kneeRaw = null; let thighRaw = null; let kneeNorm = null; let thighNorm = null
+      try {
+        const V = T3.Vector3
+        const seg = (a, b) => {
+          if (!a || !b) return null
+          const va = new V(); const vb = new V()
+          a.getWorldPosition(va); b.getWorldPosition(vb)
+          return vb.sub(va).normalize()
+        }
+        const ang = (u, v) => (u && v ? +(Math.acos(Math.max(-1, Math.min(1, u.dot(v)))) * 180 / Math.PI).toFixed(0) : null)
+        const rU = hm.getRawBoneNode('leftUpperLeg'); const rL = hm.getRawBoneNode('leftLowerLeg'); const rF = hm.getRawBoneNode('leftFoot')
+        const nU = hm.getNormalizedBoneNode && hm.getNormalizedBoneNode('leftUpperLeg')
+        const nL = hm.getNormalizedBoneNode && hm.getNormalizedBoneNode('leftLowerLeg')
+        const nF = hm.getNormalizedBoneNode && hm.getNormalizedBoneNode('leftFoot')
+        const tu = seg(rU, rL); const tl = seg(rL, rF)
+        const nu = seg(nU, nL); const nl = seg(nL, nF)
+        kneeRaw = ang(tu, tl)
+        thighRaw = tu ? [+tu.x.toFixed(2), +tu.y.toFixed(2)] : null
+        kneeNorm = ang(nu, nl)
+        thighNorm = nu ? [+nu.x.toFixed(2), +nu.y.toFixed(2)] : null
+      } catch { }
+      window.__samples.push({
+        t: Math.round(clk.t),
+        phase: window.__phase,
+        sit: +(st.state.sitAmt || 0).toFixed(3),
+        droop: st.state.droop == null ? null : +st.state.droop.toFixed(3),
+        rig: !!st.state.rig,
+        hold: !!st.state.animHold,
+        walkOn: !!(st.state.walk && st.state.walk.on),
+        maxDeg, maxBone, handJump, kneeRaw, thighRaw, kneeNorm, thighNorm,
+        hand: hand ? +hand[1].toFixed(3) : null,
+        head: pos.head ? +pos.head[1].toFixed(3) : null,
+        hip: pos.hips ? +pos.hips[1].toFixed(3) : null,
+        foot: pos.leftFoot ? +pos.leftFoot[1].toFixed(3) : null
+      })
+    } catch (e) { window.__err = String(e && e.message) }
+  }
+
+  try {
+    const st = window.AuraVrm.create({
+      canvas: cv,
+      libs: window.AuraLibs,
+      url: model,
+      fps: 60,
+      now: () => clk.t,
+      setTimer: (fn) => setInterval(() => { clk.t += 16; fn(); sample(st) }, 8),
+      clearTimer: (t) => clearInterval(t)
+    })
+    st.ready.then(async () => {
+      window.__phase = 'stand'
+      try { const hm = st.state.vrm.humanoid; const miss = BONES.filter(n => !hm.getRawBoneNode(n)); window.__bones = { miss, total: Object.keys(hm.humanBones||{}).length, legs: Object.keys(hm.humanBones||{}).filter(k=>/Leg|Foot|Hip/i.test(k)) } } catch(e) { window.__bones = String(e.message) }
+      await new Promise((r) => setTimeout(r, 1500))
+      let walked = false
+      if (walk) {
+        try {
+          const ok = await st.setWalkMotion(walk)
+          window.__notes.push('walk motion ready=' + ok)
+          if (ok) { walked = true } else { window.__notes.push('walk motion 加载失败') }
+        } catch (e) { window.__notes.push('walk motion 异常: ' + (e && e.message)) }
+      }
+      if (walked) {
+        window.__phase = 'walk'
+        st.setWalk(true, 1, 46)
+        await new Promise((r) => setTimeout(r, 1500))
+        // 真机顺序：到点 → 停走 → 立刻坐下（同一个 tick 内两条广播）
+        st.setWalk(false)
+        window.__phase = 'sit'
+        st.setPose('sit', 'stool')
+      } else {
+        // A/B 对照：从站着直接坐下
+        window.__phase = 'sit'
+        st.setPose('sit', 'stool')
+      }
+      await new Promise((r) => setTimeout(r, 2000))
+      window.__phase = 'settled'
+      await new Promise((r) => setTimeout(r, 1200))
+      window.__phase = 'done'
+    }).catch((e) => { window.__err = String((e && e.message) || e) })
+  } catch (e) { window.__err = String((e && e.message) || e) }
+</script>
+</body>
+</html>

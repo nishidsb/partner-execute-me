@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #e8e8ec; font: bold 13px sans-serif; }
+  #row { display: flex; }
+  .cell { position: relative; width: 300px; height: 520px; }
+  .cell canvas { width: 300px; height: 520px; display: block; background: #dfe3ea; }
+  .arrow { position: absolute; bottom: 8px; left: 0; right: 0; text-align: center;
+           font-size: 22px; color: #c22; text-shadow: 0 0 4px #fff; }
+  .tag { position: absolute; top: 4px; left: 6px; color: #222; background: rgba(255,255,255,.7);
+         padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="row">
+  <div class="cell"><canvas id="out1" width="300" height="520"></canvas>
+    <div class="tag" id="tag1">dir=+1（窗口应向右挪）</div><div class="arrow">窗口移动方向 ⇒</div></div>
+  <div class="cell"><canvas id="out2" width="300" height="520"></canvas>
+    <div class="tag" id="tag2">dir=-1（窗口应向左挪）</div><div class="arrow">⇐ 窗口移动方向</div></div>
+</div>
+<canvas id="stage" width="300" height="520" style="position:absolute; left:-9999px;"></canvas>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script src="../../src/renderer/shared/vrm-stage.js"></script>
+<script>
+/* 走路朝向实测：真实 vrm-stage + 真实模型，dir=±1 各走 1.6s 截帧。
+   看图判定：身体侧面朝哪 = 脸朝哪；对比箭头（窗口实际位移方向）就知道是否反向。 */
+const QS = new URLSearchParams(location.search)
+const VRM_URL = QS.get('vrm')
+window.__probe = { notes: [], done: false }
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+
+async function main () {
+  const cv = document.getElementById('stage')
+  const stage = window.AuraVrm.create({
+    canvas: cv,
+    libs: window.AuraLibs,
+    url: VRM_URL,
+    sig: VRM_URL,
+    fps: 30,
+    isBusy: () => true,
+    preserveDrawingBuffer: true
+  })
+  await stage.ready
+  window.__probe.notes.push('stage ready')
+  const snap = (outId) => {
+    const o = document.getElementById(outId)
+    o.getContext('2d').drawImage(cv, 0, 0, 300, 520)
+  }
+  /* 数值朝向判定（不靠看图）：
+     - 静止时模型面向相机（世界 -Z），root 相对 base 转 Δ 后 front_world = (-sinΔ, 0, -cosΔ)
+     - 用真实相机把「身体中心」和「中心+front*0.2」投影到 NDC，比较 x：正面偏哪边就是朝哪边
+     - 同时校准世界 +X 投影后在屏幕左还是右（验证相机侧假设） */
+  const V3 = stage.root.position.constructor
+  function facingReport () {
+    const root = stage.root
+    const cam = stage.camera
+    const base = stage.state.side ? stage.state.side.base : root.rotation.y
+    const delta = root.rotation.y - base
+    const f = new V3(-Math.sin(delta), 0, -Math.cos(delta))
+    const P = new V3(); root.getWorldPosition(P)
+    const c = P.clone().project(cam)
+    const cf = P.clone().add(f.clone().multiplyScalar(0.2)).project(cam)
+    const cx = P.clone().add(new V3(0.5, 0, 0)).project(cam) // 世界 +X 校准点
+    return {
+      deltaDeg: +(delta * 180 / Math.PI).toFixed(1),
+      facing: cf.x > c.x ? 'SCREEN-RIGHT' : 'SCREEN-LEFT',
+      worldPlusX_is: cx.x > c.x ? 'SCREEN-RIGHT' : 'SCREEN-LEFT'
+    }
+  }
+  stage.setWalk(true, 1, 52)
+  await wait(1600)
+  snap('out1')
+  const r1 = facingReport()
+  document.getElementById('tag1').textContent = 'dir=+1 → ' + r1.facing + ' (Δ=' + r1.deltaDeg + '°, +X=' + r1.worldPlusX_is + ')'
+  window.__probe.notes.push('dir=+1: facing=' + r1.facing + ' delta=' + r1.deltaDeg + 'deg worldPlusX=' + r1.worldPlusX_is)
+  stage.setWalk(true, -1, 52)
+  await wait(1600)
+  snap('out2')
+  const r2 = facingReport()
+  document.getElementById('tag2').textContent = 'dir=-1 → ' + r2.facing + ' (Δ=' + r2.deltaDeg + '°)'
+  window.__probe.notes.push('dir=-1: facing=' + r2.facing + ' delta=' + r2.deltaDeg + 'deg')
+  stage.setWalk(false)
+  window.__probe.ok = (r1.facing === 'SCREEN-RIGHT' && r2.facing === 'SCREEN-LEFT')
+  window.__probe.notes.push('VERDICT: ' + (window.__probe.ok ? 'CORRECT' : 'WRONG'))
+  window.__probe.done = true
+}
+main().catch((e) => { window.__probe.notes.push('FATAL: ' + e.message); window.__probe.done = true })
+</script>
+</body>
+</html>

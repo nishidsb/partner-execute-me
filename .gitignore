@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-*/
+*.log
+captures/
+tmp-*
+.DS_Store
+data/config.json
+app/data/

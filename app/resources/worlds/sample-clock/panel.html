@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>示例：桌面时钟</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #1e1f29; color: #e8e8f0; display: flex;
+         flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+  #clock { font-size: 56px; font-variant-numeric: tabular-nums; letter-spacing: 2px; }
+  #sub { color: #9aa; margin-top: 8px; }
+  button { margin-top: 24px; padding: 8px 18px; border-radius: 8px; border: 0; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div id="clock">--:--:--</div>
+  <div id="sub">经扩展 api 每秒对时一次</div>
+  <button onclick="close()">关闭面板</button>
+  <script>
+    async function tick () {
+      try {
+        const r = await window.worldApi.invoke('now')
+        const d = new Date(r.result.iso + (r.result.tzOffset !== undefined ? '' : ''))
+        document.getElementById('clock').textContent = d.toTimeString().slice(0, 8)
+      } catch (e) { document.getElementById('sub').textContent = 'invoke 失败：' + e.message }
+    }
+    setInterval(tick, 1000); tick()
+  </script>
+</body>
+</html>

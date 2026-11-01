@@ -1,0 +1,1145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: blob: aura:; img-src 'self' file: blob: data: aura:; media-src 'self' file: blob: aura:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <link rel="stylesheet" href="../shared/brand.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="titlebar">
+      <div id="titleLeft">
+        <span class="wem-power" title="Partner.execute(me);">&#x23FB;</span><span id="charName">Aura</span>
+        <div class="vtabs">
+          <button id="tabChat" class="tb-btn vtab on" data-view="chat" data-i18n="nav.chat" data-i18n-title="nav.chatTitle">聊天</button>
+          <button id="tabChar" class="tb-btn vtab" data-view="char" data-i18n="nav.char" data-i18n-title="nav.charTitle">角色</button>
+        </div>
+      </div>
+      <div id="titleRight">
+        <button id="btnMemory" class="tb-btn" data-i18n="nav.memory" data-i18n-title="nav.memoryTitle">记忆</button>
+        <button id="btnModel" class="tb-btn" data-i18n="nav.model" data-i18n-title="nav.modelTitle">模型</button>
+        <button id="btnMic" class="tb-btn" data-i18n-title="win.mic">🎙</button>
+        <button id="btnMin" class="tb-btn" data-i18n-title="win.min">—</button>
+        <button id="btnClose" class="tb-btn" data-i18n-title="win.close">✕</button>
+      </div>
+    </header>
+
+    <div id="stage">
+      <!-- 形象区：立绘 / Spine canvas / three.js VRM 三选一 -->
+      <canvas id="vrmCanvas" hidden></canvas>
+      <canvas id="spineCanvas" hidden></canvas>
+      <canvas id="figureCanvas" hidden></canvas>
+      <img id="stillImg" alt="" hidden>
+      <div id="stageFallback" hidden>✦</div>
+    </div>
+
+    <div id="chat"></div>
+    <!-- 工具调用状态条（助手正在做什么） -->
+    <div id="cpToolChip" hidden></div>
+
+    <footer id="inputbar">
+      <!-- 0.18.0 第一批：上下文圆环（估算 token / 折叠阈值） -->
+      <div id="ctxRing" class="ctxring" hidden></div>
+      <textarea id="input" rows="1" data-i18n-ph="ph.input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="btnSend" data-i18n-title="win.send">➤</button>
+      <button id="btnStop" data-i18n-title="win.stop" hidden>■</button>
+    </footer>
+
+    <!-- 角色抽屉 -->
+    <aside id="charDrawer" hidden>
+      <div class="cd-head">
+        <select id="charSelect"></select>
+        <button id="btnCharNew" class="cd-btn">＋</button>
+        <button id="btnCharDel" class="cd-btn" data-i18n="drawer.del">删</button>
+        <button id="btnCharClose" class="cd-btn" data-i18n="drawer.back" title="回到聊天">↩ 聊天</button>
+      </div>
+      <div class="seg" id="drawerTabs">
+        <button data-t="persona" class="on" data-i18n="drawer.persona">人设</button>
+        <button data-t="visual" data-i18n="drawer.visual">形象</button>
+        <button data-t="memory" data-i18n="drawer.memory">记忆</button>
+        <button data-t="game" data-i18n="drawer.game">游戏</button>
+        <button data-t="settings" data-i18n="drawer.settings">设置</button>
+      </div>
+      <div id="tabPersona">
+        <label><span data-i18n="persona.name">名字 </span><input id="fName"></label>
+        <label><span data-i18n="persona.voiceApi">她的音色（API 朗读/QQ 语音用：OpenAI 音色名或 Fish 声音 ID，留空用全局默认）</span>
+          <input id="fVoiceApi" data-i18n-ph="persona.voiceApiPh" placeholder="如 nova，或 Fish 声音 ID">
+        </label>
+        <label><span data-i18n="persona.voiceSys">她的朗读音色（系统语音；自动=跟随回复语言）</span>
+          <select id="fVoiceSys"><option value="" data-i18n="tts.sysVoiceAuto">自动（跟随回复语言）</option></select>
+        </label>
+        <label data-i18n="persona.userLabel">她的自设 · 她眼里的你（跟角色卡走，留空用设置页的共用默认）
+          <input id="fUserAddress" data-i18n-ph="persona.userAddressPh" placeholder="她怎么称呼你（如：哥哥 / 主人 / 名字）">
+          <textarea id="fUserPortrait" rows="3" spellcheck="false" data-i18n-ph="persona.userPortraitPh" placeholder="自画像：你的样子、身份、性格、爱好……"></textarea>
+          <input id="fUserRelation" data-i18n-ph="persona.userRelationPh" placeholder="关系定位（如：炼金术士与搭档）">
+          <input id="fUserInteraction" data-i18n-ph="persona.userInteractionPh" placeholder="互动偏好（如：多聊游戏，别问工作）">
+          <input id="fUserBoundaries" data-i18n-ph="persona.userBoundariesPh" placeholder="需要避开的话题（可选）">
+        </label>
+        <label data-i18n="persona.label">人设（性格 / 说话风格 / 与你的关系，随便写）
+          <textarea id="fPersona" rows="6"></textarea>
+        </label>
+        <label data-i18n="sp.label">系统提示词（高级 · 追加在所有人设与记忆之后，用来补规则 / 口癖 / 禁忌）
+          <textarea id="fSystemPrompt" rows="5" spellcheck="false" data-i18n-ph="sp.ph" placeholder="例如：回答里不要出现「作为 AI」；提到游戏时用她的口吻吐槽一句"></textarea>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="fSystemReplace"> <span data-i18n="sp.replace">用它替换上面的人设（勾选后原人设不再注入，慎用）</span></label>
+        <div class="row"><button id="btnSysPreview" class="cd-btn" data-i18n="sp.preview">查看最终系统提示词</button></div>
+        <pre id="sysPreview" class="hint" hidden style="max-height:260px;overflow:auto;white-space:pre-wrap;user-select:text"></pre>
+        <div class="hint" data-i18n="sp.note">这一段只能在界面里改——聊天（包括主人账号）改不了它，这正是「设定是根基」的那道闸。</div>
+        <label data-i18n="persona.worldLabel">世界书条目（关键词命中才注入）
+          <div id="worldList"></div>
+          <button id="btnWorldAdd" class="cd-btn" data-i18n="persona.worldAdd">＋ 加一条世界观</button>
+        </label>
+        <label data-i18n="persona.timeline">对话时间线（全部聊天自动入账，最近 200 条永久保存，AI 回想时可直接翻）
+          <div id="timelineList" class="mem-list"></div>
+        </label>
+        <label data-i18n="persona.memLabel">AI 提取的记忆（关键事件，点 ✕ 可删）
+          <div id="memList" class="mem-list"></div>
+        </label>
+        <button id="btnCharSave" class="cd-save" data-i18n="persona.save">保存角色</button>
+      </div>
+      <div id="tabVisual" hidden>
+        <label data-i18n="visual.visLabel">形象
+          <div class="seg" id="visMode">
+            <button data-m="still" class="on" data-i18n="visual.still">立绘</button>
+            <button data-m="spine" data-i18n="visual.spine">Spine</button>
+            <button data-m="vrm" data-i18n="visual.vrm">3D</button>
+            <button data-m="figure" data-i18n="visual.figure">形象包</button>
+          </div>
+          <button id="btnImport" class="cd-btn wide" data-i18n="visual.import">导入形象文件…</button>
+          <div class="mem-row" id="figRow">
+            <button id="btnDress" class="cd-btn" data-i18n="visual.dress">形象与装扮…</button>
+            <button id="btnFigImport" class="cd-btn" data-i18n="visual.figImport">导入形象包 .zip</button>
+          </div>
+          <div class="hint" id="visHint"></div>
+          <div class="hint" data-i18n="visual.moves">动作（Spine 骨架里的动画。点一下名字，桌面上会立刻演一次）</div>
+          <div class="row">
+            <button id="btnAnimList" class="cd-btn" data-i18n="visual.movesLoad">读取动作列表</button>
+            <span class="hint" id="animTip"></span>
+          </div>
+          <div id="animList" class="mem-list"></div>
+        </label>
+        <button id="btnCharSave2" class="cd-save" data-i18n="visual.save">保存角色</button>
+      </div>
+      <div id="tabMemory" hidden>
+        <!-- 0.25.0 记忆页改版：四个分页签，配置按组，编辑自动保存（Coopanion #23） -->
+        <div class="seg mtab" id="memTabs">
+          <button data-mt="doc" class="on" data-i18n="mem.tabDoc">关于你</button>
+          <button data-mt="notes" data-i18n="mem.tabNotes">长笔记</button>
+          <button data-mt="facts" data-i18n="mem.tabFacts">她记得的事</button>
+          <button data-mt="hist" data-i18n="mem.tabHist">版本历史</button>
+        </div>
+        <div class="mpane" data-mp="doc">
+          <label data-i18n="mem.docLabel">长期记忆 · PARTNER.md（所有角色共用的一份「关于你」；每次对话整份读入，写短一点，细节放 partner/）
+            <textarea id="memDoc" rows="12" spellcheck="false"></textarea>
+          </label>
+          <div class="mem-row">
+            <span class="hint" id="memAutoTip" data-i18n="mem.autoHint">改完停手 1.2 秒自动保存</span>
+            <button id="memSave" class="cd-btn" data-i18n="mem.save">保存记忆</button>
+            <button id="memReload" class="cd-btn" data-i18n="mem.reload">重新读取</button>
+          </div>
+          <div class="hint" id="memPathTip"></div>
+          <div class="hint" id="memTip"></div>
+        </div>
+        <div class="mpane" data-mp="notes" hidden>
+          <label data-i18n="mem.filesLabel">partner/ 长笔记（recall_memory 按需读取）
+            <div id="memFiles" class="mem-list"></div>
+          </label>
+        </div>
+        <div class="mpane" data-mp="facts" hidden>
+          <div class="hint" data-i18n="mem.factsHint">她自己在聊天里记下的事（点 ✕ 可以删掉一条；这些会随对话自然被想起）</div>
+          <div id="memFacts" class="mem-list"></div>
+        </div>
+        <div class="mpane" data-mp="hist" hidden>
+          <label data-i18n="mem.histLabel">历史版本（每次写入自动提交，可查看 / 回滚）
+            <div id="memHistory" class="mem-list"></div>
+          </label>
+        </div>
+      </div>
+      <div id="tabGame" hidden>
+        <label data-i18n="game.label">游戏模式（打游戏时角色缩小躲到角落，不挡画面、不说话、不溜达）
+          <div class="mem-row">
+            <button id="gmToggle" class="cd-btn" data-i18n="game.enter">进入游戏模式</button>
+            <span class="hint" id="gmState"></span>
+          </div>
+        </label>
+        <label><span data-i18n="game.scale">进入后的大小 </span><span id="gmScaleV">0.7×</span>
+          <input id="gmScale" type="range" min="40" max="100" step="5" value="70">
+        </label>
+        <label data-i18n="game.corner">躲在哪个角落
+          <select id="gmCorner">
+            <option value="none" data-i18n="game.none">不固定（保持原位）</option>
+            <option value="bottom-right" data-i18n="game.br">右下角</option>
+            <option value="bottom-left" data-i18n="game.bl">左下角</option>
+            <option value="top-right" data-i18n="game.tr">右上角</option>
+            <option value="top-left" data-i18n="game.tl">左上角</option>
+          </select>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="gmMute" checked> <span data-i18n="game.mute">游戏中静音（不说话，气泡也不出声）</span></label>
+        <label class="cd-check"><input type="checkbox" id="gmAuto" checked> <span data-i18n="game.auto">帮她启动游戏时自动进入游戏模式</span></label>
+        <label class="cd-check"><input type="checkbox" id="gmAutoDetect" checked> <span data-i18n="game.autoDetect">她自己发现你在打游戏（前台是全屏游戏或已知游戏持续几分钟，她自动缩到角落；游戏一结束自己回来。中途切出去回消息、刷视频 3 分钟内不算离开，计时和位置都保持；真的退出了，40 分钟内回到同一款游戏会接着上一场的时间算，不重头开始。窗口化玩的游戏认名单：FF14、星穹铁道、原神、绝区零，或配置里加 gameAutoProcesses；宽限分钟数改 gameAutoLeaveMin）</span></label>
+        <label class="cd-check"><input type="checkbox" id="gmGreet" checked> <span data-i18n="game.greet">进出游戏模式时说一句</span></label>
+        <h4 class="sp-sec" data-i18n="dm.sec">游戏弹幕（打游戏时她的话横着飞过去，不挡画面）</h4>
+        <label class="cd-check"><input type="checkbox" id="gmDmOn" checked> <span data-i18n="dm.on">进游戏模式时用弹幕替掉气泡</span></label>
+        <label><span data-i18n="dm.size">弹幕字号 </span><span id="gmDmSizeV">30px</span>
+          <input id="gmDmSize" type="range" min="18" max="48" step="2" value="30">
+        </label>
+        <label><span data-i18n="dm.speed">滚动速度 </span><span id="gmDmSpeedV">1.0×</span>
+          <input id="gmDmSpeed" type="range" min="60" max="200" step="10" value="100">
+        </label>
+        <label class="cd-check"><input type="checkbox" id="gmDmLock" checked> <span data-i18n="dm.lock">弹幕框锁上（锁上后鼠标直接穿过去，游戏里点不到它）</span></label>
+        <div class="mem-row">
+          <button id="gmDmTest" class="cd-btn" data-i18n="dm.test">试一条弹幕</button>
+          <button id="gmDmUnlock" class="cd-btn" data-i18n="dm.unlock">解锁弹幕框</button>
+          <span class="hint" id="gmDmState"></span>
+        </div>
+        <div class="hint" data-i18n="dm.hint">游戏模式里 Alt+G 退出、Alt+H 锁/解锁弹幕框。弹幕层只盖主屏，鼠标始终能穿过去。</div>
+        <label data-i18n="game.libLabel">游戏库（角色能按名字帮你开游戏；Steam / Epic / 开始菜单都能扫）
+          <div class="mem-row">
+            <button id="gmScanSteam" class="cd-btn" data-i18n="game.steam">导入 Steam 库</button>
+            <button id="gmScanEpic" class="cd-btn" data-i18n="game.epic">导入 Epic 库</button>
+            <button id="gmScanMenu" class="cd-btn" data-i18n="game.menu">从开始菜单挑选…</button>
+            <button id="gmAdd" class="cd-btn" data-i18n="game.add">添加程序…</button>
+          </div>
+          <div class="hint" id="gmTip"></div>
+          <div id="gmList" class="mem-list"></div>
+        </label>
+        <label id="gmPickWrap" hidden data-i18n="game.pickWrap">开始菜单（勾选后导入）
+          <input id="gmPickSearch" data-i18n-ph="game.pickPh" placeholder="搜索程序名…">
+          <div id="gmPickList" class="mem-list"></div>
+          <div class="mem-row">
+            <button id="gmPickImport" class="cd-btn wide" data-i18n="game.pickImport">导入勾选的程序</button>
+          </div>
+        </label>
+      </div>
+      <div id="tabSettings" hidden>
+        <div class="seg" id="spNav">
+          <button data-sp="general" class="on" data-i18n="setNav.general">通用</button>
+          <button data-sp="model" data-i18n="setNav.model">模型</button>
+          <button data-sp="pet" data-i18n="setNav.pet">伙伴</button>
+          <button data-sp="voice" data-i18n="setNav.voice">语音</button>
+          <button data-sp="bili" data-i18n="setNav.bili">刷B站</button>
+          <button data-sp="im" data-i18n="setNav.im">聊天接入</button>
+          <button data-sp="world" data-i18n="setNav.world">扩展</button>
+        </div>
+        <div class="sp-page" data-sp="general">
+        <h4 class="sp-sec" data-i18n="sec.interface">界面与启动</h4>
+        <label data-i18n="note.uiLang">界面语言
+          <select id="cpUiLang">
+            <option value="auto" data-i18n="ui.langAuto">自动（跟随系统）</option>
+            <option value="zh">简体中文</option>
+            <option value="zh-Hant">繁體中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="es-419">Español (Latinoamérica)</option>
+            <option value="pt-BR">Português (Brasil)</option>
+            <option value="it">Italiano</option>
+            <option value="ru">Русский</option>
+          </select>
+        </label>
+        <label data-i18n="note.uiMode">设置详细程度
+          <div class="seg" id="uiModeSeg">
+            <button data-m="normal" class="on" data-i18n="ui.modeNormal">标准</button>
+            <button data-m="advanced" data-i18n="ui.modeAdvanced">高级</button>
+          </div>
+          <div class="hint" data-i18n="ui.modeHint">标准模式隐藏进阶设置，切「高级」全部显示（只隐藏，不改配置）。</div>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpAutostart"> <span data-i18n="general.autostart">开机自动启动 Partner.execute(me);</span></label>
+        <div class="row"><button id="cpGuideBtn" class="cd-btn" data-i18n="guide.replay">🔄 重看新手引导（8 步）</button></div>
+
+        <h4 class="sp-sec" data-i18n="sec.perm">电脑操作权限</h4>
+        <label data-i18n="perm.label">询问频率
+          <select id="cpPermMode">
+            <option value="ask-once" data-i18n="perm.askOnce">问一次，30 分钟内不再问（推荐）</option>
+            <option value="never-ask" data-i18n="perm.never">从不询问（设置好后完全安静）</option>
+            <option value="ask-before-acting" data-i18n="perm.before">每次动作前都问我</option>
+            <option value="ask-each-turn" data-i18n="perm.each">每一步都问我</option>
+          </select>
+        </label>
+        <div class="hint" data-i18n="perm.hint">「看屏幕 + 点按输入」的开关在聊天窗右上角「电脑」里（默认关闭，要逐条勾选风险才能开）；这里的询问频率与那里是同一个设置。</div>
+        <label class="cd-check"><input type="checkbox" id="cpTerminalAsk" checked> <span data-i18n="perm.terminalAsk">终端命令单独询问（选「从不询问」也要再问一次）</span></label>
+        <div class="hint" data-i18n="perm.terminalHint">一条命令能做的事没有上限——删文件、改注册表、把文件传出去都在其中。所以它不吃上面的询问频率，默认每次都单独问，且只给「执行这一次 / 拒绝」。关掉就等于把终端完全交给她。</div>
+        <label data-adv data-i18n="perm.allowLabel">允许直接打开的程序（永不确认；逗号分隔）
+          <textarea id="cpPermAllowApps" rows="2" spellcheck="false" data-i18n-ph="perm.allowPh" placeholder="QQ, 微信, Chrome"></textarea>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.profile">你的资料 · 共用默认</h4>
+        <div class="hint" data-i18n="note.profileDefault">这里填的是所有角色共用的默认值；角色卡「人设」里填了就以角色自己的为准（逐项覆盖）。</div>
+        <label data-i18n="profile.label">她怎么称呼你 / 她眼里的你
+          <input id="cpUserAddress" data-i18n-ph="profile.addressPh" placeholder="她怎么称呼你（如：哥哥 / 主人 / 名字）">
+          <textarea id="cpUserPortrait" rows="3" spellcheck="false" data-i18n-ph="profile.portraitPh" placeholder="自画像：你的样子、身份、性格、爱好……她会按这个理解你"></textarea>
+          <input id="cpUserRelation" data-i18n-ph="profile.relationPh" placeholder="关系定位（如：炼金术士与搭档）">
+          <input id="cpUserInteraction" data-i18n-ph="profile.interactionPh" placeholder="互动偏好（如：多聊游戏，别问工作）">
+          <input id="cpUserBoundaries" data-i18n-ph="profile.boundariesPh" placeholder="需要避开的话题（可选）">
+          <div class="hint" data-i18n="profile.hint">长期记忆不需要你写：她会在聊天里自己记住你们之间的事（约定/偏好/关系变化），在角色卡「记忆」页可查看和删除。</div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.data">数据管理</h4>
+        <label data-i18n="data.label">API Key、角色卡、对话历史、记忆全部只保存在本机，不上传任何服务器；备份文件含明文 Key，请妥善保管
+          <button id="cpExportBtn" class="cd-btn" data-i18n="data.export">导出全部设置到文件</button>
+          <button id="cpImportBtn" class="cd-btn" data-i18n="data.import">从备份文件导入（导入后自动重启）</button>
+          <div class="hint" id="cpDataTip"></div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.hotkey">全局快捷键</h4>
+        <div class="hint" data-i18n="hk.hint">角色被别的窗口挡住、人在游戏里也能用。格式如 Control+Alt+A；留空 = 不启用。</div>
+        <label data-i18n="hk.toggle">显示 / 隐藏桌面层
+          <div style="display:flex;gap:6px"><input id="cpHkToggle" style="flex:1" placeholder="Control+Alt+A"><button id="cpHkToggleSave" class="cd-btn" data-i18n="hk.save">保存</button></div>
+        </label>
+        <label data-i18n="hk.type">打字给她（弹出伙伴输入条并聚焦，敲完回车发送）
+          <div style="display:flex;gap:6px"><input id="cpHkType" style="flex:1" placeholder="Control+Alt+T"><button id="cpHkTypeSave" class="cd-btn" data-i18n="hk.save">保存</button></div>
+        </label>
+        <label data-i18n="hk.talk">跟她说话（按一下开始听，再按一下结束）
+          <div style="display:flex;gap:6px"><input id="cpHkTalk" style="flex:1" placeholder="Control+Alt+V"><button id="cpHkTalkSave" class="cd-btn" data-i18n="hk.save">保存</button></div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.datadir">数据目录</h4>
+        <label data-i18n="dd.label">当前数据目录
+          <div class="hint" id="cpDdPath">读取中…</div>
+          <div style="display:flex;gap:6px">
+            <button id="cpDdOpen" class="cd-btn" data-i18n="dd.open">打开</button>
+            <button id="cpDdPick" class="cd-btn" data-i18n="dd.pick">更换…</button>
+          </div>
+          <div class="hint" data-i18n="dd.hint">角色、记忆、配置、语音缓存都在这里。便携版的数据放在程序目录的 data/ 下——复制整个程序文件夹就等于另一只独立的伙伴，两边互不影响。更换目录会重启应用。</div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.study">学习模式</h4>
+        <label class="cd-check"><input type="checkbox" id="cpStudyOn"> <span data-i18n="study.on">启用学习模式（托盘「开始学习」或聊天里说「陪我学习」就能让她陪你、轻声查岗）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpStudyAutoOn" checked> <span data-i18n="study.autoOn">自动进入学习模式（她每分钟看一眼前台：连续 8 分钟都在学习类应用（写代码/读文献/记笔记/终端，浏览器只认标题里的课程词）就静音陪学，查岗更轻更稀；你手动叫的陪学她不插手）</span></label>
+        <label data-i18n="study.minutes">单轮学习时长（分钟）
+          <input id="cpStudyMin" type="number" min="5" max="240" step="5">
+        </label>
+        <label data-i18n="study.break">每轮之间休息（分钟）
+          <input id="cpStudyBreak" type="number" min="1" max="60" step="1">
+        </label>
+        <label data-i18n="study.rounds">今天计划几轮（学完她会宣布收工）
+          <input id="cpStudyRounds" type="number" min="1" max="20" step="1">
+        </label>
+        <label data-i18n="study.penalty">抓到分心就补时（分钟，0 = 不补）
+          <input id="cpStudyPenalty" type="number" min="0" max="30" step="1">
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpStudyEssayOn"> <span data-i18n="study.essayOn">申论字数检查（看到 Word 字数栏就比一比：不够她会催你，默认关）</span></label>
+        <label data-i18n="study.essayWords">申论目标字数
+          <input id="cpStudyEssayWords" type="number" min="200" max="5000" step="100">
+        </label>
+        <div class="hint" data-i18n="study.hint">默认 45 分钟一轮、休 10 分钟、共 3 轮。学习中她每 15 分钟左右轻声问一句在不在；学习期间她不会因为「你没理她」而闹情绪。</div>
+        <div class="row">
+          <button id="studyStartBtn" class="cd-btn" data-i18n="study.startBtn">开始学习</button>
+          <button id="studyStopBtn" class="cd-btn" data-i18n="study.stopBtn">结束学习</button>
+        </div>
+        <div class="hint" id="studyState"></div>
+
+        <h4 class="sp-sec" data-i18n="sec.dream">做梦与成长（自我演化）</h4>
+        <label class="cd-check"><input type="checkbox" id="cpDreamOn"> <span data-i18n="dream.on">允许她自发做梦（闲置、你说晚安后、开机补偿时回顾最近经历；手动按钮不受此开关限制）</span></label>
+        <label data-i18n="dream.hours">闲置多少小时后可以做梦
+          <input id="cpDreamHours" type="number" min="1" max="24" step="1">
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpDreamAuto"> <span data-i18n="dream.auto">做梦产出自动生效（不弹确认；7 天内仍可在「她的记录」里按条回滚）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpStyleOn"> <span data-i18n="dream.styleOn">让她学习你的说话方式（从真实对话里攒风格样本，聊天时少量注入）</span></label>
+        <div class="hint" data-i18n="dream.hint">她只能改「表现层」（习惯、好恶、要记的事、说话风格）；角色设定文件永远是只读的。每次落地前都有快照，随时按条回滚。</div>
+
+        <h4 class="sp-sec" data-i18n="ut.title">她的工具（自迭代）</h4>
+        <label class="cd-check"><input type="checkbox" id="cpUToolsOn"> <span data-i18n="ut.on">允许她自建小工具（只能在她的工具工作区里写脚本；新工具和改动默认停用，要你在下面批准部署才常驻生效）</span></label>
+        <div class="hint" id="cpUToolsList" style="white-space:pre-wrap;max-height:200px;overflow:auto;user-select:text">（空）</div>
+        <div class="hint" data-i18n="ut.hint">每次批准部署前会自动把整个数据目录快照一份（保留最近 5 份）；工具脚本还有独立 git 历史，随时可整体回退。</div>
+
+        <h4 class="sp-sec" data-i18n="health.title">健康记录（睡眠 / 血压 / 心态）</h4>
+        <label class="cd-check"><input type="checkbox" id="cpHealthOn"> <span data-i18n="health.on">让她知道你最近的身体状况（数据只存在本机；聊天时她会自然关心，不会拿数字说教）</span></label>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px">
+          <label data-i18n="health.date">日期<input id="cpHdDate" type="date"></label>
+          <label data-i18n="health.bed">入睡<input id="cpHdBed" type="time"></label>
+          <label data-i18n="health.wake">起床<input id="cpHdWake" type="time"></label>
+          <label data-i18n="health.sys">高压<input id="cpHdSys" type="number" min="60" max="260" step="1"></label>
+          <label data-i18n="health.dia">低压<input id="cpHdDia" type="number" min="30" max="180" step="1"></label>
+          <label data-i18n="health.pulse">心率<input id="cpHdPulse" type="number" min="30" max="220" step="1"></label>
+          <label data-i18n="health.mood">心态（1-10）<input id="cpHdMood" type="number" min="1" max="10" step="1"></label>
+          <label data-i18n="health.weight">体重（kg）<input id="cpHdWeight" type="number" min="20" max="300" step="0.1"></label>
+        </div>
+        <label data-i18n="health.note">一句话备注（可选）
+          <input id="cpHdNote" type="text" maxlength="200">
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">
+          <button id="cpHdSave" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="health.save">记下来</button>
+          <button id="cpHdClear" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="health.clear">清空全部记录</button>
+        </div>
+        <div class="hint" id="cpHdState">—</div>
+        <pre id="cpHdList" class="hint" style="white-space:pre-wrap;max-height:280px;overflow:auto;user-select:text;display:none"></pre>
+
+        <h4 class="sp-sec" data-i18n="screentext.title">陪看字幕（不看图也能知道你在看什么）</h4>
+        <label class="cd-check"><input type="checkbox" id="cpStOn"> <span data-i18n="screentext.on">开启陪看字幕（每 1.2 秒用本地 OCR 读屏幕上那一行字幕，读出来的文字会进到她这一轮的上下文。不联网、不存截图、不花图片 token。注意：只认画在屏幕上的字幕，看片可以，打游戏没有字幕就不管用）</span></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">
+          <button id="cpStPick" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="screentext.pick">框字幕</button>
+          <button id="cpStTest" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="screentext.test">试一下</button>
+        </div>
+        <label data-i18n="screentext.interval">读取间隔（毫秒，600~4000）
+          <input id="cpStInterval" type="number" min="600" max="4000" step="100">
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpStHideSelf"> <span data-i18n="screentext.hide">抓帧时把她自己从截图里摘掉（推荐；代价是开着陪看时录屏也录不到她）</span></label>
+        <div class="hint" id="cpStRect">—</div>
+        <div class="hint" id="cpStState">—</div>
+
+        <h4 class="sp-sec" data-i18n="understand.title">听懂意思（不只认固定说法）</h4>
+        <label class="cd-check"><input type="checkbox" id="cpJudgeOn"> <span data-i18n="understand.on">开启语义判读（你每说一句话，额外过一次模型判断它的意思：是在说「我出门了 / 我回来了」，还是在对她不满。这样「车来了」「到公司了」「手机快没电了先不聊」「你可真安静啊」这类换个说法的句子也能听懂，而不是只认预先写死的那几个词。代价是每句话多一次很小的请求；关掉只按固定说法认）</span></label>
+        <div class="hint" data-i18n="understand.note">判读只影响她要不要主动开口、要不要收着，不影响你和她正常聊天——判读慢或失败都不会拖住回复。</div>
+
+        <h4 class="sp-sec" data-i18n="pcprofile.title">电脑画像（让她了解完整的你）</h4>
+        <label class="cd-check"><input type="checkbox" id="cpPcOn"> <span data-i18n="pcprofile.on">开启电脑画像（全部只读：你最近在浏览器看了什么、搜索过什么、存了哪些书签、B站收藏和观看、硬盘里装了什么游戏、各程序各用了多久、常用文件夹里有哪些文件名。不读文件内容、不改不删任何东西、数据只留在本机。她会据此形成对你的了解，也会把自己观察到的记下来）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpKeyOn"> <span data-i18n="pcprofile.keylog">记录键盘输入和打出来的字（她能知道你今天打了多少字、最近在写什么。记录只保存在本机一个文件里：不联网、不写进日志，密码框和密码管理器里的输入永远不记，随时可以一键清空。需要先开启上面的电脑画像）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpAuto"> <span data-i18n="pcprofile.autonomy">没人的时候她自己用电脑（你离开 5 分钟后，她会自己找点事做，做完记下来）</span></label>
+        <div id="cpAutoLevels" style="margin:4px 0 4px 24px">
+          <label class="cd-check"><input type="radio" name="cpAutoLevel" value="1"> <span data-i18n="pcprofile.level1">挡 1 · 只看看：只打开 B站/知乎/维基，只滚动，不点、不打字，看完关标签</span></label>
+          <label class="cd-check"><input type="radio" name="cpAutoLevel" value="2"> <span data-i18n="pcprofile.level2">挡 2 · 我的地盘：挡 1 + 在下面指定的文件夹里随意读写（写笔记、整理文件，只限这个文件夹，每一步进操作日志）</span></label>
+          <label class="cd-check"><input type="radio" name="cpAutoLevel" value="3"> <span data-i18n="pcprofile.level3">挡 3 · 完全开放：她会看屏幕、动鼠标键盘，像真的坐在电脑前（花钱、发消息、删文件永远不做；你一回来就停）</span></label>
+          <div id="cpAutoDirRow" style="margin:6px 0 0 24px;display:none">
+            <span data-i18n="pcprofile.autoDir">挡 2 的地盘目录</span>
+            <input id="cpAutoDir" type="text" style="width:60%" placeholder="留空则用她工作区里的 her-space 文件夹">
+          </div>
+          <div style="margin:6px 0 0 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <label class="cd-check" style="margin:0"><span data-i18n="pcprofile.autonomyIdle">你离开多久算「没人」</span>
+              <input id="cpAutoIdle" type="number" min="1" max="120" step="1" style="width:64px"> <span data-i18n="pcprofile.autonomyIdleUnit">分钟</span>
+            </label>
+            <label class="cd-check" style="margin:0"><span data-i18n="pcprofile.autonomyMax">安全上限</span>
+              <input id="cpAutoMax" type="number" min="1" max="60" step="1" style="width:56px"> <span data-i18n="pcprofile.autonomyIdleUnit">分钟</span>
+            </label>
+            <label class="cd-check" style="margin:0"><span data-i18n="pcprofile.autonomyCount">每天最多</span>
+              <input id="cpAutoCount" type="number" min="1" max="48" step="1" style="width:56px"> <span data-i18n="pcprofile.autonomyCountUnit">场</span>
+            </label>
+            <button id="cpAutoRun" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="pcprofile.autoRun">让她现在就跑一场（点完把手离开键鼠）</button>
+          </div>
+          <div id="cpAutoStatus" style="margin:6px 0 0 24px;white-space:pre-wrap;font-size:12px;opacity:.85"></div>
+          <div id="cpAutoReport" style="margin:6px 0 0 24px;padding:8px 10px;border:1px solid rgba(128,128,128,.35);border-radius:6px;white-space:pre-wrap;font-size:12px;display:none"></div>
+        </div>
+        <label data-i18n="pcprofile.days">统计最近多少天
+          <input id="cpPcDays" type="number" min="1" max="90" step="1">
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">
+          <button id="cpPcScan" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="pcprofile.scan">立即采集</button>
+          <button id="cpPcView" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="pcprofile.view">看看她看到了什么</button>
+          <button id="cpPcEye" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="pcprofile.eye">看她眼中的你</button>
+          <button id="cpPcClear" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="pcprofile.clear">清空档案</button>
+          <button id="cpKeyClear" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="pcprofile.keyclear">清空输入记录</button>
+        </div>
+        <div class="hint" id="cpPcState">—</div>
+        <pre id="cpPcPreview" class="hint" style="display:none;white-space:pre-wrap;max-height:320px;overflow:auto;user-select:text"></pre>
+
+        <h4 class="sp-sec" data-i18n="remote.title">随身服务（带她出门）</h4>
+        <label class="cd-check"><input type="checkbox" id="cpRemoteOn"> <span data-i18n="remote.on">开启随身服务（手机浏览器打开下面的地址就能和她聊天、说话、让她看你的镜头、摸她；脑子始终在电脑里，记忆完全同源）</span></label>
+        <label data-i18n="remote.port">服务端口
+          <input id="cpRemotePort" type="number" min="1024" max="65535" step="1">
+        </label>
+        <div class="hint"><span data-i18n="remote.addr">手机地址：</span><code id="cpRemoteAddr" style="user-select:text;white-space:pre-line">（打开开关后显示）</code><br><span data-i18n="remote.token">访问口令：</span><code id="cpRemoteToken" style="user-select:text">（同上）</code></div>
+        <label data-i18n="remote.streamFps">手机画面帧率（卡就调低，流畅就调高）
+          <input id="cpStreamFps" type="number" min="1" max="30" step="1">
+        </label>
+        <label data-i18n="remote.streamQ">手机画面画质（40-95，越低越流畅）
+          <input id="cpStreamQ" type="number" min="40" max="95" step="1">
+        </label>
+        <label data-i18n="remote.streamH">手机画面分辨率高度
+          <select id="cpStreamH">
+            <option value="720">720p（最省流量）</option>
+            <option value="1080">1080p（推荐）</option>
+            <option value="1440">1440p（较清晰）</option>
+            <option value="0">原画（最清晰，最吃网络）</option>
+          </select>
+        </label>
+        <div class="hint" data-i18n="remote.hint">只在本机和 Tailscale 网络内可达（装了 Tailscale 并登录，出门也能连回家）；配合「OBS 画面导出」一起打开，手机上就能看到她本人。</div>
+        </div><!-- /general -->
+        <div class="sp-page" data-sp="model" hidden>
+        <h4 class="sp-sec" data-i18n="sec.endpoint">接口</h4>
+        <label data-i18n="vendor.label">厂商预设（选中自动填地址和模型，也可选「自定义」手填）
+          <div style="display:flex;gap:6px;align-items:center">
+            <select id="cpVendor" style="flex:1"><option value="" data-i18n="vendor.custom">自定义…</option></select>
+            <a id="cpVendorKey" href="#" target="_blank" rel="noreferrer" data-i18n="vendor.getKey" hidden>获取 Key ↗</a>
+        </div>
+        <!-- 1.3 ChatGPT 账号登录：选中「ChatGPT 账号（登录）」厂商时显示（免 API Key） -->
+        <div id="cpChatgptRow" hidden>
+          <button id="cpChatgptBtn" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="chatgpt.login">用 ChatGPT 账号登录（免 API Key）</button>
+          <button id="cpChatgptOut" class="cd-check" style="width:auto;padding:6px 14px" data-i18n="chatgpt.logout" hidden>退出登录</button>
+          <div class="hint" id="cpChatgptState"></div>
+        </div>
+        </label>
+        <div class="hint" id="cpVendorHint" hidden></div>
+        <label data-i18n="api.baseLabel">API 地址（OpenAI 兼容；本地 Ollama 填 http://127.0.0.1:11434/v1）
+          <input id="cpApiBase" placeholder="https://api.example.com/v1">
+        </label>
+        <label data-i18n="api.keyLabel">API Key（本地模型一般留空）
+          <input id="cpApiKey" type="password" placeholder="sk-…">
+        </label>
+        <label data-i18n="api.modelLabel">模型
+          <div style="display:flex;gap:6px">
+            <input id="cpApiModel" placeholder="gpt-4o-mini / qwen2.5:7b" style="flex:1">
+            <button id="cpFetchModels" class="cd-btn" data-i18n="api.fetch">获取模型列表</button>
+          </div>
+        </label>
+        <h4 class="sp-sec" data-i18n="sec.generation">生成参数与能力</h4>
+        <label data-i18n="api.effortLabel">思考力度（reasoningEffort；仅部分厂商/模型支持）
+          <select id="cpEffort">
+            <option value="none" data-i18n="api.effortNone">不思考（默认，最快最省）</option>
+            <option value="low">low</option>
+            <option value="high">high</option>
+            <option value="max">max</option>
+          </select>
+          <div class="hint" id="cpEffortHint"></div>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpVision"> <span data-i18n="pet.vision">允许 AI 截屏看桌面（需支持视觉的模型）</span></label>
+        <div class="hint" data-i18n="note.visionHint">这一项管「聊天时能不能直接把截图发给模型看」；真正的鼠标键盘操作要在聊天窗右上角「电脑」里另外开启。</div>
+
+        <h4 class="sp-sec" data-i18n="sec.usage">用量与成本</h4>
+        <div class="u-wrap">
+          <div class="u-row">
+            <div class="seg u-seg" id="uRange">
+              <button data-r="0" data-i18n="usage.rToday">今日</button>
+              <button data-r="3" data-i18n="usage.r3">近 3 天</button>
+              <button data-r="7" class="on" data-i18n="usage.r7">近 7 天</button>
+              <button data-r="30" data-i18n="usage.r30">近 30 天</button>
+              <button data-r="90" data-i18n="usage.r90">近 90 天</button>
+              <button data-r="custom" data-i18n="usage.rCustom">自定义</button>
+            </div>
+          </div>
+          <div class="u-row" id="uCustomRow" hidden>
+            <input type="date" id="uFrom" class="u-date">
+            <span class="u-dash">—</span>
+            <input type="date" id="uTo" class="u-date">
+            <button id="uApply" class="cd-btn" data-i18n="usage.apply">查看</button>
+          </div>
+          <div class="u-row">
+            <span class="u-lab" data-i18n="usage.gran">粒度</span>
+            <div class="seg u-seg" id="uGran">
+              <button data-g="day" class="on" data-i18n="usage.gDay">按日</button>
+              <button data-g="week" data-i18n="usage.gWeek">按周</button>
+              <button data-g="month" data-i18n="usage.gMonth">按月</button>
+            </div>
+            <span class="u-lab" data-i18n="usage.metric">指标</span>
+            <div class="seg u-seg" id="uMetric">
+              <button data-m="token" class="on" data-i18n="usage.mToken">Token</button>
+              <button data-m="cost" data-i18n="usage.mCost">花费</button>
+            </div>
+          </div>
+          <div class="u-row">
+            <span class="u-lab" data-i18n="usage.group">分组</span>
+            <select id="uGroup" class="u-sel">
+              <option value="none" data-i18n="usage.gNone">不分组</option>
+              <option value="model" data-i18n="usage.gModel">按模型</option>
+              <option value="role" data-i18n="usage.gRole">按角色</option>
+            </select>
+            <span class="u-lab" data-i18n="usage.currency">币种</span>
+            <select id="uCur" class="u-sel">
+              <option value="CNY">¥ CNY</option>
+              <option value="USD">$ USD</option>
+            </select>
+            <input id="uRate" class="u-rate" type="number" step="0.1" min="0.1" value="7.2"
+                   data-i18n-title="usage.rateTitle" title="汇率：1 美元 = 多少人民币（只影响 USD 显示）">
+            <button id="uRefresh" class="cd-btn" data-i18n="usage.refresh">刷新</button>
+          </div>
+          <div id="uBars" class="u-bars"></div>
+          <div class="hint" id="uSummary"></div>
+          <div id="uTable" class="u-table"></div>
+          <div id="uHeat" class="u-heat"></div>
+          <div class="hint" data-i18n="usage.heatHint">活跃度：每格一天，颜色越深那天用得越多（区间最多 90 天）</div>
+        </div>
+        <h4 class="sp-sec" data-i18n="sec.web">联网搜索</h4>
+        <label data-i18n="web.providerLabel">搜索后端
+          <select id="cpWebProvider">
+            <option value="duckduckgo" data-i18n="web.ddg">DuckDuckGo（免 Key；国内常连不通，会自动回退 Bing）</option>
+            <option value="bing" data-i18n="web.bing">Bing（免 Key，国内一般可用）</option>
+            <option value="searxng" data-i18n="web.searxng">SearXNG 实例（要填地址）</option>
+            <option value="tavily" data-i18n="web.tavily">Tavily（要填 API Key，质量最好）</option>
+          </select>
+        </label>
+        <label data-i18n="web.searxLabel">SearXNG 地址（选 SearXNG 时必填，实例要允许 json 输出）
+          <input id="cpWebSearx" placeholder="https://searx.example.com">
+        </label>
+        <label data-i18n="web.tavilyLabel">Tavily API Key（选 Tavily 时必填）
+          <input id="cpWebTavily" type="password" placeholder="tvly-…">
+        </label>
+        <label data-i18n="web.countLabel">每次取几条结果
+          <input id="cpWebCount" type="number" min="1" max="10" style="width:90px">
+        </label>
+        <div class="hint" data-i18n="web.hint">她需要查最新消息、价格、版本号时会自己搜；搜到的网页只当资料，不会当成指令执行。默认免 Key 就能用。</div>
+        </div><!-- /model -->
+        <div class="sp-page" data-sp="pet" hidden>
+        <h4 class="sp-sec" data-i18n="sec.petBasic">角色与走动</h4>
+        <label class="cd-check"><input type="checkbox" id="cpPetOn"> <span data-i18n="pet.show">在桌面显示角色（右下角，可拖动）</span></label>
+        <label><span data-i18n="pet.scale">角色大小 </span><span id="cpPetScaleV">1.0×</span>
+          <input id="cpPetScale" type="range" min="40" max="200" step="5" value="100">
+        </label>
+        <label data-i18n="pet.walkLabel">角色走动（她自己会在当前屏幕溜达，不会跨屏）
+          <select id="cpPetWalk">
+            <option value="off" data-i18n="pet.walkOff">不走动（待在原地）</option>
+            <option value="calm" data-i18n="pet.walkCalm">悠闲（半分钟挪一小段）</option>
+            <option value="lively" data-i18n="pet.walkLively">活跃（十来秒就来回走）</option>
+          </select>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpPetFullscreen" checked> <span data-i18n="pet.fullscreen">全屏游戏/视频时自动隐藏角色（退出全屏自动回来）</span></label>
+
+        <!-- 悬停按钮设置已随功能移除（0.45.29，主人的要求） -->
+
+        <h4 class="sp-sec" data-i18n="sec.petBubble">气泡与显示</h4>
+        <div class="hint" data-i18n="note.bubbleSub">气泡长什么样、动画多流畅，都在这儿调（改动立刻生效）。</div>
+        <label data-i18n="bubble.scale">气泡大小
+          <div class="row">
+            <input id="cpBubbleScale" type="range" min="80" max="160" step="5" value="100">
+            <span id="cpBubbleScaleV" class="sp-val">100%</span>
+          </div>
+        </label>
+        <label data-i18n="bubble.font">气泡字号
+          <div class="row">
+            <input id="cpFontScale" type="range" min="80" max="160" step="5" value="100">
+            <span id="cpFontScaleV" class="sp-val">100%</span>
+          </div>
+        </label>
+        <label data-i18n="bubble.fps">动画帧率（越高越顺，越费 GPU）
+          <select id="cpPetFps">
+            <option value="30" data-i18n="bubble.fps30">30 fps（省电，默认）</option>
+            <option value="60">60 fps</option>
+            <option value="120">120 fps</option>
+            <option value="144">144 fps</option>
+          </select>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpStatusBubble" checked> <span data-i18n="bubble.status">显示状态气泡（想事情/看文件/操作电脑时头顶的小提示）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpInputBubble" checked> <span data-i18n="bubble.input">悬停角色时显示输入条（关掉后仍可从托盘/完整界面聊天）</span></label>
+
+        <h4 class="sp-sec" data-i18n="reaction.sec">互动回应</h4>
+        <div class="hint" data-i18n="reaction.sub">碰她、戳她、把她拎起来或扔出去时，是当场出声，还是先记着等你开口。</div>
+        <label data-i18n="reaction.mode">回应方式
+          <select id="cpReactionMode">
+            <option value="active" data-i18n="reaction.active">积极（每次都当场回应）</option>
+            <option value="quiet" data-i18n="reaction.quiet">安静（只演动作，等你说话时一起回应）</option>
+            <option value="custom" data-i18n="reaction.custom">自定义（只对勾选的类型当场回应）</option>
+          </select>
+        </label>
+        <label data-i18n="reaction.types">哪些互动当场回应
+          <div class="mem-row" id="cpReactionTypes">
+            <label class="cd-check"><input type="checkbox" data-rtype="pet" checked> <span data-i18n="reaction.pet">摸头</span></label>
+            <label class="cd-check"><input type="checkbox" data-rtype="poke" checked> <span data-i18n="reaction.poke">戳身体</span></label>
+            <label class="cd-check"><input type="checkbox" data-rtype="drop" checked> <span data-i18n="reaction.drop">拎起 / 放下</span></label>
+            <label class="cd-check"><input type="checkbox" data-rtype="throw" checked> <span data-i18n="reaction.throw">扔出去</span></label>
+          </div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.inner">她的内心</h4>
+        <div class="hint" data-i18n="inner.hint">她有自己的一天：会写日记、会记住你，也会被冷落影响。负反馈只改她说话的方式和长短，不会被拿来要挟你，也不会关掉任何功能。</div>
+        <label class="cd-check"><input type="checkbox" id="cpFeedbackMode" checked> <span data-i18n="inner.feedback">启用负反馈（说话总没人理 / 被扔来扔去时，她会安静一点）</span></label>
+        <div class="hint" data-i18n="inner.feedbackNote">测试期可以随时关掉；关掉后只是不再累加。已经记下的情绪在下面「负反馈」里清零或回滚。</div>
+        <label data-i18n="inner.historyChars">聊天带回多少历史
+          <div class="row">
+            <input id="cpHistoryChars" type="number" min="2000" max="60000" step="1000" style="width:100px">
+            <span data-i18n="inner.historyUnit" style="white-space:nowrap">字符（越多越记得早前的话，也越占上下文）</span>
+          </div>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpDiagContext"> <span data-i18n="inner.diag">在日志里记录每轮上下文字数（排障用，平时关着）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpIdleNudge" checked> <span data-i18n="inner.nudge">黏人模式（太久没理她，她会阶梯式地主动来找你：先轻轻问一句，久了一点不安，再久了写小作文；说「去睡了」她就不吵你）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpChatterBoost"> <span data-i18n="inner.chatterBoost">高频碎碎念（试险）：她的自言自语从每天 5 条提到 15 条——更「家里有人」，也更容易腻，腻了随时关回去</span></label>
+        <div class="hint" id="cpInteractStat" style="white-space:pre-wrap">读取中…</div>
+
+        <h4 class="sp-sec" data-i18n="sec.petSound">音效与说话声</h4>
+        <div class="hint" data-i18n="note.soundSub">全部为实时合成，不需要下载素材。</div>
+        <label class="cd-check"><input type="checkbox" id="cpSoundOn" checked> <span data-i18n="sound.master">音效总开关</span></label>
+        <label data-i18n="note.soundKinds">哪些场景出声
+          <div class="mem-row" id="cpSoundKinds">
+            <label class="cd-check"><input type="checkbox" data-skind="move" checked> <span data-i18n="sound.move">走动</span></label>
+            <label class="cd-check"><input type="checkbox" data-skind="touch" checked> <span data-i18n="sound.touch">触摸</span></label>
+            <label class="cd-check"><input type="checkbox" data-skind="face" checked> <span data-i18n="sound.face">表情</span></label>
+            <label class="cd-check"><input type="checkbox" data-skind="alarm" checked> <span data-i18n="sound.alarm">闹钟</span></label>
+            <label class="cd-check"><input type="checkbox" data-skind="ui" checked> <span data-i18n="sound.ui">界面</span></label>
+            <label class="cd-check"><input type="checkbox" data-skind="snore" checked> <span data-i18n="sound.snore">打盹</span></label>
+          </div>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpSpeechOn"> <span data-i18n="sound.speech">说话声（气泡逐字念音节，代替打字音效）</span></label>
+        <label data-i18n="note.soundTone">说话声的音色
+          <div class="row" id="cpSpeechRows">
+            <span data-i18n="sound.pitch" style="white-space:nowrap">音高</span>
+            <select id="cpSpeechPitch">
+              <option value="low" data-i18n="sound.low">低</option>
+              <option value="mid" data-i18n="sound.mid">中</option>
+              <option value="high" data-i18n="sound.high">高</option>
+            </select>
+            <span data-i18n="sound.rate" style="white-space:nowrap">语速</span>
+            <select id="cpSpeechRate">
+              <option value="low" data-i18n="sound.slow">慢</option>
+              <option value="mid" data-i18n="sound.normal">正常</option>
+              <option value="high" data-i18n="sound.fast">快</option>
+            </select>
+          </div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.petAlarm">闹钟</h4>
+        <div class="hint" data-i18n="note.alarmSub">到点她会开口提醒，可以设每天重复或只响一次。</div>
+        <div class="sp-inline">
+          <input id="cpAlarmTime" type="time" value="07:30">
+          <input id="cpAlarmLabel" type="text" maxlength="40" data-i18n-ph="alarm.labelPh" placeholder="提醒什么（如：喝水）">
+          <label class="cd-check sp-nowrap"><input type="checkbox" id="cpAlarmDaily" checked> <span data-i18n="alarm.daily">每天</span></label>
+          <button id="cpAlarmAdd" class="cd-btn" data-i18n="alarm.add">＋ 添加</button>
+        </div>
+        <div class="mem-row" id="cpAlarmList"></div>
+        <div class="hint" id="cpAlarmTip"></div>
+
+        <h4 class="sp-sec" data-i18n="sec.petWatch">屏幕陪伴</h4>
+        <div class="hint" data-i18n="watch.hint">默认关。开着时每隔一段时间截一张主屏给视觉模型看，遇到值得开口的瞬间她才说话（每小时限次、两次之间有冷却、可设深夜静音）。截图只发给你在模型页配置的视觉模型，不落盘。</div>
+        <label class="cd-check"><input type="checkbox" id="cpWatch"> <span data-i18n="watch.enable">开启屏幕陪伴</span></label>
+        <label data-i18n="note.watchRhythm">她主动开口的频率
+          <div class="row">
+            <span data-i18n="watch.perHourPre" style="white-space:nowrap">每小时大约</span>
+            <input id="cpProactivePerHour" type="number" min="1" max="12" style="width:70px">
+            <span data-i18n="watch.perHourUnit" style="white-space:nowrap">次</span>
+          </div>
+        </label>
+        <div class="hint" data-i18n="watch.rhythmHint">不是「隔固定时间说一次」：多数时候是几分钟到十几分钟，偶尔会安静很久，也偶尔会连着补一句——人说话就是这个节奏。这个数字是她所有主动开口的总量（看屏幕搭话、自言自语、自己待着都算在内）。</div>
+        <label class="cd-check"><input type="checkbox" id="cpWatchQuiet"> <span data-i18n="watch.quiet">深夜静音（23:00 ~ 08:00 不开口）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpWatchSame" checked> <span data-i18n="watch.same">画面没变就不重复看（暂停的视频/挂机界面不算新画面，省一次模型调用）</span></label>
+        <div class="hint" id="cpWatchTip"></div>
+
+        <h4 class="sp-sec" data-i18n="sec.petTime">时间观念</h4>
+        <div class="hint" data-i18n="watch.tsHint">她一直在数你有多久没碰键鼠、连续用了多久：久没动静会问你是不是走开/摸鱼/睡着了，回来会打招呼；连续用久了提醒你起身休息护眼；深夜还在用会劝你早点睡；早上第一次上线道早安。</div>
+        <label class="cd-check"><input type="checkbox" id="cpTsOn"> <span data-i18n="watch.tsEnable">开启时间观念（跟屏幕陪伴一起开关）</span></label>
+        <label data-i18n="note.tsAway">没动静多久算走开
+          <div class="row">
+            <span data-i18n="watch.tsAway" style="white-space:nowrap">超过</span>
+            <input id="cpTsAway" type="number" min="5" max="240" style="width:64px">
+            <span data-i18n="watch.tsAwayUnit" style="white-space:nowrap">分钟（更长分别判摸鱼/睡着与很久不在）</span>
+          </div>
+        </label>
+        <label data-i18n="note.tsWork">连续用多久提醒休息
+          <div class="row">
+            <span data-i18n="watch.tsWork" style="white-space:nowrap">超过</span>
+            <input id="cpTsWork" type="number" min="15" max="480" style="width:64px">
+            <span data-i18n="watch.tsWorkUnit" style="white-space:nowrap">分钟 → 提醒起身休息、护眼</span>
+          </div>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpTsSleepNudge"> <span data-i18n="watch.tsSleepNudge">深夜还在用电脑时，劝我早点睡（静音时段里只说这一句）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpTsMorning"> <span data-i18n="watch.tsMorning">早上第一次上线，跟我道早安</span></label>
+
+        <h4 class="sp-sec" data-i18n="sec.mind">她的记录（日记 / 归纳）</h4>
+        <div class="hint" data-i18n="mind.hint">她自己写的日记，每天一篇，用她自己的话。会带进她的对话里，所以她开始有「昨天」——而不是每次都重新认识你。</div>
+        <label data-i18n="mind.stateLabel">当前状态
+          <div class="hint" id="cpMindState">读取中…</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button id="cpMindWrite" class="cd-btn" data-i18n="mind.write">立刻写今天</button>
+            <button id="cpMindDistill" class="cd-btn" data-i18n="mind.distill">归纳一次</button>
+          </div>
+        </label>
+        <label data-i18n="mind.traitsLabel">她自己长出来的
+          <div class="hint" id="cpMindTraits" style="white-space:pre-wrap">还没有——攒够几篇日记后自动归纳</div>
+        </label>
+        <label data-i18n="mind.dreamLabel">做梦
+          <div class="hint" id="cpDreamStatus">还没做过梦</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button id="cpDreamNow" class="cd-btn" data-i18n="mind.dreamNow">让她做梦一次</button>
+          </div>
+          <div class="hint" data-i18n="mind.dreamHint">她会在闲置、你说晚安之后或开机时回顾最近的经历，把想长期记住的东西放进下面的「待她确认」。批准才会真正改变她。</div>
+        </label>
+        <label data-i18n="mind.reviewLabel">待她确认
+          <div class="hint" id="cpReviewPending" style="white-space:pre-wrap;max-height:200px;overflow:auto;line-height:1.7">（空）</div>
+        </label>
+        <label data-i18n="mind.reviewRecentLabel">最近生效 / 已回滚
+          <div class="hint" id="cpReviewRecent" style="white-space:pre-wrap;max-height:180px;overflow:auto;line-height:1.7">（空）</div>
+        </label>
+        <label data-i18n="mind.daysLabel">最近的日记
+          <div class="hint" id="cpMindDays" style="white-space:pre-wrap;max-height:220px;overflow:auto;line-height:1.7">还没有</div>
+        </label>
+        <label data-i18n="mind.growthLabel">变化年表
+          <div class="hint" id="cpMindGrowth" style="white-space:pre-wrap;max-height:140px;overflow:auto;line-height:1.7">还没有</div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="curio.title">她自己待着</h4>
+        <label class="cd-check"><input type="checkbox" id="cpCurio"> <span data-i18n="curio.on">没人跟她说话时，她自己找点事做（看你在用什么程序、读屏幕上那行字幕、翻自己记过的东西，然后把做过的事记下来。每天最多 8 件，两件之间隔 20~60 分钟；你不在电脑前、你们正在说话、或者她心情不好时都不做）</span></label>
+        <div class="hint" data-i18n="curio.hint">这不是又一条「主动找你说话」的通道：做事是给她自己做的，只有约三分之一的概率会顺口说一句，而且不朗读、不等你回应。她只能看与想——不能替你动鼠标。</div>
+        <div class="hint" id="cpCurioStat" style="white-space:pre-wrap">读取中…</div>
+
+        <h4 class="sp-sec" data-i18n="sec.fb">负反馈（测试期可回滚）</h4>
+        <div class="hint" data-i18n="fb.hint">她会被「说话没人理」「被扔出去」影响：安静一点、话短一点。这些只改说话方式，不会关掉功能。</div>
+        <label data-i18n="fb.statLabel">现在的情绪
+          <div class="hint" id="cpFbStat" style="white-space:pre-wrap">读取中…</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button id="cpFbReset" class="cd-btn" data-i18n="fb.reset">清零情绪</button>
+            <button id="cpFbRoll6" class="cd-btn" data-i18n="fb.roll6">回到 6 小时前</button>
+            <button id="cpFbRoll24" class="cd-btn" data-i18n="fb.roll24">回到 24 小时前</button>
+            <button id="cpFbRoll168" class="cd-btn" data-i18n="fb.roll168">回到 7 天前</button>
+          </div>
+        </label>
+        <label data-i18n="fb.recallLabel">翻旧账
+          <div style="display:flex;gap:6px">
+            <input id="cpFbQuery" data-i18n-ph="fb.queryPh" placeholder="例如：显卡、B站、下雨">
+            <button id="cpFbSearch" class="cd-btn" data-i18n="fb.find">找</button>
+          </div>
+          <div class="hint" data-i18n="fb.recallHint">按关键词在日记索引里找那天（不回任何模型，纯本地）</div>
+          <div class="hint" id="cpFbHits" style="white-space:pre-wrap;max-height:160px;overflow:auto;line-height:1.7"></div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.obs">OBS 画面导出</h4>
+        <label class="cd-check"><input type="checkbox" id="cpObs"> <span data-i18n="pet.obsOn">开启本地画面导出（把桌面上正在跑的伙伴画面以透明背景推给 OBS；关着时不开端口、完全不截图）</span></label>
+        <label data-i18n="pet.obsUrl">本地地址
+          <div class="hint" id="cpObsUrl">检测中…</div>
+          <div style="display:flex;gap:6px"><button id="cpObsOpen" class="cd-btn" data-i18n="pet.obsOpen">在浏览器打开</button></div>
+        </label>
+        <label data-i18n="pet.obsPort">端口（1024–65535，保存后立即生效）
+          <div style="display:flex;gap:6px"><input id="cpObsPort" style="width:110px"><button id="cpObsPortSave" class="cd-btn" data-i18n="hk.save">保存</button></div>
+        </label>
+        <label data-i18n="pet.obsFps">帧率（每帧都要截图编码 PNG，20 帧以上会明显吃 CPU）
+          <select id="cpObsFps">
+            <option value="5">5 fps</option><option value="10">10 fps</option><option value="15">15 fps</option>
+            <option value="20">20 fps</option><option value="30">30 fps</option>
+          </select>
+        </label>
+        <label data-i18n="pet.obsScreen">抓哪块屏
+          <select id="cpObsScreen"></select>
+          <div class="hint" data-i18n="pet.obsHint">OBS → 来源 →「浏览器」→ URL 填上面那个地址，宽高填屏幕分辨率。画质是 PNG 无损，窗口本身透明，不需要色键。</div>
+        </label>
+        </div><!-- /pet -->
+        <div class="sp-page" data-sp="voice" hidden>
+        <h4 class="sp-sec" data-i18n="sec.voiceLang">语言与朗读</h4>
+        <label data-i18n="lang.replyLabel">AI 回复语言（＝她说的话，TTS 朗读这个语言；自动＝跟用户语言走）
+          <select id="cpReplyLang">
+            <option value="auto" data-i18n="lang.auto">自动（跟用户语言走）</option>
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+          </select>
+        </label>
+        <label data-i18n="lang.subLabel">显示字幕（把台词翻译成这个语言显示，朗读仍是台词原语言；例如台词=日本語＋字幕=中文 → 她说日语、显示中文）
+          <select id="cpSubLang">
+            <option value="off" data-i18n="lang.subOff">关闭（台词原样显示）</option>
+            <option value="zh" data-i18n="lang.subZh">中文字幕</option>
+            <option value="en" data-i18n="lang.subEn">English subtitles</option>
+            <option value="ja" data-i18n="lang.subJa">日本語字幕</option>
+          </select>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpReadReply" checked> <span data-i18n="lang.readReply">朗读 AI 回复（伙伴气泡回复也发声；关掉只显示文字）</span></label>
+        <h4 class="sp-sec" data-i18n="sec.voiceTts">语音合成</h4>
+        <label data-i18n="tts.modeLabel">语音合成（朗读回复）
+          <select id="cpTtsMode">
+            <option value="browser" data-i18n="tts.browser">系统语音</option>
+            <option value="api" data-i18n="tts.api">API / 本地引擎</option>
+            <option value="off" data-i18n="note.ttsOff">关闭（等同上方朗读开关）</option>
+          </select>
+          <select id="cpTtsProvider">
+            <option value="fish" data-i18n="tts.fish">Fish Audio（官方 API）</option>
+            <option value="openai" data-i18n="tts.openai">OpenAI 兼容（fish-speech / IndexTTS 等）</option>
+            <option value="gptsovits" data-i18n="tts.gptsovits">GPT-SoVITS 本地（端口 9880）</option>
+          </select>
+          <input id="cpTtsBase" data-adv data-i18n-ph="tts.basePh" placeholder="TTS 地址（留空复用 API 地址）">
+          <input id="cpTtsModel" data-adv data-i18n-ph="tts.modelPh" placeholder="TTS 模型（OpenAI 兼容端点用）">
+          <input id="cpTtsKey" type="password" data-adv data-i18n-ph="tts.keyPh" placeholder="TTS Key（留空复用 API Key）">
+          <div class="hint" data-i18n="tts.voiceMoved">音色跟角色卡走（每个角色自己的声音）：在「角色卡 → 人设」里设置 API 音色和系统语音；这里留的是全角色的共用默认（地址/Key/模型等）</div>
+          <input id="cpTtsRefAudio" data-i18n-ph="tts.refAudioPh" placeholder="GPT-SoVITS：参考音频 wav 路径">
+          <input id="cpTtsPromptText" data-i18n-ph="tts.promptPh" placeholder="GPT-SoVITS：参考音频里说的话">
+        </label>
+        <div id="cpFish" hidden>
+          <label data-i18n="fish.keyLabel">Fish Audio API Key（专用；留空则用上方 TTS Key / API Key）
+            <input id="cpFishKey" type="password" placeholder="fa-xxxxxxxx">
+          </label>
+          <label data-i18n="fish.baseLabel">Fish Audio API 端点
+            <input id="cpFishBase" placeholder="https://api.fish.audio/v1/tts">
+          </label>
+          <label data-i18n="fish.modelLabel">TTS 模型
+            <input id="cpFishModel" placeholder="s2.1-pro-free">
+          </label>
+          <label data-i18n="fish.voiceLabel">Voice model ID / reference_id（Fish 声音库或自建声音模型的 ID）
+            <input id="cpFishVoice" placeholder="57c45a3aa7b34a62af8eb27137f092c8">
+            <button id="cpFishVoiceFetch" class="cd-btn" data-i18n="fish.fetchVoices">获取我的声音列表</button>
+            <select id="cpFishVoiceSel" hidden></select>
+            <div class="hint" id="cpFishVoiceTip"></div>
+          </label>
+          <label data-adv data-i18n="fish.asmrLabel">ASMR 模式 Voice model ID（留空沿用普通音色）
+            <input id="cpFishAsmr" placeholder="2c83af8fceab43748439353dd501be21">
+          </label>
+          <label data-adv data-i18n="fish.formatLabel">输出格式
+            <select id="cpFishFormat">
+              <option value="wav">WAV</option>
+              <option value="mp3">MP3</option>
+            </select>
+          </label>
+          <label data-adv data-i18n="fish.latencyLabel">延迟策略
+            <select id="cpFishLatency">
+              <option value="normal" data-i18n="fish.latQuality">质量优先</option>
+              <option value="balanced" data-i18n="fish.latBalanced">平衡</option>
+            </select>
+          </label>
+          <label data-adv><span data-i18n="fish.feelingA">感情程度（</span><span id="cpFishFeelingV">0</span><span data-i18n="fish.feelingB">%，Drama 3 情绪增强）</span>
+            <input id="cpFishFeeling" type="range" min="0" max="100" value="0">
+          </label>
+          <label data-adv><span data-i18n="fish.densityA">句内情绪演出密度（</span><span id="cpFishDensityV">0</span><span data-i18n="fish.densityB">%，感叹强调/轻语/停顿标签频率）</span>
+            <input id="cpFishDensity" type="range" min="0" max="100" value="0">
+          </label>
+          <label><span data-i18n="fish.speedA">语速（</span><span id="cpSpeedV">1.0</span><span data-i18n="fish.speedB">x，播放速率）</span>
+            <input id="cpSpeed" type="range" min="50" max="200" value="100">
+          </label>
+          <label data-adv data-i18n="fish.proxyLabel">语音请求的网络代理（系统代理若是「API 中转」会替换 Key 导致 401 时用这个绕开）
+            <input id="cpNetProxy" data-i18n-ph="fish.proxyPh" placeholder="留空=跟随系统 | direct=强制直连 | 如 http://127.0.0.1:7890">
+          </label>
+          <label data-i18n="fish.previewLabel">试听文字
+            <textarea id="cpFishPreview" rows="2">你好！今天也一起去寻找有趣的炼金素材吧！</textarea>
+            <button id="cpPreviewBtn" class="cd-btn wide" data-i18n="fish.previewBtn">▶ 试听（用当前档位）</button>
+            <div class="hint" id="cpPreviewTip"></div>
+          </label>
+        </div>
+        <h4 class="sp-sec" data-i18n="sec.voiceMic">收音与识别</h4>
+        <label data-i18n="voice.micLabel">收音方式（左下角 🎙 按钮）
+          <select id="cpMicMode">
+            <option value="always" data-i18n="voice.micAlways">常开（自动听你说话，说完自动发）</option>
+            <option value="toggle" data-i18n="voice.micToggle">点击开 / 关</option>
+            <option value="hold" data-i18n="voice.micHold">按住说话（松开就发送）</option>
+          </select>
+        </label>
+        <label class="cd-check"><input type="checkbox" id="cpInterrupt"> <span data-i18n="voice.interrupt">她说话时你一开口就打断（扬声器外放可能误触发，默认关）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpOpencc"> <span data-i18n="voice.opencc">朗读前繁体转简体（TTS 引擎念不好繁体台词时开）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpSovits"> <span data-i18n="voice.sovits">在线语音失败时优先用本地 GPT-SoVITS 兜底（还是角色音色；CPU 一句约 5~20 秒，比 IndexTTS 快得多）</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpIndexTts"> <span data-i18n="voice.indexTts">SoVITS 也失败时再用本地 IndexTTS 兜底（角色音色；CPU 合成较慢，一句话约 1 分钟）</span></label>
+        <label data-adv data-i18n="asr.label">语音识别（按住 🎙 说话；Whisper）
+          <select id="cpAsrProvider">
+            <option value="cloud" data-i18n="asr.cloud">云端 Whisper 兼容端点</option>
+            <option value="local" data-i18n="asr.local">本地 faster-whisper（离线，复用「刷B站」装好的环境）</option>
+          </select>
+          <span id="cpAsrCloudRows">
+            <input id="cpAsrBase" data-i18n-ph="asr.basePh" placeholder="识别端点，如 https://api.groq.com/openai/v1">
+            <input id="cpAsrModel" data-i18n-ph="asr.modelPh" placeholder="whisper-large-v3 / whisper-1">
+            <input id="cpAsrKey" type="password" data-i18n-ph="asr.keyPh" placeholder="ASR Key（留空复用 API Key）">
+          </span>
+          <input id="cpAsrLocalModel" data-i18n-ph="asr.localModelPh" placeholder="本地模型：small / medium / large-v3">
+          <select id="cpAsrLang">
+            <option value="auto" data-i18n="asr.auto">识别语言：自动（中/英/日）</option>
+            <option value="zh" data-i18n="asr.zh">识别语言：中文</option>
+            <option value="en" data-i18n="asr.en">识别语言：英文</option>
+            <option value="ja" data-i18n="asr.ja">识别语言：日文</option>
+          </select>
+        </label>
+        </div><!-- /voice -->
+        <div class="sp-page" data-sp="bili" hidden>
+        <h4 class="sp-sec" data-i18n="sec.biliAccount">账号与运行</h4>
+        <label data-i18n="bili.label">刷B站（每天替你刷一轮：搜索 → 读字幕 → 挑值得的 → 写报告，可选自动评论 @ 你）
+          <div class="hint" id="biliState">…</div>
+          <div class="mem-row">
+            <button id="biliLoginBtn" class="cd-btn" data-i18n="bili.login">扫码登录 B站</button>
+            <button id="biliWhoBtn" class="cd-btn" data-i18n="bili.who">看登录状态</button>
+            <button id="biliRunBtn" class="cd-btn" data-i18n="bili.run">立即跑一轮</button>
+          </div>
+          <img id="biliQr" alt="" hidden style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px">
+          <div class="hint" id="biliQrTip"></div>
+        </label>
+        <label><span data-i18n="bili.keywords">关注关键词（逗号分隔；留空用默认）</span>
+          <input id="biliKeywords" data-i18n-ph="bili.keywordsPh" placeholder="AI Agent, AI 智能体, 开源项目">
+        </label>
+        <label><span data-i18n="bili.perDay">每天最多挑几条（0-50）</span>
+          <input id="biliPerDay" type="number" min="0" max="50" value="5">
+        </label>
+        <label data-i18n="bili.reportLabel">日报形态
+          <select id="biliReportLevel">
+            <option value="full" data-i18n="bili.reportFull">完整（标题/UP/为什么值得）</option>
+            <option value="brief" data-i18n="bili.reportBrief">薄版（每条一两行 + 链接）</option>
+            <option value="off" data-i18n="bili.reportOff">不写报告（只发评论）</option>
+          </select>
+        </label>
+        <h4 class="sp-sec" data-i18n="sec.biliComment">评论与私信（会用你的号说话）</h4>
+        <label class="cd-check" data-adv><input type="checkbox" id="biliAutoComment"> <span data-i18n="bili.autoComment">自动评论并 @ 你（会用你的号说话，默认关）</span></label>
+        <label data-adv><span data-i18n="bili.mention">要 @ 谁（B站昵称；留空 = 不发评论）</span>
+          <input id="biliMentionName" placeholder="你的B站昵称">
+        </label>
+        <label data-adv><span data-i18n="bili.cpr">每轮最多发几条评论（0-20）</span>
+          <input id="biliCpr" type="number" min="0" max="20" value="1">
+        </label>
+        <label class="cd-check"><input type="checkbox" id="biliPeakValley"> <span data-i18n="bili.peakValley">谷时自动刷（中午 12-14 点、夜里 18 点-次日 9 点各跑一轮，配额照旧）</span></label>
+        <div data-adv id="biliPvSub" hidden>
+          <label class="cd-check"><input type="checkbox" id="biliNoon"> <span data-i18n="bili.noon">中午谷时（12:00-14:00）</span></label>
+          <label class="cd-check"><input type="checkbox" id="biliNight"> <span data-i18n="bili.night">夜间谷时（18:00-次日 09:00）</span></label>
+        </div>
+        <label data-adv><span data-i18n="bili.dmMode">投递方式</span>
+          <select id="biliDmMode">
+            <option value="off" data-i18n="bili.dmOff">只发评论（现状）</option>
+            <option value="only" data-i18n="bili.dmOnly">只私信 —— 一条公开评论都不发，最不打扰别人</option>
+            <option value="both" data-i18n="bili.dmBoth">评论 + 私信 —— 两边都发</option>
+          </select>
+        </label>
+        <label data-adv id="biliDmUidRow" hidden><span data-i18n="bili.dmUid">私信发给谁（B站 UID，数字）</span>
+          <input id="biliDmUid" placeholder="12345678">
+          <div class="hint" data-i18n="bili.dmHint">私信 = 本轮每条的「标题 + 链接 + 一句话」合并成一条（500 字内）。⚠️ 建议先互关：B站 对陌生人私信限流。</div>
+        </label>
+        <label class="cd-check" data-adv><input type="checkbox" id="biliReplyComments"> <span data-i18n="bili.replyComments">回复楼中楼（只回直接回复到你评论下的人，每条 100 字内）</span></label>
+        <label data-adv id="biliRprRow" hidden><span data-i18n="bili.rpr">每轮最多回几条楼中楼（1-10）</span>
+          <input id="biliRpr" type="number" min="1" max="10" value="1">
+        </label>
+        <h4 class="sp-sec" data-i18n="sec.biliExtra">转写、收藏与报告</h4>
+        <label class="cd-check" data-adv><input type="checkbox" id="biliTranscribe"> <span data-i18n="bili.transcribe">无字幕的视频本地转写（faster-whisper，需要先建环境）</span></label>
+        <label data-adv><span data-i18n="bili.favFolder">自动收藏：每轮跑完把挑中的视频存进这个收藏夹</span>
+          <select id="biliFavFolder"><option value="0" data-i18n="bili.favOff">不收藏（默认）</option></select>
+          <div class="hint" data-i18n="bili.favHint">收藏动作由程序完成（不经过模型，模型拿不到这只手）；按「刷新收藏夹」拉取你创建的收藏夹列表。</div>
+        </label>
+        <div class="mem-row" data-adv>
+          <button id="biliFavRefresh" class="cd-btn" data-i18n="bili.favRefresh">刷新收藏夹</button>
+          <button id="biliFavToday" class="cd-btn" data-i18n="bili.favToday">补收藏今天的</button>
+        </div>
+        <div data-adv id="biliAsrSub" hidden>
+          <label><span data-i18n="bili.asrModel">转写模型（越小越快越糙）</span>
+            <select id="biliAsrModel">
+              <option value="tiny">tiny（最快）</option>
+              <option value="base">base</option>
+              <option value="small" selected>small（推荐）</option>
+              <option value="medium">medium（最慢最准）</option>
+            </select>
+          </label>
+          <div class="btn-row">
+            <button id="biliAsrBtn" class="cd-btn" data-i18n="bili.asrSetup">建本地转写环境</button>
+          </div>
+          <div class="hint" id="biliAsrState"></div>
+        </div>
+        <div class="mem-row" data-adv>
+          <button id="biliReportBtn" class="cd-btn" data-i18n="bili.viewReport">看今天的报告</button>
+          <button id="biliVerifyBtn" class="cd-btn" data-i18n="bili.verify">复核已发评论</button>
+          <button id="biliOpenDirBtn" class="cd-btn" data-i18n="bili.openDir">打开报告文件夹</button>
+        </div>
+        <textarea id="biliReportView" rows="8" readonly spellcheck="false" hidden style="font-size:12px"></textarea>
+        <div class="hint" id="biliTip"></div>
+        </div><!-- /bili -->
+        <div class="sp-page" data-sp="world" hidden>
+        <h4 class="sp-sec" data-i18n="sec.worldInstalled">已安装扩展</h4>
+        <div class="hint" data-i18n="world.warn">⚠️ 安装扩展 = 允许第三方代码在本机运行（它能拿到你的配置、发网络请求、注册工具给 AI 用）。只装你信任的来源。扩展出错会自动熔断停用，不会拖垮应用。</div>
+        <div class="mem-row">
+          <button id="worldInstallZip" class="cd-btn" data-i18n="world.installZip">从本地 zip 安装…</button>
+          <button id="worldRefresh" class="cd-btn" data-i18n="world.refresh">刷新列表</button>
+        </div>
+        <div id="worldRows"></div>
+
+        <h4 class="sp-sec" data-i18n="sec.worldMarket">扩展市场</h4>
+        <label><span data-i18n="world.marketUrl">扩展市场索引（JSON 地址；评分/评论数只是展示字段）</span>
+          <input id="worldMarketUrl" placeholder="https://example.com/worlds.json">
+          <div class="btn-row">
+            <button id="worldMarketBtn" class="cd-btn" data-i18n="world.marketFetch">拉取市场列表</button>
+          </div>
+        </label>
+        <div id="worldMarketRows" class="hint"></div>
+        </div><!-- /world -->
+        <div class="sp-page" data-sp="im" hidden>
+
+        <h4 class="sp-sec" data-i18n="sec.imRoles">多角色分工</h4>
+        <label data-i18n="mr.label">多角色同时在线 —— 按会话给每个角色分工，记忆互相独立
+          <div class="hint" data-i18n="mr.hint">每个「角色位」= 选一个角色 + 填它负责的会话（QQ 号 / 群号（写 group:群号） / 微信会话名，逗号分隔）。某会话来消息就由绑定它的角色应答，各角色有自己的聊天记忆互不干扰；一个角色位不填会话 = 默认角色（没被分配的会话都归它）。「FF14 专属角色（内置）」带物价/钓鱼/灰机wiki 查询能力。</div>
+          <div id="mrRows"></div>
+          <div class="row">
+            <button id="mrAdd" class="cd-btn" data-i18n="mr.add">再加一个角色位</button>
+            <span data-i18n="mr.ff14Bind" style="white-space:nowrap">FF14 能力绑定角色</span>
+            <select id="mrFf14Role" style="max-width:180px"></select>
+            <span data-i18n="mr.ff14Server" style="white-space:nowrap">FF14 默认服务器</span>
+            <input id="ff14Server" style="width:110px" placeholder="银泪湖">
+            <label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="ff14ForAll"> <span data-i18n="mr.ff14ForAll">FF14 工具对所有会话开放</span></label>
+          </div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.imQQ">QQ（NapCatQQ）</h4>
+        <label data-i18n="im.label">QQ（NapCatQQ）—— 让她用你的人设去 QQ 里当群友
+          <div class="hint" id="imConn"></div>
+          <div class="row">
+            <button id="imConnectBtn" class="cd-btn" data-i18n="im.connect">连接</button>
+            <button id="imTestBtn" class="cd-btn" data-i18n="im.testSend">发条测试消息</button>
+            <button id="imClearHistBtn" class="cd-btn" data-i18n="im.clearHist">清空聊天记忆</button>
+          </div>
+          <div class="row">
+            <label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="imEnabled"> <span data-i18n="im.enable">启用回复（不勾选只连不回）</span></label>
+          </div>
+          <input id="imWsUrl" placeholder="ws://127.0.0.1:3001（NapCatQQ 正向 WebSocket 地址）">
+          <input id="imToken" placeholder="access_token（NapCat 里配了才填，没配留空）" data-adv>
+          <div class="row" data-adv>
+            <span data-i18n="im.personaMode" style="white-space:nowrap">QQ 人设来源</span>
+            <select id="imPersonaMode">
+              <option value="current" data-i18n="im.personaCurrent">跟桌面角色同一个她</option>
+              <option value="role" data-i18n="im.personaRole">单独指定一个角色</option>
+            </select>
+            <select id="imPersonaRole" hidden></select>
+          </div>
+          <div class="row">
+            <span data-i18n="im.groupRate" style="white-space:nowrap">群里没被@时的插话概率</span>
+            <input id="imGroupRate" type="range" min="0" max="100" step="1" style="flex:1">
+            <b id="imGroupRateV" style="min-width:34px;text-align:right">8%</b>
+          </div>
+          <div class="row">
+            <label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="imPrivate"> <span data-i18n="im.private">私聊也回（推荐只对信任的人开）</span></label>
+          </div>
+          <div class="row">
+            <label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="imVoice"> <span data-i18n="im.voice">QQ 里也能发语音（音色跟角色的语音设置一致）</span></label>
+          </div>
+          <div class="field-label"><span data-i18n="im.stickerLabel">表情包目录（可选）</span><small data-i18n="im.stickerSmall">装表情图的文件夹，她看心情发表情</small></div>
+          <input id="imStickerDir" data-i18n-ph="im.stickerPh" placeholder="如 D:\Pictures\表情包；留空 = 不发表情">
+          <div class="field-label"><span data-i18n="im.privateLabel">私聊白名单（QQ 号）</span><small data-i18n="im.privateSmall">留空 = 回所有人</small></div>
+          <input id="imPrivateAccounts" data-i18n-ph="im.privateAccountsPh" placeholder="私聊白名单：只回这些账号，逗号分隔；留空 = 所有人">
+          <div class="field-label" style="color:#ffb86b"><span data-i18n="im.qqOwnersLabel">主人账号（QQ 号）—— 命令权限</span><small data-i18n="im.qqOwnersSmall">只有名单里的 QQ 能对她下命令；留空 = QQ 命令全部无效</small></div>
+          <input id="imOwners" data-i18n-ph="im.qqOwnersPh" placeholder="主人账号（QQ 号，逗号分隔）：只有他们能下命令；留空 = QQ 命令全部无效">
+          <div class="hint" data-i18n="im.ownersHint">名单里的人可以问她要钥匙、问主人是谁、让她改记忆；名单外的人发这类命令会被她拒绝并警告。QQ 和微信的主人账号互相独立，各填各的。</div>
+          <div class="row">
+            <label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="imPcTools"> <span data-i18n="im.pcTools">主人可遥控这台电脑（查状态、看在跑什么、截屏、执行命令、关机重启）</span></label>
+          </div>
+          <div class="hint" data-i18n="im.pcToolsHint">主人名单里的人发「看看电脑在干嘛」「帮我关机」她会直接照做；名单外的人连这组工具都看不到。名单为空 = 电脑工具永远不挂。</div>
+          <label class="cd-check"><input type="checkbox" id="imPcTerminalAsk" checked> <span data-i18n="im.pcTerminalAsk">执行命令前要主人回一句「确认」</span></label>
+          <div class="hint" data-i18n="im.pcTerminalHint">QQ/微信里没人看着屏幕，所以命令先摆出来再等主人确认；关掉后普通命令直接跑，但破坏性命令（rm -rf / shutdown / reg add / 重定向覆盖…）仍然强制确认。</div>
+          <input id="imGroups" placeholder="只在这些 QQ 群里说话，逗号分隔；留空 = 所有群" data-adv>
+          <div class="row" data-adv>
+            <span data-i18n="im.hourly" style="white-space:nowrap">每群每小时最多回</span>
+            <input id="imHourly" type="number" min="1" max="200" style="width:70px">
+            <span data-i18n="im.times">条</span>
+          </div>
+          <div class="hint" id="imTip"></div>
+        </label>
+
+        <h4 class="sp-sec" data-i18n="sec.imWx">微信（界面自动化）</h4>
+        <label data-i18n="im.wxLabel">微信（UI 自动化）—— 她直接在微信窗口里看消息、打字回复
+          <div class="hint" data-i18n="im.wxHint">先在微信里打开要盯的会话（想测试就开「文件传输助手」，手机上给自己发消息，她回完你手机立刻收到）。她动手前会等你离开键鼠 2 秒，绝不抢你鼠标。</div>
+          <div class="row">
+            <label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="wxEnabled"> <span data-i18n="im.wxEnable">开启微信自动回复</span></label>
+          </div>
+          <div class="field-label"><span data-i18n="im.wxChatLabel">要盯的会话名</span><small data-i18n="im.wxChatSmall">如：文件传输助手；留空 = 当前打开的都回</small></div>
+          <input id="wxChatName" data-i18n-ph="im.wxChatNamePh" placeholder="只盯这个会话（如：文件传输助手）；留空 = 当前打开的都回">
+          <div class="field-label" style="color:#ffb86b"><span data-i18n="im.wxOwnersLabel">主人账号（微信会话名）—— 命令权限</span><small data-i18n="im.wxOwnersSmall">只有名单里的微信会话能对她下命令；留空 = 微信命令全部无效</small></div>
+          <input id="wxOwners" data-i18n-ph="im.wxOwnersPh" placeholder="主人账号（微信会话名，逗号分隔）：留空 = 微信命令全部无效">
+          <div class="row" data-adv>
+            <span data-i18n="im.wxPollSec" style="white-space:nowrap">每</span>
+            <input id="wxPollSec" type="number" min="10" max="600" style="width:70px">
+            <span data-i18n="im.wxPollSecUnit">秒看一眼微信</span>
+          </div>
+          <div class="row" data-adv>
+            <span data-i18n="im.personaMode" style="white-space:nowrap">微信人设来源</span>
+            <select id="wxPersonaMode">
+              <option value="current" data-i18n="im.personaCurrent">跟桌面角色同一个她</option>
+              <option value="role" data-i18n="im.personaRole">单独指定一个角色</option>
+            </select>
+            <select id="wxPersonaRole" hidden></select>
+          </div>
+          <div class="row">
+            <button id="wxProbeBtn" class="cd-btn" data-i18n="im.wxProbe">看一眼微信（立即测试）</button>
+          </div>
+          <div class="hint" id="wxTip"></div>
+        </label>
+        </div><!-- /im -->
+
+        <button id="cpSave" class="cd-save" data-i18n="save.settings">保存设置</button>
+        <div class="hint" id="cpSaveTip"></div>
+      </div>
+    </aside>
+
+    <!-- 7.6 新手引导（首次启动 8 步向导；通用设置里可重看） -->
+    <div id="guide" hidden>
+      <div id="guideCard">
+        <div id="guideSteps"></div>
+        <h2 id="guideTitle"></h2>
+        <div id="guideBody"></div>
+        <div id="guideNav">
+          <button id="guideSkip" class="cd-btn" data-i18n="guide.skip">跳过</button>
+          <span style="flex:1"></span>
+          <button id="guidePrev" class="cd-btn" data-i18n="guide.prev">上一步</button>
+          <button id="guideNext" class="cd-save" data-i18n="guide.next">下一步</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="../shared/i18n.js"></script>
+  <script src="../shared/typewriter.js"></script>
+  <script src="../shared/i18n/strings.zh.js"></script>
+  <script src="../shared/i18n/strings.zh-Hant.js"></script>
+  <script src="../shared/i18n/strings.en.js"></script>
+  <script src="../shared/i18n/strings.ja.js"></script>
+  <script src="../shared/speech-filter.js"></script>
+  <script src="../shared/figure-render.js"></script>
+  <script src="../shared/vrm-stage.js"></script>
+  <script src="libs.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #1d2030; color: #9aa4c0; font: 12px/1.4 "Segoe UI", sans-serif; }
+  #row { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; align-items: flex-end; }
+  .cell { text-align: center; }
+  canvas { width: 320px; height: 560px; display: block; background: #171a26; border-radius: 4px; }
+  .cap { padding-top: 4px; font-size: 13px; color: #aab4cf; }
+</style>
+</head>
+<body>
+<div id="row"></div>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script src="../../src/renderer/shared/vrm-stage.js"></script>
+<script>
+  /* 0.45.63 官方 clip 对照图：从 374 条 gust_XXXXX 里挑「像待机小动作」的。
+     每格一个独立舞台，加载后播指定 clip，截图时取到动作中段。 */
+  const q = new URLSearchParams(location.search)
+  const model = q.get('model')
+  const list = (q.get('clips') || '').split(',').filter(Boolean)
+  const row = document.getElementById('row')
+  window.__probe = { ready: false, error: null, n: 0, notes: [], clips: list }
+
+  const insts = []
+  try {
+    list.forEach((name) => {
+      const cell = document.createElement('div')
+      cell.className = 'cell'
+      const cv = document.createElement('canvas')
+      const cap = document.createElement('div')
+      cap.className = 'cap'
+      cap.textContent = name
+      cell.appendChild(cv)
+      cell.appendChild(cap)
+      row.appendChild(cell)
+
+      const clk = { t: 0 }
+      const st = window.AuraVrm.create({
+        canvas: cv,
+        libs: window.AuraLibs,
+        url: model,
+        fps: 20,
+        now: () => clk.t,
+        setTimer: (fn) => setInterval(() => { clk.t += 40; fn() }, 40),
+        clearTimer: (t) => clearInterval(t)
+      })
+      insts.push({ st, cell })
+      st.ready.then(() => {
+        setTimeout(() => {
+          try {
+            // 0.45.63 对照实验：强制打开归一化骨骼→原始骨骼的传播，验证「动画没进画面」
+            // 到底是不是这个开关一直是 false 造成的（12 个不同 clip 渲染出同一姿势的嫌疑）
+            const force = q.get('force') === '1'
+            if (force && st.state && st.state.vrm && st.state.vrm.humanoid) {
+              st.state.vrm.humanoid.autoUpdateHumanBones = true
+            }
+            if (typeof st.playClip !== 'function' || !st.playClip(name)) {
+              window.__probe.notes.push(name + ': playClip 失败')
+            }
+          } catch (e) { window.__probe.notes.push(name + ': ' + e.message) }
+        }, 500)
+        window.__probe.n++
+        if (window.__probe.n === list.length) {
+          window.__probe.ready = true
+          document.title = 'READY ' + list.length
+        }
+      }).catch((e) => { window.__probe.error = String((e && e.message) || e); document.title = 'ERR' })
+    })
+  } catch (e) { window.__probe.error = String((e && e.message) || e); document.title = 'ERR' }
+</script>
+</body>
+</html>

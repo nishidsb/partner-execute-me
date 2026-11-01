@@ -1,0 +1,125 @@
+/* 弹幕层（0.38.0）：飘的字与弹幕框共用；两层窗口都是透明窗，背景必须彻底空 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+}
+
+/* ---------------- 飘的弹幕 ---------------- */
+body.fly { pointer-events: none; }
+
+#stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* 上三分之一留给游戏 HUD，弹幕从 28% 高度开始往下排 */
+  padding-top: 28vh;
+}
+
+.dk {
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: var(--dk-size, 30px);
+  line-height: 1.25;
+  color: #fffdf7;
+  letter-spacing: 0.5px;
+  /* 游戏画面杂乱，影要够狠才读得出来：四向描边 + 一层柔影，不靠半透明底 */
+  text-shadow:
+    0 0 2px rgba(0, 0, 0, 0.95),
+    0 2px 4px rgba(0, 0, 0, 0.9),
+    0 0 12px rgba(0, 0, 0, 0.55);
+  will-change: transform;
+  transform: translate3d(100vw, 0, 0);
+}
+
+.dk.hi { color: #ffe9b8; }
+
+/* ---------------- 弹幕框 ---------------- */
+body.box {
+  padding: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+  /* 没锁 = 可以整块拖走（列表区域例外，那里要能滚 */}
+  -webkit-app-region: drag;
+}
+
+#bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px 6px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(19, 19, 21, 0.42);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+#who { font-weight: 700; }
+
+#hint {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+}
+
+#list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 10px 10px;
+  background: rgba(16, 16, 17, 0.34);
+  -webkit-app-region: no-drag;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+#list::-webkit-scrollbar { width: 4px; }
+#list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.22); border-radius: 4px; }
+
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-bottom: 5px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #fffdf7;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  word-break: break-word;
+  animation: rowIn 0.18s ease-out;
+}
+
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.row .t {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1.9;
+  color: rgba(255, 255, 255, 0.42);
+  font-variant-numeric: tabular-nums;
+}
+
+.row .x { flex: 1 1 auto; }
+
+/* 锁着的时候整块淡一点，提示「现在鼠标穿过去了」 */
+body.box.locked #list { background: rgba(16, 16, 17, 0.24); }
+body.box.locked { -webkit-app-region: no-drag; }

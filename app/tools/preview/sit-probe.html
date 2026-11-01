@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #1d2030; color: #9aa4c0; font: 12px/1.4 "Segoe UI", sans-serif; }
+  canvas { width: 300px; height: 520px; display: block; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script src="../../src/renderer/companion/libs.js"></script>
+<script src="../../src/renderer/shared/vrm-stage.js"></script>
+<script>
+  /* 0.45.67 坐姿/呼吸运动学探针（自查用，不参与应用运行）
+     用户：「呼吸像漂浮在空中」「坐下时一直抖」「坐下前有个很奇怪的短动作」。
+     光看图判断不了这三个，必须量出来：
+       · 站立时脚底(包围盒最低点)是否跟着呼吸上下动 → 动=脚离地=漂浮
+       · 坐下过程中 sitAmt 是否单调 → 反复=抖
+       · root.y 在落定后是否还在摆 → 摆=抖
+     虚拟时钟驱动，跑一遍几秒出全序列。 */
+  const q = new URLSearchParams(location.search)
+  const model = q.get('model')
+  const cv = document.getElementById('cv')
+  const clk = { t: 0 }
+  window.__samples = []
+  window.__err = null
+  window.__phase = 'boot'
+  let sitAt = null
+
+  const T = () => window.AuraLibs.THREE
+  const box = { min: 0, max: 0 }
+
+  function sample (st) {
+    try {
+      const root = st.root
+      if (!root) return
+      root.updateMatrixWorld(true)
+      const b = new (T().Box3)().setFromObject(root)
+      /* 0.45.67：怪动作量化——「坐下之前有一个很短的奇怪动作」多半是 holdAnim()
+         硬切（停官方 idle + 建 rig，骨骼瞬间跳到程序化站姿）那一两帧。
+         手/头的世界坐标最能反映这种瞬跳。 */
+      let handY = null; let handX = null; let headY = null
+      try {
+        const hm = st.state.vrm && st.state.vrm.humanoid
+        if (hm && hm.getRawBoneNode) {
+          const hb = hm.getRawBoneNode('leftHand')
+          const hd = hm.getRawBoneNode('head')
+          const v = new (T().Vector3)()
+          if (hb) { hb.getWorldPosition(v); handY = +v.y.toFixed(4); handX = +v.x.toFixed(4) }
+          if (hd) { hd.getWorldPosition(v); headY = +v.y.toFixed(4) }
+        }
+      } catch { }
+      window.__samples.push({
+        t: Math.round(clk.t),
+        phase: window.__phase,
+        rootY: +root.position.y.toFixed(5),
+        minY: +b.min.y.toFixed(5),
+        maxY: +b.max.y.toFixed(5),
+        sit: +(st.state.sitAmt || 0).toFixed(3),
+        rig: !!st.state.rig,
+        settle: st.state.sitSettleAt ? 1 : 0,
+        handX, handY, headY
+      })
+    } catch (e) { window.__err = String(e && e.message) }
+  }
+
+  try {
+    const st = window.AuraVrm.create({
+      canvas: cv,
+      libs: window.AuraLibs,
+      url: model,
+      fps: 60,
+      now: () => clk.t,
+      setTimer: (fn) => setInterval(() => { clk.t += 16; fn(); sample(st) }, 8),
+      clearTimer: (t) => clearInterval(t)
+    })
+    st.ready.then(() => {
+      window.__phase = 'stand'
+      setTimeout(() => {
+        window.__phase = 'sit'
+        sitAt = clk.t
+        st.setPose('sit', 'stool')
+        setTimeout(() => { window.__phase = 'settled' }, 1200)
+        setTimeout(() => { window.__phase = 'done' }, 3000)
+      }, 1500)
+    }).catch((e) => { window.__err = String((e && e.message) || e) })
+  } catch (e) { window.__err = String((e && e.message) || e) }
+</script>
+</body>
+</html>

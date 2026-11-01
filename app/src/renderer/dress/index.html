@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' aura: data:; img-src 'self' aura: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>形象与装扮</title>
+  <link rel="stylesheet" href="../shared/brand.css">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="titlebar">
+    <div class="tb-left">
+      <span class="tb-title">形象与装扮</span>
+      <span class="tb-sub" id="packName">—</span>
+    </div>
+    <div class="tb-btns">
+      <button id="btnMin" title="最小化">—</button>
+      <button id="btnClose" title="关闭">✕</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="preview">
+      <div class="stage-wrap" id="dropZone">
+        <canvas id="preview"></canvas>
+        <div class="stage-empty" id="stageEmpty">
+          <div class="se-ico">🧩</div>
+          <div class="se-title">还没有形象包</div>
+          <div class="se-sub">把 <b>figure.zip</b> 拖到这里，或点右侧「导入 .zip」<br />形象包里需要一个 <code>figure.json</code>（api: 2）</div>
+        </div>
+        <div class="drop-hint" id="dropHint" hidden>松手导入</div>
+      </div>
+
+      <div class="preview-bar">
+        <div class="sample">
+          <canvas id="sample"></canvas>
+          <div class="sample-tip">伙伴尺寸</div>
+        </div>
+        <div class="pv-info">
+          <div class="pv-line" id="pvMeta">—</div>
+          <div class="pv-line dim" id="pvDress">—</div>
+        </div>
+        <div class="pv-actions">
+          <button id="btnApply" class="primary">应用到伙伴</button>
+          <button id="btnRandom">随机搭配</button>
+          <button id="btnReset">还原</button>
+          <button id="btnClear">退出形象包</button>
+        </div>
+      </div>
+      <div class="status" id="status"></div>
+    </section>
+
+    <aside class="panel">
+      <div class="card">
+        <div class="card-h"><span>形象包</span><span class="count" id="packCount"></span></div>
+        <div class="pack-list" id="packList"></div>
+        <div class="row">
+          <button id="btnImportZip">导入 .zip</button>
+          <button id="btnImportDir">导入文件夹</button>
+        </div>
+        <div class="row">
+          <button id="btnDelPack" class="danger">删除选中的形象包</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><span>装扮</span><span class="count" id="axisCount"></span></div>
+        <div class="axes" id="axes"><div class="empty-tip">选一个形象包</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><span>配色</span><span class="badge" id="palBadge" hidden>自定义</span></div>
+        <div class="row">
+          <select id="paletteSel"></select>
+          <button id="btnCopyPal">复制为自定义</button>
+        </div>
+        <div class="swatches" id="swatches"></div>
+        <div class="row">
+          <button id="btnPalReset">重置配色</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><span>方案</span></div>
+        <div class="presets" id="presets"><div class="empty-tip">这个包没有内置方案</div></div>
+        <div class="row">
+          <input id="presetName" maxlength="12" placeholder="新方案名字" />
+          <button id="btnSavePreset">保存方案</button>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="../shared/figure-render.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' aura: data: blob:; connect-src 'self' aura: data: blob: https:; img-src 'self' aura: data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' aura: blob: https:;" />
+  <style>html,body{margin:0;background:#2b3a4a}canvas{display:block;width:560px;height:760px}</style>
+</head>
+<body>
+  <canvas id="c" width="560" height="760"></canvas>
+  <script src="../../src/renderer/companion/libs.js"></script>
+  <script src="../../src/renderer/shared/vrm-stage.js"></script>
+  <script src="csp-vrm.js"></script>
+</body>
+</html>

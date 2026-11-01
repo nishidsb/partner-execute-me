@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <title>Partner.execute(me);</title>
+  <link rel="stylesheet" href="../shared/brand.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="titlebar">
+    <div class="brand"><span class="dot"></span>Partner.execute(me);</div>
+    <div class="hdr-actions">
+      <button id="btnCua" title="电脑操作（看屏幕/点按钮）">电脑</button>
+      <button id="btnAct" title="动作测试（手动点播动作词）">动作</button>
+      <button id="btnMemory" title="长期记忆">记忆</button>
+      <button id="btnModel" title="模型配置">模型</button>
+      <button id="btnClose" title="关闭">×</button>
+    </div>
+  </header>
+
+  <div id="rolebar">
+    <label>角色
+      <select id="roleSel"></select>
+    </label>
+    <span id="roleDesc"></span>
+    <button id="btnNewRole" title="新建角色">＋</button>
+  </div>
+
+  <!-- 控制台顶栏（0.19.0）：一眼看到状态、用量、缓存、上下文，不用翻设置 -->
+  <div id="consoleBar">
+    <span id="cbState" class="cb on">就绪</span>
+    <span id="cbVendor" class="cb">—</span>
+    <span id="cbToday" class="cb" title="今日调用次数 / 输入 / 输出 tokens">今日 —</span>
+    <span id="cbTotal" class="cb" title="历史累计输入 tokens">累计 —</span>
+    <span id="cbCache" class="cb" title="提示词缓存命中比例（厂商不给就显示 —）">缓存 —</span>
+    <span id="cbCtx" class="cb" title="当前上下文占用量">上下文 —</span>
+  </div>
+
+  <main id="chat"></main>
+
+  <div id="toolchip" hidden></div>
+
+  <footer id="inputbar">
+    <div id="imgStrip" hidden></div>
+    <div class="input-row">
+      <button id="btnImg" title="发图片（最多 8 张，需支持视觉的模型）" hidden>🖼</button>
+      <textarea id="input" rows="1" placeholder="和当前角色对话…（Shift+Enter 换行）"></textarea>
+      <button id="btnSend" disabled>发送</button>
+    </div>
+    <input id="imgInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+  </footer>
+
+  <!-- 动作测试面板（0.45.37）：手动点播动作词验证演出；平时动作仍由她自己决定 -->
+  <aside id="actPanel" hidden>
+    <div class="panel-head">
+      <b>动作测试</b>
+      <button id="actClose">×</button>
+    </div>
+    <p class="act-lead">点一个词，角色当场演一遍（坐下/起来是持续姿态，其余是官方动画池）。平时的动作仍由她自己决定，这里只做手动验证。</p>
+    <div id="actGrid"></div>
+    <label>任意词 / 官方片段编号<input id="actInput" placeholder="如：比心、gust_00110"></label>
+    <div class="model-actions"><button id="actPlay">播放</button></div>
+    <p id="actMsg"></p>
+  </aside>
+
+  <!-- 记忆面板 -->
+  <aside id="memPanel" hidden>
+    <div class="panel-head">
+      <b>长期记忆 · <span id="memRole"></span></b>
+      <button id="memClose">×</button>
+    </div>
+    <div class="mem-add">
+      <input id="memInput" placeholder="添加一条记忆，如：我喜欢深夜写代码">
+      <button id="memAddBtn">添加</button>
+    </div>
+    <ul id="memList"></ul>
+  </aside>
+
+  <!-- 模型配置面板 -->
+  <aside id="modelPanel" hidden>
+    <div class="panel-head">
+      <b>模型接入（OpenAI 兼容）</b>
+      <button id="modelClose">×</button>
+    </div>
+    <label>API 地址<input id="mBase"></label>
+    <label>模型名称<input id="mModel"></label>
+    <label>API Key<input id="mKey" type="password"></label>
+    <label>温度<input id="mTemp" type="number" min="0" max="2" step="0.1"></label>
+    <div class="model-actions">
+      <button id="mSave">保存</button>
+      <button id="mImport">从旧版伴侣导入凭据</button>
+    </div>
+    <p id="modelMsg"></p>
+  </aside>
+
+  <!-- 新建角色面板 -->
+  <aside id="rolePanel" hidden>
+    <div class="panel-head">
+      <b>新建角色</b>
+      <button id="roleClose">×</button>
+    </div>
+    <label>角色 ID（英文，唯一）<input id="rId" placeholder="e.g. hilbert"></label>
+    <label>显示名称<input id="rName"></label>
+    <label>人格设定<textarea id="rPersona" rows="5" placeholder="性格、说话风格、背景设定…（通用助手可留空）"></textarea></label>
+    <label>回复语言守卫
+      <select id="rLang">
+        <option value="">不启用</option>
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+      </select>
+    </label>
+    <div class="model-actions"><button id="rSave">创建</button></div>
+    <p id="roleMsg"></p>
+  </aside>
+
+  <!-- 电脑操作（CUA）风险告知与开关 -->
+  <aside id="cuaPanel" class="wide" hidden>
+    <div class="panel-head">
+      <b>电脑操作</b>
+      <button id="cuaClose">×</button>
+    </div>
+    <p class="cua-lead">开启后，她可以截屏看你的屏幕，并按你的要求点击、滚动、打字。<b>默认关闭。</b></p>
+    <p class="cua-note">最简单的用法：直接说「在微信里给某某发一句……」。这条走固定流程（搜人 → 给你看截图 → 你点发送），<b>不需要模型会看图</b>。</p>
+    <div id="cuaRisks" class="cua-risks"></div>
+    <label class="cua-check">
+      <input type="checkbox" id="cuaEnable">
+      <span>我已读完并理解以上三条，允许她操作这台电脑</span>
+    </label>
+    <label>确认频率
+      <select id="cuaPerm">
+        <option value="ask-once">问一次，30 分钟内不再问（推荐）</option>
+        <option value="ask-before-acting">每次动作前都问我</option>
+        <option value="ask-each-turn">每一步都问我</option>
+        <option value="never-ask">从不询问（完全放权）</option>
+      </select>
+    </label>
+    <div class="model-actions">
+      <button id="cuaSave">保存</button>
+      <button id="cuaTest">测试引擎</button>
+    </div>
+    <p id="cuaMsg"></p>
+    <p class="cua-note" id="cuaVision"></p>
+    <p class="cua-note">需要能看图的模型（gpt-4o / qwen-vl / glm-4v / gemini 之类）。读不了图的模型截图白截，只能做「开程序 / 回微信」这类固定流程。</p>
+    <p class="cua-note">你一动鼠标键盘，她会自动让位（最多等 15 秒），不会跟你抢。</p>
+  </aside>
+
+  <script src="../shared/typewriter.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
