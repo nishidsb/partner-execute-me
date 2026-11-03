@@ -168,7 +168,14 @@ function migrate (cfg, fromVersion) {
 function load () {
   if (cache) return cache
   let raw = null
-  try { raw = JSON.parse(fs.readFileSync(file(), 'utf8')) } catch { /* 首次启动 */ }
+  try {
+    // 0.46.2 BOM 容错：外部工具改写本文件常带 UTF-8 BOM（如 PowerShell 5.1
+    // Set-Content -Encoding UTF8），带 BOM 时 JSON.parse 会整体失败，
+    // 这里曾静默回落 defaults()，随后任何一次保存都会把默认值写回盘上
+    // （真机 0.46.1 事故：用户全部 companion 设置被清空）。剥掉 BOM 再解析。
+    const text = fs.readFileSync(file(), 'utf8')
+    raw = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+  } catch { /* 首次启动 */ }
   cache = raw ? hydrate(raw) : defaults()
   if (raw) {
     const before = cache.global.alwaysOnTop

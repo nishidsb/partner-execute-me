@@ -41,7 +41,8 @@ test('入账出口不广播 assistant:done（防双朗读/双气泡）', () => {
 
 test('QQ 主动找（reach）的 qqNote 调用点保持兼容', () => {
   const src = read('src/main/companion/index.js')
-  assert.ok(/qqNote\(\{ self: '（我用 QQ 发消息找他）'/.test(src), 'reach 自述入账照旧')
+  // 0.45.97 起自述只在 away/sleep 场景写入（条件式），不再无条件带前缀
+  assert.ok(/self: \(tag === 'away' \|\| tag === 'sleep'\) \? '（我用 QQ 发消息找他）'/.test(src), 'reach 自述入账照旧')
   const im = read('src/main/im/index.js')
   assert.ok(/qqNote\(\{ user: String\(userText \|\| ''\), assistant: String\(reply \|\| ''\)/.test(im), 'QQ 私聊回写照旧')
 })

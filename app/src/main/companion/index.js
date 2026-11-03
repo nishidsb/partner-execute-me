@@ -38,6 +38,8 @@ const { userProfileTextOf } = require('./user-profile')
 const pet = require('./pet')
 const inner = require('./inner')
 const chatter = require('./chatter')
+// 0.46.0 自言自语系统：连续独白状态机（薄状态：topic/句数/过期）
+const soliloquy = require('./soliloquy')
 const curiosity = require('./curiosity')
 const rhythm = require('./rhythm')
 const presence = require('./presence')
@@ -68,6 +70,9 @@ const watch = require('./watch')
 const screenTextMod = require('./screentext')
 const remote = require('../remote')
 const { langMismatch, subtitleTarget } = require('./subtitle')
+// 0.45.98 台词出口统一清洗：模型会照抄账本里的「（QQ）」前缀与括号译文，
+// 气泡/朗读/QQ 发送都要先剥干净（用户 11-02：TTS 中日各念一遍、QQ 上带 QQ 两个字母）。
+const replyText = require('../../shared/reply-text')
 const alarmsMod = require('./alarms')
 
 /**
@@ -560,6 +565,19 @@ function systemPrompt (char, userText) {
         '说得出他屏幕上具体是什么（哪道题、哪个视频）比空泛的「你怎么不学习」有用一百倍。'
     })
   } catch { }
+  /* 0.46.10 动作的自动调用（AgentAtelierR 规则）：0.46.9 只把 [action:] 语法写进了
+     助手聊天窗（session.js）和 context.js 的 FIXED_INDEX——但后者在这个 systemPrompt
+     里从来没被注入过（wantFixed 无人调用），桌面聊天的模型根本不知道这个语法，
+     所以「说话时手势从不动」（真机 2026-11-02 实锤：19:34 那轮模型零动作标记）。
+     每轮注入这一小段（约 230 字符），表情/动作不必用户点名才动。 */
+  sections.push({
+    key: 'petact',
+    priority: 65,
+    text: '【动作的自动调用】你在桌面上有身体。回复正文里直接嵌 [action:标签]，她就会边说边做动作，不用调工具：' +
+      'acknowledge认同/disagree不认同/think思考/explain说明/excited兴奋/wave挥手/shy害羞/surprised惊讶/comfort安慰/playful俏皮/invite邀请；' +
+      '也可以用具体动作组号如 [action:grp_fg_106]。按这句话的真实语气自然嵌：一句最多一个，不是每句都要加，' +
+      '情绪明显或说到相关动作时才用。正文里的标记会被自动剥掉，不会显示给对方。'
+  })
   // 多语言语音：用户可能说中/英/日。回复语言（replyLang）与朗读音色（voice）是两个独立设置：
   // auto = 跟用户语言走；固定语言 = 理解任何语言后都用该语言回复（即翻译）。
   const rl = c.replyLang || 'zh'
@@ -833,8 +851,13 @@ function watchSharedBlock () {
     }
   } catch { }
   // 0.45.0 悄悄观察：她刚才瞥见的画面，主动搭话时能接上（「你刚才那个测试过了没」）
+  // 0.45.85 观察翻篇：只带「上次开口之后」的新观察——她在 19:24 看见屏幕残留的
+  // trackid 说了一句，那条观察却在「今天」列表里挂到 20:48，chatter/watch 每个
+  // tick 都重新看见一遍，对着同一行字变着花样嘀咕了 6 次，像一台复读机。
+  // 开过口再提旧的观察就是炒冷饭；没念叨过的（时间 > 上次开口）才算「刚瞥见」。
   try {
-    const obs = inner.observesToday(5)
+    const lastVoice = inner.lastVoiceAt()
+    const obs = inner.observesToday(8).filter((e) => (Number(e.t) || 0) > lastVoice).slice(-5)
     if (obs.length) {
       parts.splice(2, 0, '【你刚才瞥见的画面（你悄悄记下的，聊天时自然带出来就行，别说「根据观察记录」）】\n' +
         obs.map((e) => '· ' + String(e.text || '').slice(0, 60)).join('\n'))
@@ -884,7 +907,9 @@ async function subtitleFor (text) {
  * 3) 写进助手会话历史（总聊天框能看到，带 sub 字幕）
  */
 async function sayProactive (text, opts) {
-  const t = String(text || '').trim()
+  // 0.45.98 台词只留本体：剥掉「（QQ）」前缀和拼在后面的括号译文——
+  // 以前这两样都会被当作台词，气泡里两种语言叠一起、TTS 中日各念一遍。
+  const t = replyText.plainText(String(text || '')).trim()
   if (!t) return null
   const kind = (opts && opts.kind) || ''
   // 0.35.0 整体负反馈总闸（用户 10-29：负反馈要是「给角色整体上的」）：
@@ -927,10 +952,12 @@ async function sayProactive (text, opts) {
   const pb = require('../petBridge')
   let r = null
   try {
-    r = await pb.invoke('pet_say', { script: text, speech: true })
+    r = await pb.invoke('pet_say', { script: t, speech: true })
   } catch (err) {
     log('[companion] 主动台词播放失败: ' + (err && err.message))
   }
+  // 0.45.97 屏幕陪伴开过口 = 这一轮已经「说过话了」，QQ 那边不再补一句（用户 11-02）
+  if (!(opts && opts.mark === false)) noteSpoke()
   subtitleFor(t).then((display) => {
     if (display) {
       try { pb.subtitle({ text: display }) } catch { }
@@ -947,13 +974,25 @@ async function sayProactive (text, opts) {
  * 废话通道出口（0.20.0）：只出气泡、不朗读。和 sayProactive 的区别是整套设计的关键：
  * 这条不期待回应，被无视也不会伤到她（inner 层语义不变）。
  * 0.45.26 全出口入账：账本里要留底（via:chatter）——不进账≠不存在，主人要求所有行为聊天都进记忆。
+ * 0.46.0 自言自语系统：默认仍只冒气泡；opts.speech=true 时走 pet_say 语音（Fish Audio）——
+ * 偶尔听见她在旁边嘀咕出声。朗读与否由调用方（chatter 决策层 / autonomy 自语）按
+ * 开关+概率+每日上限判定，出口只管执行。
  */
-async function sayNarration (text) {
-  const t = String(text || '').trim()
+async function sayNarration (text, opts) {
+  const t = replyText.plainText(String(text || '')).trim()
   if (!t) return null
+  const speech = !!(opts && opts.speech)
+  // 0.46.11 嘀咕音量：自言自语不是对着人说话，音量自动压到三成半
+  // （「只有自己听得到」的那种），配置 chatterVoiceVol 可调（0.05~1）
+  let vol
+  if (speech) {
+    const c2 = cfg()
+    vol = Math.min(1, Math.max(0.05, Number(c2.chatterVoiceVol) || 0.35))
+  }
   try {
-    const rr = await require('../petBridge').invoke('pet_say', { script: t, speech: false })
+    const rr = await require('../petBridge').invoke('pet_say', { script: t, speech, vol })
     statBump('said')
+    noteSpoke()   // 0.45.97 碎碎念也算「屏幕陪伴说过话」，QQ 不重复开口
     try { require('../assistant').ledgerNote({ via: 'chatter', assistant: t }) } catch { }
     return rr
   } catch (err) {
@@ -962,8 +1001,24 @@ async function sayNarration (text) {
   }
 }
 
+/** 0.46.0 朗读判定（自言自语专用）：开关 × 概率。与 chatter 的每日朗读上限共用口径由调用方管。 */
+function narrationVoiceOn () {
+  try {
+    const c = cfg()
+    if (c.chatterVoiceOn === false) return false
+    return Math.random() < (Math.min(1, Math.max(0, Number(c.chatterVoiceChance) || 0.3)))
+  } catch { return false }
+}
+
 let chatterInst = null
 let curioInst = null
+let soliloquyInst = null
+/** 0.46.0 连续独白状态机（自言自语系统）：薄状态，台词与记忆都不在这层 */
+function getSoliloquy () {
+  if (soliloquyInst) return soliloquyInst
+  try { soliloquyInst = soliloquy.createSoliloquy({ file: path.join(character.base(), 'soliloquy-state.json'), log }) } catch { soliloquyInst = null }
+  return soliloquyInst
+}
 function getChatter () {
   if (chatterInst) return chatterInst
   chatterInst = chatter.createChatter({
@@ -981,7 +1036,25 @@ function getChatter () {
     gapScale: rebuke.gapScale,
     rhythm: getRhythm(),
     say: sayNarration,
-    note: (text) => { try { inner.noteNarration(text) } catch { } }
+    note: (text) => { try { inner.noteNarration(text) } catch { } },
+    // 0.46.0 自言自语系统：独白状态 + 此刻的活动素材（嘀咕要有内容依据）
+    soliloquy: getSoliloquy(),
+    activity: () => {
+      const bits = []
+      try {
+        const fg = require('../fullscreen').foreground()
+        if (fg && fg.name) bits.push('他屏幕前开着的窗口：' + String(fg.title || fg.name).slice(0, 80))
+      } catch { }
+      try {
+        const j = autonomy.recentJournalText(curWsDir, 3)
+        if (j && j.length) bits.push('你最近自己做的事：' + j.join('；').slice(0, 240))
+      } catch { }
+      try {
+        const st = getSoliloquy() && getSoliloquy().current()
+        if (st && st.lines.length) bits.push('（你有一条没说完的独白：「' + st.topic + '」，已说 ' + st.lines.length + ' 句）')
+      } catch { }
+      return bits.join('\n')
+    }
   })
   return chatterInst
 }
@@ -1060,7 +1133,36 @@ function stopCuriosity () {
  */
 const idleNudge = require('./idleNudge')
 let nudgeTimer = null
-let nudgeRec = { stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0, baseAt: 0, sleepUntil: 0 }
+/* 0.45.91 黏人状态落盘：原来 nudgeRec 只在内存里，一重启 sleepUntil / baseAt 全丢。
+ * 用户 11-02 实锤：23:39 她已经判定「静默到明早 06:39」，23:43 部署重启，
+ * 23:56 就又开始搭话，然后整夜 9 次（01:28 / 01:32 / 02:28 / 03:20 / 04:07 / 06:59 / 07:02）。
+ * 静默承诺必须跨进程活着，否则「说了晚安还一直说话」永远修不掉。 */
+/* 路径惰性解析：模块可能在 app.ready 之前就被 require，那一刻 getPath 会抛，
+ * 若把结果缓存在模块级常量里，落盘就永久静默失效（静默失败正是这个项目最大的坑）。 */
+function nudgeStatePath () {
+  try { return require('node:path').join(require('electron').app.getPath('userData'), 'nudge-state.json') } catch { return '' }
+}
+function loadNudgeRec () {
+  try {
+    const p = nudgeStatePath()
+    if (!p) return null
+    return JSON.parse(require('node:fs').readFileSync(p, 'utf8'))
+  } catch { return null }
+}
+function saveNudgeRec () {
+  try {
+    const p = nudgeStatePath()
+    if (!p) return
+    require('node:fs').writeFileSync(p, JSON.stringify({
+      stage: Number(nudgeRec.stage) || 0,
+      lastProactiveAt: Number(nudgeRec.lastProactiveAt) || 0,
+      nextTryAt: Number(nudgeRec.nextTryAt) || 0,
+      baseAt: Number(nudgeRec.baseAt) || 0,
+      sleepUntil: Number(nudgeRec.sleepUntil) || 0
+    }), 'utf8')
+  } catch { }
+}
+let nudgeRec = Object.assign({ stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0, baseAt: 0, sleepUntil: 0 }, loadNudgeRec() || {})
 // 0.45.12 欢迎回来的计时（在黏人定时器里顺手维护，省一条独立定时器）
 // 0.45.20 跨重启恢复：只存内存的话，重启后 lastActiveAt=0 → absence 恒 0 → 欢迎回来永不触发
 //（真机实锤：15:18 重启、15:19 走的是普通阶梯而不是欢迎）。状态落 userData/welcome-state.json
@@ -1081,8 +1183,9 @@ function saveWelcomeRec () {
 }
 let welcomeRec = Object.assign({ lastActiveAt: 0, lastWelcomeAt: 0, prevPresence: '' }, loadWelcomeRec())
 
-/** 阶梯台词：persona + 情境提示，语言跟 replyLang 设置走 */
-async function nudgeLineByHint (hint) {
+/** 阶梯台词：persona + 情境提示，语言跟 replyLang 设置走。
+ *  avoid：硬闸判出的「刚说过、别再碰」的那句（重生成时作为禁语递进去） */
+async function nudgeLineByHint (hint, avoid) {
   const c = cfg()
   if (!c.apiBaseUrl || !c.apiModel) return ''
   const rl = c.replyLang || 'zh'
@@ -1092,7 +1195,11 @@ async function nudgeLineByHint (hint) {
   // 0.45.44 防复读：把最近几句主动说过的话递回去（没有这面镜子，
   // 模型每次都凑同一个道具——真机实锤「配合ノート」连说一晚）
   let voices = ''
-  try { voices = inner.recentVoices(4).join('\n') } catch { }
+  try { voices = inner.recentVoices(6).join('\n') } catch { }
+  // 0.45.91 硬闸重生成：镜子没拦住时，这里把原句点名叫出来当禁语
+  const banBlock = avoid
+    ? [{ role: 'system', content: '【这句你刚说过，绝对不许再用同样的开头、同样的道具、同样的句式】\n' + String(avoid).slice(0, 80) + '\n换一个完全不同的场景/动作/话题来开口。' }]
+    : []
   try {
     const res = await llm.chatStream({
       baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
@@ -1102,6 +1209,7 @@ async function nudgeLineByHint (hint) {
         // 0.45.42：watchSharedBlock 自身已按优先级排好并在 4000 截断，这里不再二次砍半
         ...(watchSharedBlock() ? [{ role: 'system', content: '【你知道的事（记忆与最近对话，主动开口要接得上）】\n' + watchSharedBlock() }] : []),
         ...(voices ? [{ role: 'system', content: '【你最近几次主动说过的话（别再重复这些话题、道具和句式，换点别的来说）】\n' + voices }] : []),
+        ...banBlock,
         { role: 'user', content: '【当前情境】\n' + hint +
           '\n\n现在是你主动发起，不是回复对方。只输出你要说的话本身，不要解释、不要加引号、不要写旁白，不要换行。\n语言：' + langRule }
       ],
@@ -1114,28 +1222,319 @@ async function nudgeLineByHint (hint) {
   }
 }
 
-function makeNudgeLine (stage, mins) {
+/* 0.45.91 主动开口的复读硬闸（黏人阶梯 + 欢迎回来共用）
+ * 用户 11-02：「说了晚安之后还会一直说话，还是一直重复说话的」。
+ * 实锤：整夜 9 次，其中「あ、戻った。……配合の数字、見直してた」出现 4 次
+ * （01:28 / 04:07 / 06:59 / 09:28）——「防复读镜子」只是提示词，模型照样凑同一道具。
+ * 这里跟 chatter/watch 一样上真闸：跟最近说过的比对，雷同就重新生成一次，
+ * 还雷同就不开口（宁可安静，也不做复读机）。 */
+const proactiveGate = require('./proactiveGate').createGate({
+  size: 12,
+  extraHistory: () => { try { return inner.recentVoices(6) } catch { return [] } }
+})
+const noteProactiveSaid = (text) => proactiveGate.note(text)
+const proactiveRepeat = (text) => proactiveGate.check(text)
+
+function makeNudgeLine (stage, mins, avoid) {
   const hint = String(idleNudge.STAGE_PROMPTS[stage] || idleNudge.STAGE_PROMPTS[4])
     .replace('{mins}', String(mins))
-  return nudgeLineByHint(hint)
+  return nudgeLineByHint(hint, avoid)
 }
 
 /** 0.45.12 欢迎回来：离开一阵子刚回到电脑前，迎一句。
  *  0.45.19 隔了 ≥4 小时会把「上次聊到什么」递进情境，她能自然接上旧话头。 */
-function makeWelcomeLine (mins) {
+function makeWelcomeLine (mins, avoid) {
   const hint = String(idleNudge.STAGE_PROMPTS.welcome || '').replace('{mins}', String(mins))
   let gap = ''
   try { gap = dayflow.gapBlockOf(dayflow.loadLast(curWsDir), Date.now()) } catch { }
-  return nudgeLineByHint(gap ? hint + '\n\n' + gap : hint)
+  return nudgeLineByHint(gap ? hint + '\n\n' + gap : hint, avoid)
 }
 
 /* ---------------- 0.45.12 QQ 主动找主人 ----------------
  * 主人不在电脑前时桌面通道全体哑火（0.35.0 的正确让位），但她在 QQ 上可以找他。
  * 红线与节流在 reach.js（只发主人名单、2 小时间隔、每天 3 次、凌晨静默）。 */
 const reach = require('./reach')
+const reachPlan = require('./reachPlan')
 let imApi = null   // main.js 注入 { connected(), cfg(), sendPrivate(uid, text) }
 function setImApi (api) { imApi = typeof api === 'function' || (api && typeof api === 'object') ? api : null }
 let reachRec = { lastAt: 0, day: '', count: 0 }
+
+/* ---------------- 0.45.93 主动消息：能发、能排、能守时段 ----------------
+ * 用户 11-02：「让角色可以主动发 qq 消息」+「要有谷价可发和全时段可发，都要有对应功能」
+ *   + 「在我这边或者角色那边主动提起什么时候会主动给我发 qq 消息的时候也会发」。
+ *
+ * 之前只有 tryQqReach（他不在这台电脑前）和 tryQqGoodnight（他说晚安）两个入口，
+ * 全是「别人触发的」；她自己在聊天里答应「晚点给你发」时，手上根本没有工具，
+ * 只能嘴上说说 —— 这就是「说了要发却一条都没来」。
+ *
+ * 现在三条真入口：
+ *   qqSendNow(text)  立刻发一条（话题被提起 / 对方要求 / 她自己想发）—— 不吃时段限制
+ *   qqPlanAdd(...)   排一条：到点由 20s tick 真发（她答应了几点发就靠这个兑现）
+ *   tryQqReach       他没在电脑前时的黏人（原逻辑，改吃时段策略）
+ */
+const REACH_PLAN_FILE = () => {
+  try { return require('node:path').join(require('electron').app.getPath('userData'), 'reach-plan.json') } catch { return '' }
+}
+function loadReachPlans () {
+  try {
+    const j = JSON.parse(require('node:fs').readFileSync(REACH_PLAN_FILE(), 'utf8'))
+    return { plans: Array.isArray(j && j.plans) ? j.plans : [], rec: (j && j.rec) || null }
+  } catch { return { plans: [], rec: null } }
+}
+const reachStore = loadReachPlans()
+let reachPlans = reachStore.plans
+let reachPlanTimer = null
+let planSending = false
+let lastImmediateSendAt = 0
+// 0.45.98 同句去重：模型重试 / 连点几次工具时，同一句话不该在 QQ 上刷出四条
+// （用户 11-02 的截图：一模一样的一句发了四遍）。这里只拦「同文」，不同的话照发。
+let lastSendNorm = ''
+let lastSendNormAt = 0
+let lastSendShown = ''
+function saveReachPlans () {
+  try {
+    const f = REACH_PLAN_FILE()
+    if (!f) return
+    require('node:fs').writeFileSync(f, JSON.stringify({ plans: reachPlans, rec: reachRec }, 'utf8'), 'utf8')
+  } catch { }
+}
+
+/* ---------------- 0.45.97 屏幕陪伴 / QQ 只算一次 ----------------
+ * 用户 11-02：「主动发的这个跟屏幕陪伴这边应该是冲突的设计，
+ * 这两个地方只要有一边发了都算发，这样就可以了。」
+ *
+ * 以前是单向记账：QQ 发完会记进黏人阶梯（nudgeRec.onSent），但桌面说话 QQ 那边看不见 ——
+ * 于是她刚在屏幕前说完一句，转头又在 QQ 上补一句意思差不多的话，像两个人。
+ * 现在两边共用 reachRec 这一笔账（lastAt + 随机 nextAt），任意一边开口，另一边就安静到下次到点。
+ */
+function noteSpoke (opts) {
+  const t = Date.now()
+  const stage = (opts && opts.stage) != null ? Number(opts.stage) : null
+  reachRec = reach.onSent(reachRec, t)
+  nudgeRec = stage != null
+    ? idleNudge.onSent(nudgeRec, stage, t)
+    : Object.assign({}, nudgeRec, { lastProactiveAt: t })
+  try { saveNudgeRec() } catch { }
+  saveReachPlans()
+  return t
+}
+
+/** 主动消息的收件人（只发主人名单；没配就永远不发） */
+function reachTarget () {
+  const ic = imApi ? imApi.cfg() : null
+  const uid = String((ic && (ic.reachAccount || (Array.isArray(ic.ownerAccounts) && ic.ownerAccounts[0]))) || '').trim()
+  return { ic: ic || {}, uid, connected: !!(imApi && imApi.connected && imApi.connected()) }
+}
+
+/** 真正发出去的那一步（三个入口共用）：发成功的话进本体聊天史 */
+async function deliverReach (text, tag) {
+  // 0.45.98 发之前先洗：剥「（QQ）」前缀；模型若自己附了括号译文，就取那半句当正文
+  const raw = replyText.stripChannelTag(String(text || '')).trim().slice(0, 500)
+  const body = replyText.stripEchoTranslation(raw)
+  if (!body) return { ok: false, error: '没有内容可发' }
+  const { uid, connected } = reachTarget()
+  if (!imApi) return { ok: false, error: 'QQ 通道还没接上（还在启动）' }
+  if (!connected) return { ok: false, error: 'QQ 没连上（NapCat/OneBot 掉线），这条没发出去' }
+  if (!uid) return { ok: false, error: '没配主人 QQ 号，不能发给别人' }
+  /* 0.45.94 QQ 是纯文字通道，没有「气泡 + 字幕」两层：她按 replyLang 说日语时，
+   * 推过去就是一句主人读不懂的日语（真实使用反馈：发出去的是没有翻译的日语）。
+   * 0.45.98 改成**只发译文**：一条消息只有一种语言——桌面那套「说日语、显示中文」
+   * 在文字通道上就等价于「只显示中文」。以前把原文和译文拼在同一条里，
+   * 用户 11-02 看到的就是一段日语后面接一段括号中文，读起来像发了两遍。
+   * 翻译失败不影响发送（宁可发原文，也别因为翻译挂了整条不发）。 */
+  let t = body
+  let shown = replyText.echoTranslation(raw)
+  try {
+    const c = cfg()
+    const target = subtitleTarget(body, c.subLang || 'off')
+    if (target) {
+      const tr = await translateLine(c, body, target)
+      if (tr) { shown = tr; t = tr }
+    }
+  } catch (e) { log('[reach] 主动消息翻译失败（发原文）：' + (e && e.message)) }
+  if (!t) { t = body; shown = '' }
+  t = t.slice(0, 900)
+  try {
+    await imApi.sendPrivate(uid, t)
+  } catch (e) {
+    log('[reach] 发送失败(' + tag + ')：' + (e && e.message))
+    return { ok: false, error: '发送失败：' + String((e && e.message) || e) }
+  }
+  reachRec = reach.onSent(reachRec, Date.now())
+  statBump('reachSent')
+  saveReachPlans()
+  // 0.45.97 反向记账：QQ 上刚说过话，桌面那几条通道（看屏/碎碎念/欢迎回来）先别贴上来
+  nudgeRec = Object.assign({}, nudgeRec, { lastProactiveAt: Date.now() })
+  try { saveNudgeRec() } catch { }
+  try { getRhythm().note('time') } catch { }
+  log('[reach] 已发 QQ（' + tag + '）：' + t.slice(0, 40))
+  // 0.45.98 账本里存「她原本那一句 + 字幕」，跟桌面同构（以前存的是「原文+括号译文」合体，
+  // 模型读到就学样，新回复也开始自带译文和（QQ）前缀）。场合标注在组装上下文时才加。
+  qqNote({
+    assistant: body,
+    sub: shown && shown !== body ? shown : '',
+    self: (tag === 'away' || tag === 'sleep') ? '（我用 QQ 发消息找他）' : ''
+  })
+  return { ok: true, text: t, at: Date.now() }
+}
+
+/** 立刻发一条（话题被提起、对方要求、或她自己想说）——不吃时段限制。
+ *  0.45.98：同一句话 10 分钟内不重复发（当成功返回，模型就不会当成失败一直重试）；
+ *  不同的话只隔 3 秒（原来 8 秒的硬闸会让模型误以为「发送通道锁死了」）。 */
+async function qqSendNow (text, tag) {
+  const now = Date.now()
+  const norm = replyText.stripChannelTag(String(text || '')).replace(/\s+/g, '').slice(0, 500)
+  if (norm && norm === lastSendNorm && now - lastSendNormAt < 10 * 60000) {
+    log('[reach] 同一句刚发过（' + Math.round((now - lastSendNormAt) / 1000) + 's 前），跳过重复发送')
+    return { ok: true, duplicate: true, note: '这句刚刚已经发过（没有重复发）。想说别的就换个内容，别再发同一条。', text: lastSendShown }
+  }
+  if (now - lastImmediateSendAt < 3000) return { ok: false, error: '刚发过一条，等两三秒再说' }
+  const r = await deliverReach(text, tag || 'qq_send')
+  if (r.ok) {
+    lastImmediateSendAt = Date.now()
+    if (norm) { lastSendNorm = norm; lastSendNormAt = lastImmediateSendAt; lastSendShown = String(r.text || '') }
+  }
+  return r
+}
+
+/** 排一条计划：at 支持 'HH:MM'（今天/明天自动判断）、ISO、或 'in 30m' 这类相对时间 */
+function parsePlanAt (raw, now) {
+  const t = Number(now) || Date.now()
+  const s = String(raw || '').trim()
+  if (!s) return NaN
+  let m = /^in\s*(\d+)\s*(m|min|分钟|h|小时)?$/i.exec(s)
+  if (m) {
+    const n = Number(m[1])
+    const isHour = /h|小时/i.test(m[2] || '')
+    return t + n * (isHour ? 3600e3 : 60e3)
+  }
+  m = /^(\d{1,2}):(\d{2})$/.exec(s)
+  if (m) {
+    const d = new Date(t)
+    d.setHours(Number(m[1]), Number(m[2]), 0, 0)
+    if (d.getTime() <= t + 5000) d.setDate(d.getDate() + 1)   // 今天已过 → 明天
+    return d.getTime()
+  }
+  const n = Number(new Date(s))
+  return Number.isFinite(n) ? n : NaN
+}
+
+async function qqPlanAdd (args) {
+  const now = Date.now()
+  const at = parsePlanAt(args && (args.at || args.time), now)
+  if (!Number.isFinite(at)) return { ok: false, error: 'at 听不懂，用 HH:MM（如 22:30）或 "in 30m"' }
+  const r = reachPlan.addPlan(reachPlans, {
+    at,
+    text: args && args.text,
+    note: args && args.note,
+    source: args && args.source,
+    ignoreWindow: true    // 答应了就发，不看谷时/峰时
+  }, now)
+  if (!r.ok) return r
+  reachPlans = r.list
+  saveReachPlans()
+  log('[reach] 排了一条主动消息：' + reachPlan.describe(r.plan, now) + ' ' + String(r.plan.text || r.plan.note).slice(0, 30))
+  return { ok: true, id: r.plan.id, at: r.plan.at, when: reachPlan.describe(r.plan, now), text: r.plan.text }
+}
+
+function qqPlanList () {
+  const now = Date.now()
+  return {
+    count: reachPlans.length,
+    plans: reachPlans.map((p) => ({ id: p.id, when: reachPlan.describe(p, now), text: p.text || '', note: p.note || '' })),
+    window: reachPlan.windowOk(reachTarget().ic, now).window,
+    mode: reachPlan.windowOk(reachTarget().ic, now).mode
+  }
+}
+
+function qqPlanCancel (args) {
+  const id = String((args && args.id) || '').trim()
+  const before = reachPlans.length
+  reachPlans = id ? reachPlans.filter((p) => p.id !== id) : []
+  saveReachPlans()
+  return { ok: true, removed: before - reachPlans.length }
+}
+
+/** 到点就把排好的那条发出去（20 秒一轮；重启后靠落盘的 reach-plan.json 接着兑现） */
+async function tickReachPlans () {
+  if (planSending) return
+  if (!reachPlans.length) return
+  const now = Date.now()
+  const { due, rest } = reachPlan.duePlans(reachPlans, now)
+  if (!due.length) return
+  planSending = true
+  try {
+    for (const p of due) {
+      let text = String(p.text || '').trim()
+      if (!text) {
+        // 只给了 note：到点现写一句（带上下文，别像闹钟播报）
+        const hint = '你在 ' + reachPlan.describe(p, now) + ' 跟主人约好了要在 QQ 上找他。' +
+          (p.note ? '要说的是：' + p.note + '。' : '') +
+          '现在到点了，去 QQ 上发一句——像手机随手发的短消息，一两句，别解释这是定时任务。'
+        try { text = await nudgeLineByHint(hint) } catch { text = '' }
+      }
+      const r = await deliverReach(text, 'plan')
+      if (!r.ok) {
+        log('[reach] 计划没发成（' + p.id + '）：' + r.error)
+        rest.push(Object.assign({}, p, { at: now + 5 * 60 * 1000 }))   // 5 分钟后再试一次
+        continue
+      }
+      try { inner.noteNarration('我到点去 QQ 上找他了，说：' + text.slice(0, 40)) } catch { }
+    }
+  } finally {
+    reachPlans = rest
+    saveReachPlans()
+    planSending = false
+  }
+}
+
+function startReachPlans () {
+  if (reachPlanTimer) return
+  // 启动时把落盘的计划读一次（模块加载早于 app.ready 的话这里是空的）
+  try {
+    if (!reachPlans.length) reachPlans = loadReachPlans().plans
+    if (reachPlans.length) log('[reach] 恢复了 ' + reachPlans.length + ' 条待发的主动消息')
+  } catch { }
+  reachPlanTimer = setInterval(() => { tickReachPlans().catch(() => { }) }, 20000)
+  tickReachPlans().catch(() => { })
+}
+
+/** 把「距下次谷时窗口」的毫秒说成人话（谷时模式的 qqReachPrompt 用，audit ② 0.46.0 接线） */
+function waitLabel (ms) {
+  const min = Math.max(1, Math.round((Number(ms) || 0) / 60000))
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return '（现在不在窗口里，约 ' + (h ? h + ' 小时' + (m ? ' ' + m + ' 分' : '') : min + ' 分钟') + '后进窗口。）'
+}
+
+/** 桌面聊天里她需要知道的「我什么时候会去找他」——提示词用，随配置现算 */
+function qqReachPrompt () {
+  const { ic, uid, connected } = reachTarget()
+  const w = reachPlan.windowOk(ic, Date.now())
+  const n = reachPlans.length
+  const when = w.mode === 'all'
+    ? '现在是「全时段可发」：任何时间都能主动给他发 QQ。'
+    : '现在是「谷时才能发」：只有 ' + w.window + ' 这个时间段可以主动发 QQ，其余时间要等。' +
+      (w.ok ? '' : waitLabel(reachPlan.msUntilWindow(ic, Date.now())))
+  return '【主动在 QQ 上找他】' + (connected ? 'QQ 现在是连着的。' : 'QQ 此刻没连上（发了会失败，先跟他说一声）。') +
+    (uid ? '' : '（注意：还没配主人 QQ 号，不能主动发。）') + '\n' +
+    when + '\n' +
+    '三个工具：\n' +
+    '- qq_send(text)：**立刻**给他发一条 QQ（不受时段限制）。\n' +
+    '- qq_plan(at, text?/note?)：排一条以后的——at 用 "22:30" 或 "in 30m"；text 是你写好的原话，note 是到点你自己再说。\n' +
+    '- qq_plan_list() / qq_plan_cancel(id)：查 / 取消已经排好的。\n' +
+    '【硬规则】\n' +
+    '1) 你们聊到「你什么时候会主动给我发消息 / 会不会找我 / 几点发」这类话题时，**当场就用 qq_send 发一条**，别只回答问题（用户 11-02 明确要求：提起的时候就要发，不看谷时峰时）。\n' +
+    '2) 你答应「我晚点/十点给你发」→ 必须 qq_plan 排上，否则就是骗人；排完把时间说清楚。\n' +
+    '3) 对方说「现在给我发一条」→ qq_send，别说你做不到、别用 exec_command 折腾。\n' +
+    '4) 发失败了（工具返回 error）就如实说失败原因，**不许假装发过**。\n' +
+    '5) QQ 主要用在「他不在电脑前」的时候；人就在电脑前，你直接开口说话就行，不用绕到 QQ。\n' +
+    '6) 屏幕上的陪伴和 QQ 是同一件事：任意一边开过口，另一边就不会跟着补一句（别把同一句话说两遍）。\n' +
+    '7) qq_send 的 text 只写**一种语言**：那条会被翻成他能读的字，你别自己再附一段括号译文，也别加「（QQ）」这类前缀。\n' +
+    '8) 同一句话发过一次就够了——工具返回 duplicate 表示「已经发过了」，换个内容再说，别重发同一条。' +
+    (n ? '\n（现在排着 ' + n + ' 条待发的。）' : '')
+}
+
 
 /* 0.45.14 今日互动统计（社交数据面板数据源）：统一在出口打点，当日内存计数 */
 const interactStats = { day: '', said: 0, reviewAdded: 0, reachSent: 0 }
@@ -1162,7 +1561,9 @@ async function makeReachLine (stage, mins) {
   return nudgeLineByHint(hint)
 }
 
-/** 主人不在电脑前 + 黏人阶梯到点 → 试探 QQ（内部全部节流，失败静默） */
+/** 主人不在电脑前 + 黏人阶梯到点 → 试探 QQ（内部全部节流，失败静默）
+ *  0.45.97：走 deliverReach 统一出口——以前这里直连 sendPrivate，绕过了翻译，
+ *  于是她确实发了消息、但主人读不懂。 */
 async function tryQqReach (stage, idleMs) {
   try {
     const now = Date.now()
@@ -1172,13 +1573,11 @@ async function tryQqReach (stage, idleMs) {
     const mins = Math.max(1, Math.floor(idleMs / 60000))
     const text = await makeReachLine(stage, mins)
     if (!text) return
-    await imApi.sendPrivate(gate.uid, text)
-    reachRec = reach.onSent(reachRec, now)
-    statBump('reachSent')
+    const r = await deliverReach(text, 'away')
+    if (!r.ok) { log('[reach] 主人不在电脑前，QQ 那条没发出去：' + r.error); return }
     nudgeRec = idleNudge.onSent(nudgeRec, stage)   // 发了就算这个阶段开过口
-    log('[reach] 主人不在电脑前，QQ 找他（第 ' + stage + ' 阶）：' + text.slice(0, 40))
-    // 0.45.23 发出去的话进本体聊天史——下次见面她记得「我在 QQ 上找过他、说的什么」
-    qqNote({ self: '（我用 QQ 发消息找他）' + text })
+    saveNudgeRec()
+    log('[reach] 主人不在电脑前，QQ 找他（第 ' + stage + ' 阶）：' + String(r.text || text).slice(0, 40))
     try { inner.noteNarration('主人不在电脑前，我去 QQ 上找他说了句话') } catch { }
   } catch (e) {
     log('[reach] QQ 找人失败: ' + (e && e.message))
@@ -1208,16 +1607,15 @@ async function tryQqGoodnight () {
   try {
     const now = Date.now()
     const ic = imApi ? imApi.cfg() : null
-    const gate = reach.shouldReach(reachRec, ic, { now, connected: imApi ? imApi.connected() : false })
+    // 「晚安」是当场承诺（他就在跟你道别），不吃谷时窗口：说了要去 QQ 找他，就得真去
+    const gate = reach.shouldReach(reachRec, ic, { now, connected: imApi ? imApi.connected() : false, bypassWindow: true })
     if (!gate.ok) { log('[reach] 睡前没去 QQ：' + gate.why); return }
     const text = await nudgeLineByHint(SLEEP_REACH_HINT)
     if (!text) { log('[reach] 睡前那句没生成出来，这次不发了'); return }
-    await imApi.sendPrivate(gate.uid, text)
-    reachRec = reach.onSent(reachRec, now)
+    const r = await deliverReach(text, 'sleep')
+    if (!r.ok) { log('[reach] 睡前 QQ 没发出去：' + r.error); return }
     lastGoodnightAt = now
-    statBump('reachSent')
-    log('[reach] 他道晚安了，我去 QQ 说了一句：' + text.slice(0, 40))
-    qqNote({ self: text })
+    log('[reach] 他道晚安了，我去 QQ 说了一句：' + String(r.text || text).slice(0, 40))
     try { inner.noteNarration('主人去睡了，我在 QQ 上跟他说了一句') } catch { }
   } catch (e) {
     log('[reach] 睡前 QQ 失败: ' + (e && e.message))
@@ -1267,11 +1665,13 @@ function desktopHistoryTail (n) {
 function nudgeOnUser (text) {
   if (idleNudge.declaresSleep(text)) {
     nudgeRec = idleNudge.onSleepDeclared(nudgeRec)
+    saveNudgeRec()   // 0.45.91 静默承诺必须跨重启活着
     log('[nudge] 主人去睡了，静默到 ' + new Date(nudgeRec.sleepUntil).toLocaleString('zh-CN', { hour12: false }))
     // 0.45.72：桌面闭嘴，但她说过要去 QQ 找他 —— 这句必须真发生
     tryQqGoodnight().catch(() => { })
   } else {
     nudgeRec = idleNudge.onUserTalk(nudgeRec)
+    saveNudgeRec()
   }
 }
 
@@ -1330,9 +1730,29 @@ function startNudge () {
   if (nudgeTimer) return
   // 重启恢复：计时起点接主记忆账本里的 lastUserAt（没有就不追，baseAt=0 会被 24h 上限拦住）
   try {
+    // 0.45.91 兜底：模块加载早于 app.ready 时 loadNudgeRec 会读空，这里补读一次，
+    // 否则「晚安静默」在真重启后仍然会丢（正是要修的那个场景）。
+    if (!nudgeRec.baseAt && !nudgeRec.sleepUntil) {
+      const saved = loadNudgeRec()
+      if (saved && (Number(saved.baseAt) || Number(saved.sleepUntil))) {
+        nudgeRec = Object.assign(nudgeRec, {
+          stage: Number(saved.stage) || 0,
+          lastProactiveAt: Number(saved.lastProactiveAt) || 0,
+          nextTryAt: Number(saved.nextTryAt) || 0,
+          baseAt: Number(saved.baseAt) || 0,
+          sleepUntil: Number(saved.sleepUntil) || 0
+        })
+        log('[nudge] 已恢复上次的黏人状态（静默到 ' + (nudgeRec.sleepUntil ? new Date(nudgeRec.sleepUntil).toLocaleString('zh-CN', { hour12: false }) : '无') + '）')
+      }
+    }
     const st = inner.state()
     const last = Number(st.lastUserAt) || 0
     if (last && !nudgeRec.baseAt) nudgeRec.baseAt = last
+    // 静默期间不说话是「沉默」的，日志里什么都看不到 —— 排查时最容易误判成「修没修好」。
+    // 这里明写一行：现在处于睡前静默，所以不主动开口。
+    if (nudgeRec.sleepUntil && Date.now() < Number(nudgeRec.sleepUntil)) {
+      log('[nudge] 静默中（他道过晚安）：到 ' + new Date(nudgeRec.sleepUntil).toLocaleString('zh-CN', { hour12: false }) + ' 之前不主动开口')
+    }
   } catch { }
   nudgeTimer = setInterval(async () => {
     try {
@@ -1351,13 +1771,27 @@ function startNudge () {
         const absence = welcomeRec.lastActiveAt ? now - welcomeRec.lastActiveAt : 0
         welcomeRec.lastActiveAt = now
         saveWelcomeRec()
+        /* 0.45.91 睡前静默也管这里：原来欢迎回来不看 sleepUntil，
+         * 夜里屏幕一亮（系统唤醒/显卡回收）presence 翻成 here，她就「あ、戻った」迎一句——
+         * 11-02 凌晨 01:28 / 04:07 / 06:59 / 09:28 四条全是这个来源，而且句子都长得一样。
+         * 人在睡，屏幕亮一下不是「他回来了」。 */
+        if (nudgeRec.sleepUntil && now < nudgeRec.sleepUntil) { welcomeRec.prevPresence = st; return }
         const dp = (() => { try { return Number(inner.displeasure()) } catch { return 0 } })()
         if (absence > 0 && idleNudge.welcomeWorthy(absence, welcomeRec.lastWelcomeAt, now) && dp < 0.6) {
           const gate = getRhythm().ask('time')
           if (gate.ok) {
-            const text = await makeWelcomeLine(Math.floor(absence / 60000))
+            let text = await makeWelcomeLine(Math.floor(absence / 60000))
+            // 0.45.91 复读硬闸：雷同就点名禁语重生成一次，还雷同就不开口
+            let rep = text ? proactiveRepeat(text) : null
+            if (rep) {
+              log('[nudge] 欢迎回来复读闸：与「' + String(rep.against).slice(0, 18) + '」太像（' + rep.score.toFixed(2) + '），换角度重生成')
+              text = await makeWelcomeLine(Math.floor(absence / 60000), rep.against)
+              rep = text ? proactiveRepeat(text) : null
+              if (rep) { log('[nudge] 欢迎回来复读闸：重生成仍雷同，这次不开口'); text = '' }
+            }
             if (text) {
               await sayProactive(text, { kind: 'welcome' })
+              noteProactiveSaid(text)
               try { getRhythm().note('time') } catch { }
               welcomeRec.lastWelcomeAt = now
               saveWelcomeRec()
@@ -1397,13 +1831,23 @@ function startNudge () {
       const gate = getRhythm().ask('time')
       if (!gate.ok) return
       const started = base
-      const text = await makeNudgeLine(stage, Math.floor(idle / 60000))
+      let text = await makeNudgeLine(stage, Math.floor(idle / 60000))
       // 生成期间主人说话了（计时被清零/挪走）→ 作废不发
       if (nudgeRec.baseAt !== started) { log('[nudge] 生成期间主人说话了，作废'); return }
-      if (!text) { nudgeRec = idleNudge.onFail(nudgeRec); return }
-      await sayProactive(text, { kind: 'nudge' })
+      // 0.45.91 复读硬闸（同欢迎回来）：点名叫出刚落过的句子，重生成一次
+      let rep = text ? proactiveRepeat(text) : null
+      if (rep) {
+        log('[nudge] 第 ' + stage + ' 阶复读闸：与「' + String(rep.against).slice(0, 18) + '」太像（' + rep.score.toFixed(2) + '），换角度重生成')
+        text = await makeNudgeLine(stage, Math.floor(idle / 60000), rep.against)
+        if (nudgeRec.baseAt !== started) { log('[nudge] 生成期间主人说话了，作废'); return }
+        rep = text ? proactiveRepeat(text) : null
+        if (rep) { log('[nudge] 第 ' + stage + ' 阶复读闸：重生成仍雷同，这次忍住不说'); text = '' }
+      }
+      if (!text) { nudgeRec = idleNudge.onFail(nudgeRec); saveNudgeRec(); return }
+      await sayProactive(text, { kind: 'nudge', mark: false })
+      noteProactiveSaid(text)
       try { getRhythm().note('time') } catch { } // 告诉另外三条通道：刚说过话，别贴上来
-      nudgeRec = idleNudge.onSent(nudgeRec, stage)
+      noteSpoke({ stage })   // 0.45.97 阶梯 + QQ 共用同一笔账（她刚在屏幕前说过，QQ 不补一句）
       log('[nudge] 第 ' + stage + ' 阶已开口（闲置 ' + Math.floor(idle / 60000) + ' 分钟）：' + text.slice(0, 30))
     } catch (err) {
       log('[nudge] tick 异常：' + (err && err.message))
@@ -1482,7 +1926,12 @@ function startAutonomy () {
     busy: () => !!genAbort, // 正在对话/生成中不抢电脑
     pool: autonomyPool,
     cua: require('../cua'),
-    openUrl: (u) => require('electron').shell.openExternal(u),
+    // 0.46.16 她的网页开在自建浏览窗口里（活动结束整窗关掉恢复原状），不再丢进主人默认浏览器
+    openUrl: (u) => {
+      try { if (require('./actBrowser').open(u)) return true } catch { }
+      try { require('electron').shell.openExternal(u) } catch { }
+      return true
+    },
     onDone: (r, line) => {
       if (!line) return
       log('[autonomy] ' + line.slice(0, 120))
@@ -1494,6 +1943,14 @@ function startAutonomy () {
       // 0.45.8 光有旁白还不够——经历要沉淀成长期记忆，不然活动只是流水，
       // 聊天时她还是「不记得自己去过哪」。复用做梦管线：解析 → 审查册 →（自动批准时）直接生效。
       autonomyMemory(line).catch(() => { })
+    },
+    // 0.46.0 活动中的自言自语：她写「（自语）…」行 → 这里出口（气泡 + 低频朗读）。
+    // 入账走 sayNarration（via:'chatter'），与本体记忆同源；不转 QQ（proactiveGate 那条线不碰）。
+    onSoliloquy: async (line) => {
+      const t = String(line || '').trim()
+      if (!t) return
+      log('[autonomy] 自语：' + t.slice(0, 40))
+      try { await sayNarration(t, { speech: narrationVoiceOn() }) } catch { }
     }
   })
   autonomyInst.start()
@@ -1749,7 +2206,7 @@ async function dreamRun (reason) {
     // 睡前梦做过一场就把「说过晚安」清掉：sleepWantedAt 不清零时，
     // dream tick 每分钟都会再命中 sleep 分支（0.45.0 真机连环做梦的另一半根因）
     sleepWantedAt = 0
-    try { nudgeRec = idleNudge.onUserTalk(nudgeRec) } catch { } // 她刚忙完自己的事，黏人计时重置
+    try { nudgeRec = idleNudge.onUserTalk(nudgeRec); saveNudgeRec() } catch { } // 她刚忙完自己的事，黏人计时重置
     try { await sayProactive(dream.closingLine(c.replyLang === 'auto' ? 'zh' : (c.replyLang || 'zh'), parsed, { auto: c.dreamAutoApprove === true }), { kind: 'dream' }) } catch { }
     log('[dream] 做梦完成（' + (reason || 'manual') + '）：入队 ' + r.added + ' 条（重复 ' + r.dup + '）')
     return { ok: true, added: r.added, dup: r.dup, parsed }
@@ -2129,51 +2586,38 @@ function judgeByWindow (fg) {
   return null
 }
 
-/** 视觉判定：一次非流式请求，只要一行 JSON（thinking 模式不影响，实测可用） */
+/** 视觉判定：一次非流式请求，只要一行 JSON。
+ * 0.46.5 改走 chatOnce：原来这里散装 fetch + max_tokens:200 + 无空回复兜底，
+ * 若网关模型带思维链（reasoning_content），思考就能把预算吃光——视觉判定从上线起
+ * 一次都不会成功（与经历沉淀同款病，当时实测「可用」只是碰上了非 thinking 模型）。
+ * chatOnce 自带瞬态重试 + 空+length 预算重试 + 超时封顶，判读是旁路不拖主对话。 */
 async function judgeByVision (c, b64, fg, goal, note) {
-  const base = String(c.apiBaseUrl || '').replace(/\/+$/, '')
-  const url = /\/chat\/completions$/.test(base) ? base : base + '/chat/completions'
   const head = '主人的学习目标是：' + (goal || '未指定') +
     '\n前台窗口：' + (fg ? (String(fg.pn || '?') + '｜' + String(fg.title || '')) : '未知') +
     (note ? '\n' + String(note).slice(0, 200) : '') +
     '\n请判定这张屏幕截图。'
-  const body = {
-    model: c.apiModel,
-    messages: [
-      { role: 'system', content: WATCH_JUDGE_SYS },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: head },
-          { type: 'image_url', image_url: { url: /^data:image\//.test(String(b64)) ? String(b64) : 'data:image/jpeg;base64,' + b64 } }
-        ]
-      }
-    ],
-    temperature: 0,
-    max_tokens: 200,
-    stream: false
-  }
-  const ctl = new AbortController()
-  const timer = setTimeout(() => { try { ctl.abort() } catch { } }, 30000)
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (c.apiKey || '') },
-      body: JSON.stringify(body),
-      signal: ctl.signal
-    })
-    if (!res.ok) {
-      // 400/422 = 这个接口不收图，记一笔（下次别再白截一张图）
-      if (res.status === 400 || res.status === 422) {
-        try { patchCfg({ visionNoImage: true }) } catch { }
-      }
-      throw new Error('HTTP ' + res.status)
+  const messages = [
+    { role: 'system', content: WATCH_JUDGE_SYS },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: head },
+        { type: 'image_url', image_url: { url: /^data:image\//.test(String(b64)) ? String(b64) : 'data:image/jpeg;base64,' + b64 } }
+      ]
     }
-    const j = await res.json()
-    const txt = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content
+  ]
+  try {
+    const txt = await llm.chatOnce({
+      baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
+      messages, temperature: 0, maxTokens: 300, timeoutMs: 30000
+    })
     return studyWatch.normalizeVerdict(txt)
-  } finally {
-    clearTimeout(timer)
+  } catch (e) {
+    // 400/422 = 这个接口不收图，记一笔（下次别再白截一张图）
+    if (e && (e.status === 400 || e.status === 422)) {
+      try { patchCfg({ visionNoImage: true }) } catch { }
+    }
+    throw e
   }
 }
 
@@ -2882,6 +3326,63 @@ function pumpAsr () {
 /* ---------------- IPC ---------------- */
 
 /** AI 配置的对外视图（init / settings IPC 共用） */
+// 0.45.87 动作词表构建（原 petVrmaActs 内联逻辑提出来，供动作测试面板列词用）：
+// 默认映射=数据目录 motions 下各 .vrma 的文件名主干 + 中文别名 + config.petVrmaActs 覆盖。
+function buildPetVrmaActs (c) {
+  const WORD_ALIASES = {
+    走路: 'walk', 散步: 'walk', 步行: 'walk', 走两步: 'walk',
+    跳舞: 'dance', 舞蹈: 'dance', 跳支舞: 'dance', 跳个舞: 'dance',
+    挥手: 'wave', 打招呼: 'wave', 再见: 'wave', 拜拜: 'wave',
+    待机: 'idle', 休息: 'idle'
+  }
+  const map = {}
+  try {
+    const dir = path.join(app.getPath('userData'), 'motions')
+    for (const f of fs.readdirSync(dir)) {
+      if (!/\.vrma$/i.test(f)) continue
+      map[f.replace(/\.vrma$/i, '')] = path.join(dir, f)
+    }
+  } catch { }
+  for (const [alias, base] of Object.entries(WORD_ALIASES)) {
+    if (map[base]) map[alias] = map[base]
+  }
+  Object.assign(map, (c.petVrmaActs && typeof c.petVrmaActs === 'object') ? c.petVrmaActs : {})
+  return Object.keys(map).length ? map : null
+}
+
+// 0.45.87 动作测试面板列词：VRMA 词（motions/ 目录）+ 语义池/官方硬映射代表词。
+// 0.46.14 诚实列词：spine 立绘下 VRMA 词全播不了、官方代表词大半不在权威词典
+// （万岁/跳/蹲下/躺下/转圈/睡觉/说吧 只会「抖一下」= 用户眼里「点了没反应」，
+//  真机排查被误导过）。按当前形象过滤，只列真的能响的词；VRM 模型维持原列表。
+let spineWordsCache = null
+function spinePlayableWords () {
+  if (!spineWordsCache) {
+    try {
+      delete globalThis.SPINE_WORD_MAP
+      require('../renderer/shared/spine-words.js')
+      spineWordsCache = Object.keys(globalThis.SPINE_WORD_MAP || {})
+    } catch { spineWordsCache = [] }
+  }
+  return spineWordsCache
+}
+function listActionWords () {
+  const vis = (typeof pet.currentVisual === 'function') ? pet.currentVisual() : null
+  const isSpine = !!(vis && !vis.vrm && (vis.mode === 'spine' || vis.spine))
+  if (isSpine) {
+    const ok = new Set(spinePlayableWords())
+    // 常用代表词里挑词典命中的；坐/站词由 petBridge.act() 状态机受理（不依赖词典）恒列
+    const wanted = ['挥手', '打招呼', '再见', '拜拜', '加油', '打气', '拍手', '鼓掌', '害羞', '思考',
+      '思索', '质疑', '托腮', '伸懒腰', '悄悄话', '慌张', '吓一跳', '比耶', '轻笑', '耳语', '叉腰']
+    const builtin = wanted.filter((w) => ok.has(w))
+    builtin.push('坐下', '站起来', '坐地上')
+    return { vrma: [], builtin }
+  }
+  const vrma = buildPetVrmaActs(cfg())
+  const vrmaWords = vrma ? Object.keys(vrma) : []
+  const builtin = ['坐下', '站起来', '挥手', '打招呼', '万岁', '加油', '跳', '蹲下', '躺下', '转圈', '睡觉', '坐地上', '说吧']
+  return { vrma: vrmaWords, builtin }
+}
+
 function settingsView () {
   const c = cfg()
   return {
@@ -2903,9 +3404,14 @@ function settingsView () {
     autonomyDailyMax: Number(c.autonomyDailyMax) || 6,
     chatterBoostOn: c.chatterBoostOn === true,
     chatterDailyMax: Number(c.chatterDailyMax) || 5,
+    // 0.46.0 自言自语系统：朗读（默认开、低频）与自主活动中自语上限
+    chatterVoiceOn: c.chatterVoiceOn !== false,
+    chatterVoiceChance: Math.min(1, Math.max(0, c.chatterVoiceChance == null ? 0.3 : Number(c.chatterVoiceChance))),
+    chatterVoiceDailyMax: Math.max(1, Number(c.chatterVoiceDailyMax) || 12),
+    autonomySoliloquyMax: Math.max(0, Number(c.autonomySoliloquyMax == null ? 3 : Number(c.autonomySoliloquyMax))),
     petOn: c.petOn !== false,
     petScale: c.petScale != null ? c.petScale : 1,
-    petWalk: c.petWalk || 'calm', // 走动三档：off / calm / lively
+    petWalk: c.petWalk || 'off', // 走动三档：off / calm / lively（0.46.0 默认 off：坐姿素材，默认坐着不溜达）
     petFullscreenHide: c.petFullscreenHide !== false, // 全屏游戏/视频时自动让位
     readReply: c.readReply !== false, // 朗读 AI 回复（助手核心回复也发声），默认开（用户澄清气泡音≠朗读，保持原默认）
     replyLang: c.replyLang || 'zh',
@@ -2951,27 +3457,7 @@ function settingsView () {
     // 0.45.39 MMD 路线：动作词 → VRMA 文件。默认映射=数据目录 motions/*.vrma 的文件名主干，
     // config.petVrmaActs 可手动追加/覆盖（词 → 绝对路径）。
     // 0.45.40：中文别名表——文件叫 walk.vrma 也要【走路】能触发。
-    petVrmaActs: (() => {
-      const WORD_ALIASES = {
-        走路: 'walk', 散步: 'walk', 步行: 'walk', 走两步: 'walk',
-        跳舞: 'dance', 舞蹈: 'dance', 跳支舞: 'dance', 跳个舞: 'dance',
-        挥手: 'wave', 打招呼: 'wave', 再见: 'wave', 拜拜: 'wave',
-        待机: 'idle', 休息: 'idle'
-      }
-      const map = {}
-      try {
-        const dir = path.join(app.getPath('userData'), 'motions')
-        for (const f of fs.readdirSync(dir)) {
-          if (!/\.vrma$/i.test(f)) continue
-          map[f.replace(/\.vrma$/i, '')] = path.join(dir, f)
-        }
-      } catch { }
-      for (const [alias, base] of Object.entries(WORD_ALIASES)) {
-        if (map[base]) map[alias] = map[base]
-      }
-      Object.assign(map, (c.petVrmaActs && typeof c.petVrmaActs === 'object') ? c.petVrmaActs : {})
-      return Object.keys(map).length ? map : null
-    })(),
+    petVrmaActs: buildPetVrmaActs(c),
     petSpeechOn: c.petSpeechOn === true,
     petSpeechPitch: c.petSpeechPitch || 'mid', // low / mid / high
     petSpeechRate: c.petSpeechRate || 'mid', // low / mid / high
@@ -3845,6 +4331,8 @@ function bootPet () {
   // 0.42.0：共处时长（陪伴感的底料，60s 摸一次空闲时间，不截图不花钱）
   try { startTogether() } catch (err) { log('[together] 启动失败: ' + (err && err.message)) }
   try { startNudge() } catch (err) { log('[nudge] 启动失败: ' + (err && err.message)) }
+  // 0.45.93 排好的主动 QQ 消息（她答应「几点发」的那条）——20 秒一查，重启接着兑现
+  try { startReachPlans() } catch (err) { log('[reach] 计划通道启动失败: ' + (err && err.message)) }
   // 0.45.12 自动学习模式：她发现他在学，就自己安静地陪（不是开关，是她的自觉）
   try { startStudyAuto() } catch (err) { log('[study] 自动模式启动失败: ' + (err && err.message)) }
   try { startAutonomy() } catch (err) { log('[autonomy] 启动失败: ' + (err && err.message)) }
@@ -4036,7 +4524,7 @@ function syncRemote () {
   } catch (err) { log('[remote] sync 失败: ' + (err && err.message)) }
 }
 
-module.exports = { createWindow, registerIpc, stop, bootPet, setOverlayBroadcast, setFullscreenSync, switchChar, getWindow: () => win, imSynthesize, userProfileText, alarmAdd, alarmList, alarmCancel, onUserSpoke, noteExchange, dreamRun, studyStart, studyStop, studyStatus, studyTool, studyActive: () => study.active(studySess), setStudyTrayRefresh: (fn) => { studyOnTrayRefresh = fn }, setObsPortGetter, setImApi, syncRemote, remoteStatus: () => remote.status(), ttsSpeak: speakWithCurrentConfig, qqNote, desktopHistoryTail, noteGameSession }
+module.exports = { createWindow, registerIpc, stop, bootPet, setOverlayBroadcast, setFullscreenSync, switchChar, getWindow: () => win, imSynthesize, userProfileText, alarmAdd, alarmList, alarmCancel, onUserSpoke, noteExchange, dreamRun, studyStart, studyStop, studyStatus, studyTool, studyActive: () => study.active(studySess), setStudyTrayRefresh: (fn) => { studyOnTrayRefresh = fn }, setObsPortGetter, setImApi, qqSendNow, qqPlanAdd, qqPlanList, qqPlanCancel, qqReachPrompt, startReachPlans, syncRemote, remoteStatus: () => remote.status(), ttsSpeak: speakWithCurrentConfig, qqNote, desktopHistoryTail, noteGameSession, listActionWords }
 
 /* ---------------- 0.18.0 M2 · IM 语音合成（QQ 发语音用） ----------------
  * 音色跟会话对应的角色卡走（主人 2026-10-25 定案：TTS 不是共用的）——

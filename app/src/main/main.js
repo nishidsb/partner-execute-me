@@ -883,7 +883,14 @@ app.whenReady().then(async () => {
       // 0.45.12 桥接：她不在电脑前时可以主动在 QQ 上找主人（companion 的 reach 通道）
       try {
         require('./companion').setImApi({
-          connected: () => !!(imMod && imMod.client && imMod.client.status && imMod.client.status().phase === 'ready'),
+          // 0.45.91：判活只看 state.connected，不再依赖 phase（phase 曾经根本没写进 status，
+          // 导致 QQ 主动找人永远走 'disconnected' 分支，一条都发不出去）
+          connected: () => {
+            try {
+              const st = imMod && imMod.client && imMod.client.status && imMod.client.status()
+              return !!(st && (st.connected === true || st.phase === 'ready'))
+            } catch { return false }
+          },
           cfg: () => (imMod && imMod.brain ? imMod.brain.loadCfg() : null),
           sendPrivate: async (uid, text) => {
             if (!imMod || !imMod.client) throw new Error('还没连接')
@@ -891,6 +898,10 @@ app.whenReady().then(async () => {
           }
         })
       } catch (e) { log('[im] QQ 主动找人桥接失败:', e.message) }
+      // 0.45.93 让她知道「我能主动发 QQ、现在是什么时段策略、已经排了哪些」——
+      // 没有这段提示词，她就会像 11-02 那样用 exec_command 去翻目录猜通道，
+      // 嘴上答应了却发不出去。每轮现取，设置改了立刻生效。
+      try { assistant.addWorldPrompts(() => require('./companion').qqReachPrompt()) } catch (e) { log('[reach] 提示词注入失败:', e.message) }
     } catch (e) { log('[im] 挂载失败:', e.message) }
     // S10：World 扩展体系（装载在 assistant 之后：工具表/提示词桥需要 core 就绪）
     try { require('./world/ipc').init({ dataRoot: app.getPath('userData') }) } catch (e) { log('[world] 挂载失败:', e.message) }
@@ -964,6 +975,10 @@ app.whenReady().then(async () => {
       const list = Array.isArray(words) ? words : [words]
       return petBridge.invoke('pet_act', { actions: list, manual: true })
     } catch (e) { return { ok: false, error: e && e.message } }
+  })
+  // 0.45.87 动作测试面板列词：把 motions/ 目录全部 VRMA 词 + 官方代表词交给面板动态出按钮
+  ipcMain.handle('pet:list-acts', () => {
+    try { return { ok: true, ...companion.listActionWords() } } catch (e) { return { ok: false, error: e && e.message } }
   })
   // S5：形象包（API 2）—— zip 导入 / 装扮 / 独立装扮窗；结果存在角色卡 visual.figure
   const figures = require('./figures')

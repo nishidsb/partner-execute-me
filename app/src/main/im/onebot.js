@@ -107,9 +107,12 @@ function createClient ({ url, token = '', onEvent, onStatus, transport } = {}) {
   let reconnectTimer = null
   let attempts = 0
   const pending = new Map() // echo → { resolve, reject, timer }
-  const state = { connected: false, selfId: 0, nickname: '', lastError: '', attempts: 0 }
+  // 0.45.91：phase 必须落进 state —— 原来只塞进 onStatus 的回调参数，
+  // 于是 client.status().phase 永远是 undefined，任何按「phase === 'ready'」判连上的调用方
+  // （main.js 注入的 QQ 主动找人桥接）就永远认为断线，QQ 主动消息一发都发不出去。
+  const state = { connected: false, selfId: 0, nickname: '', lastError: '', attempts: 0, phase: 'idle' }
 
-  const notify = (s) => { try { onStatus && onStatus({ ...state, phase: s }) } catch { } }
+  const notify = (s) => { state.phase = s; try { onStatus && onStatus({ ...state }) } catch { } }
 
   const rawSend = (obj) => {
     if (!ws || ws.readyState !== 1) throw new Error('WebSocket 未连接')

@@ -220,6 +220,18 @@ function handle (req, res) {
       grabs: STATE.capCount || 0, pngChanged: STATE.pngChanged || 0, busyNow: !!STATE.busy
     }))
   }
+  if (u.pathname === '/act') {
+    // 0.45.86 诊断点播：/act?name=鼓掌 → pet_act(manual) 直接播 motions/ 里的同名 VRMA。
+    // 只绑 127.0.0.1 的诊断口，跟 /frame 同级；动作闸用 manual 豁免（点播就要响）。
+    const name = String((u.searchParams && u.searchParams.get('name')) || '').trim()
+    if (!name) return send(res, 400, 'application/json; charset=utf-8', JSON.stringify({ ok: false, error: '缺 name 参数（如 /act?name=鼓掌）' }))
+    try {
+      const r = require('./petBridge').invoke('pet_act', { actions: [name], manual: true })
+      return send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, name, r }))
+    } catch (e) {
+      return send(res, 500, 'application/json; charset=utf-8', JSON.stringify({ ok: false, error: e && e.message }))
+    }
+  }
   if (u.pathname === '/frame') {
     const sp = u.searchParams
     const wantJpg = sp && sp.get('fmt') === 'jpg'

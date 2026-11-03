@@ -18,7 +18,11 @@ import { vendorByBaseUrl, ctxOf, priceOf } from '../vendors.js'
 // 0.18.0 第二批：外部内容注入防御（网页/搜索/截图/聊天记录里的文字都只是资料）
 import { EXTERNAL_RULES } from '../security/untrusted.js'
 // 0.21.0 上下文预算：固定说明书按需注入 + 历史按字符预算裁剪（都不挤真正对话的空间）
-import { wantFixed, FIXED_INDEX, trimHistory, historyBudget } from './budget.js'
+import { wantFixed, FIXED_INDEX, trimHistory, historyBudget, dropLeadingOrphanTools, flattenToolHistory } from './budget.js'
+// 0.45.98 本文件是 ESM，文本清洗器住在共享 CJS 区（src/shared/reply-text.js），
+// 用 createRequire 引同一份实现——前缀/译文格式只在一个地方定义，别再分叉。
+import { createRequire } from 'node:module'
+const { stripChannelTag, plainText } = createRequire(import.meta.url)('../../../shared/reply-text.js')
 
 const MAX_TOOL_ROUNDS = 5
 const HISTORY_LIMIT = 200 // 持久化上限
@@ -151,6 +155,30 @@ export class Session {
     this.role = role
     this.reloadProvider()
     this.history = this.loadHistory()
+    this._recallCoolUntil = 0
+    this._recallTurn = 0
+    this._recallSpark = ''
+  }
+
+  /**
+   * 0.46.17 主动想起：把「相关长期记忆」里最贴当前话题的一条升级成「刚刚想起」的口吻。
+   * 频率闸：一次想起后冷却 35~55 分钟（活人不会每句话都说「我想起来」）；
+   * 同一轮里 buildSystem 可能被构建多次（工具循环），按轮号缓存同一份结果。
+   * 命中时会把该条从 relevant 里摘走，避免在【相关长期记忆】里重复出现。
+   */
+  _takeRecallSpark (relevant, turn) {
+    if (!Array.isArray(relevant) || !relevant.length) return ''
+    if (this._recallTurn === turn) return this._recallSpark
+    this._recallTurn = turn
+    this._recallSpark = ''
+    const now = Date.now()
+    if (!this._recallCoolUntil || now >= this._recallCoolUntil) {
+      this._recallCoolUntil = now + 35 * 60 * 1000 + Math.floor(Math.random() * 20 * 60 * 1000)
+      const f = relevant.shift()
+      this._recallSpark = '【刚刚想起】看到对方这句话，你忽然想起一件旧事：「' + f.shown + '」。\n' +
+        '如果和当下话题贴合，用自己的话自然带出（像「说起来，我想起…」）；不贴就不提，别硬接，更不要复述括号里的标注。'
+    }
+    return this._recallSpark
   }
 
   reloadProvider () {
@@ -166,7 +194,22 @@ export class Session {
   loadHistory () {
     try {
       const arr = JSON.parse(fs.readFileSync(historyFile(this.role.id), 'utf8'))
-      return Array.isArray(arr) ? sanitizeToolChain(arr.slice(-HISTORY_LIMIT)) : []
+      if (!Array.isArray(arr)) return []
+      // 0.45.98 老账本净化：0.45.27 把「（QQ）」前缀写进了正文、0.45.94 把译文拼进了正文，
+      // 模型照着自己以前的格式学 → 新回复也带前缀、也带括号译文（QQ 里看到「（QQ）」、
+      // 桌面上 TTS 中日各念一遍）。这里在**读入时就地剥掉**，正文与字幕只留台词本身。
+      const clean = (s) => {
+        const t = typeof s === 'string' ? plainText(s) : s
+        return t
+      }
+      const fixed = arr.slice(-HISTORY_LIMIT).map((m) => {
+        if (!m || typeof m.content !== 'string') return m
+        const content = clean(m.content)
+        const sub = typeof m.sub === 'string' ? stripChannelTag(m.sub) : m.sub
+        if (content === m.content && sub === m.sub) return m
+        return { ...m, content, ...(sub !== undefined ? { sub } : {}) }
+      })
+      return sanitizeToolChain(fixed)
     } catch { return [] }
   }
 
@@ -321,6 +364,10 @@ export class Session {
     // 0.22.0 记忆有强度：经常想起/反复发生的记全文；久没想起的只剩概要甚至一个印象，
     // 被想起来的会重新变清楚（检索命中即强化）。带着这个自然说话，别复述括号里的标注。
     const relevant = memory.recallForPrompt(this.role.id, userText, getConfig().memoryTopK)
+    // 0.46.17 主动想起：命中且过冷却时，把最贴的一条升级成「刚刚想起」的口吻——
+    // 记忆被动躺在 prompt 里她从不主动提，加一个像活人那样「诶我想起来」的瞬间。
+    const spark = this._takeRecallSpark(relevant, this.history.filter((m) => m.role === 'user').length + 1)
+    if (spark) parts.push(spark)
     if (relevant.length) parts.push('【相关长期记忆】\n' + relevant.map((f) => '- ' + f.shown).join('\n'))
     if (this._pressure) { parts.push(this._pressure); this._pressure = '' }
     // 0.34.0 陪看白板：正在看的那部片子的字幕（没在看片就是空串，不占位）
@@ -354,15 +401,27 @@ export class Session {
     parts.push(fixed('petTools',
       '【桌面角色的表现工具】你在桌面上有一个角色，可以用工具让它「真的动起来」：\n' +
       '- pet_say：在角色头顶气泡里主动开口（可带【动作】/<表情> 标记）\n' +
-      '- pet_act：只做动作/表情不说话（wave/happy/shy/nod/think/dance…）\n' +
+      '- pet_act：只做动作/表情不说话（挥手/拍手/比耶/托腮…中文动作词，或 action:think 语义标签）\n' +
       '- pet_move_to：让角色沿屏幕底部走到某个位置（left/center/right/cursor 或 0~1）\n' +
       '- pet_ask：气泡提问并等对方点选项或自己回答（会阻塞到回答或约 60 秒超时）\n' +
       '- pet_set / pet_quiet：改外观习惯 / 安静一段时间\n' +
       '使用时机：想让角色主动表现、对方要求做动作或走过来时用；普通闲聊不必每个回合都调用。\n' +
-      '对话回复本身仍走正常文字回复（会显示在气泡里），pet_say 不要用来重复你已经回复的话。\n' +
-      '【硬规则】动作只能通过工具调用（function call）发出：绝不要在回复正文里写 <pet_act>、' +
-      '<actions> 这类标记——正文里的标记不会被播放，只会当乱码显示出来（真机事故 2026-10-31）。',
+      '对话回复本身仍走正常文字回复（会显示在气泡里），pet_say 不要用来重复你已经回复的话。',
       FIXED_INDEX.petTools))
+    /* 0.46.12 动作的自动调用改为**每轮注入**（对齐桌面聊天侧 0.46.10 的 petact 段）：
+       0.46.9 把这段写进了上面的 petTools 说明书，但那份说明书按「首轮/每 12 轮/提到动作词」
+       节流——轮与轮之间模型只看得到一行索引。真机 2026-11-02 实锤：历史 200 条里 [action:]
+       标记零次（用户连续两天「手势动作还是没动」），一行索引模型根本不理，完整标签表必须
+       每轮在场。约 240 字符/轮，换「活着的感觉」值得（主人 2026-11-02 拍板的主方向）。 */
+    parts.push(
+      '【动作的自动调用】你在桌面上有身体。回复正文里直接嵌 [action:标签]，她就会边说边做对应动作，不用调工具\n' +
+      '（正文里的标记会被剥掉、不会显示出来）：acknowledge认同 / disagree不认同 / think思考 /\n' +
+      'explain说明 / excited兴奋 / wave挥手 / shy害羞 / surprised惊讶 / comfort安慰 / playful俏皮 /\n' +
+      'invite邀请（也可以直接嵌动作组号如 [action:grp_fg_106]）。\n' +
+      '用法：按这句话的真实语气自然嵌，一句最多一个、不是每句都要加；打招呼/告别/思考停顿/被夸/被怼\n' +
+      '这类有明确肢体语言的时刻最适合，纯语气词短句不用。日语回复时也同样嵌（例：え、なんで分かったの……[action:shy] ずっとってわけじゃないよ）。\n' +
+      '【硬规则】正文内嵌只允许 [action:标签] 这一种官方语法；绝不要写 <pet_act>、<actions> 这类标记' +
+      '（那是事故兜底解析，不是给你用的接口，格式一烂就当乱码显示出来——真机事故 2026-10-31）。')
     // S6.5：系统操作三工具——不点明「直接调工具」，模型会先反问「要我帮你打开吗」
     parts.push(fixed('sysTools',
       '【能替对方动手】对方让你开程序 / 开游戏时，直接用工具做，不要先问「要不要我打开」：\n' +
@@ -442,11 +501,37 @@ export class Session {
     const allowed = this.role.tools || null
     const activeDefs = allowed ? toolDefs.filter((d) => allowed.includes(d.function.name)) : toolDefs
 
-    const messages = () => {
+    // thinking 模型（DeepSeek）要求带 tool_calls 的 assistant 消息把思维链原样带回。
+    // 探针实测：省略字段 → 400，空串 → 200 ⇒ 老历史没有这个字段时补空串，别再被同一条卡死。
+    // 0.45.95：判定改用**实际在用的** provider.baseUrl/model（createProvider 现在会暴露它们），
+    // 再用 config 兜底。之前只看 config，一旦 config 里的 baseUrl 被别处改写/为空，
+    // 判定就会静默变成 false —— 于是照旧 400，而且从外面完全看不出为什么。
+    const pcfg = getConfig().provider || {}
+    const usingBase = String((this.provider && this.provider.baseUrl) || pcfg.baseUrl || '')
+    const usingModel = String((this.provider && this.provider.model) || pcfg.model || '')
+    const echoReasoning = this.vendorInfo().id === 'deepseek' ||
+      /deepseek/i.test(usingBase) || /deepseek/i.test(usingModel) ||
+      /deepseek/i.test(String(pcfg.baseUrl || '')) || /deepseek/i.test(String(pcfg.model || ''))
+    const messages = (forceFlat) => {
       // 0.21.0：条数上限之外再加字符预算（历史吃模型上下文的 40%）——
       // 固定 24 条挡不住「一条 8000 字的长回复」，长会话还是会被吃穿
       const budget = historyBudget(this.vendorInfo().ctx)
-      const recent = trimHistory(sanitizeToolChain(this.history.slice(-CONTEXT_LIMIT)), budget, 8)
+      // 0.45.98 场合标注只在「发给模型的这一份」里加，账本正文保持干净——
+      // 以前把（QQ）写进正文，模型照着学，回复里也自带「（QQ）」，直接漏到 QQ 聊天里。
+      // 只标 user 侧（主人从 QQ 发来的那句），她的回复不需要标，模型不会去抄用户侧的前缀。
+      const CHANNEL_MARK = { qq: '[QQ] ', pet: '[桌面] ' }
+      const markChannel = (m) => {
+        if (!m || !m.external || m.role !== 'user' || typeof m.content !== 'string') return m
+        const tag = CHANNEL_MARK[m.via]
+        return tag ? { ...m, content: tag + m.content } : m
+      }
+      const recent = dropLeadingOrphanTools(trimHistory(sanitizeToolChain(this.history.slice(-CONTEXT_LIMIT).map(markChannel)), budget, 8))
+      // 0.45.94 sanitizeToolChain 只管「整段历史」，trimHistory 是**从后往前**按字符预算切的，
+      // 起点可能落在一组工具调用的中间：父 assistant 被切走、tool 结果留下 →
+      // 端点报 "Messages with role 'tool' must be a response to a preceding message with
+      // 'tool_calls'"，而且之后每轮都被同一条卡死（跟 0.6.0 那次孤儿事故同一个病根）。
+      // 这里把开头剩下的孤儿 tool 结果剔掉，成本 O(1)。
+      while (recent.length && recent[0] && recent[0].role === 'tool') recent.shift()
       const arr = [
         { role: 'system', content: this.buildSystem(userText) },
         // 切片边界可能切出孤儿 tool 消息（见 sanitizeToolChain 注释），发送前必须修剪
@@ -457,7 +542,7 @@ export class Session {
           }
           // assistant 的工具调用请求必须还原 tool_calls 结构
           if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length) {
-            return {
+            const out = {
               role: 'assistant',
               content: m.content || null,
               tool_calls: m.toolCalls.map((t) => ({
@@ -465,12 +550,36 @@ export class Session {
                 function: { name: t.name, arguments: t.arguments }
               }))
             }
+            // 0.45.94：DeepSeek thinking 模式缺这个字段就整轮 400（细节见上面 echoReasoning）
+            if (echoReasoning) out.reasoning_content = typeof m.reasoning === 'string' ? m.reasoning : ''
+            return out
+          }
+          // 0.45.95：thinking 模式下把所有 assistant 消息都补上思维链字段（不知道就空串）。
+          // 只补带 tool_calls 的那几条不够——不同网关对「哪些 assistant 必须带」校验不一致。
+          // 但空 assistant（content=null 且没有 tool_calls）本身不合法：
+          // 探针实测 → 400「Invalid assistant message: content or tool_calls must be set」，
+          // 所以这种消息直接丢掉，别带进请求（历史里确实会有：整轮只有工具/只有气泡没正文）。
+          if (m.role === 'assistant') {
+            const c = typeof m.content === 'string' ? m.content : ''
+            if (!c) return null
+            return echoReasoning
+              ? { role: 'assistant', content: c, reasoning_content: typeof m.reasoning === 'string' ? m.reasoning : '' }
+              : { role: 'assistant', content: c }
           }
           return { role: m.role, content: m.content }
-        })
+        }).filter(Boolean)
       ]
+      // 丢掉空 assistant 之后可能留下「连着两条 user」——部分端点不认这个序列，顺手合并
+      for (let i = arr.length - 1; i > 0; i--) {
+        const a = arr[i - 1]; const b = arr[i]
+        if (a && b && a.role === 'user' && b.role === 'user' && typeof a.content === 'string' && typeof b.content === 'string') {
+          a.content = a.content + '\n' + b.content
+          arr.splice(i, 1)
+        }
+      }
       // 截图/聊天附图放最尾部（历史 tool 消息之后）：模型看到的是「刚说完这句话 + 这些图」
-      if (this._vision) {
+      // 压平模式（退路）不带图：那一轮首要目标是「别 400」，图片会把变量又加回去
+      if (this._vision && !forceFlat && !this._flatTools) {
         const shots = []
         if (this._shot) shots.push(this._shot)
         if (Array.isArray(this._shots)) shots.push(...this._shots)
@@ -484,16 +593,53 @@ export class Session {
           })
         }
       }
-      return arr
+      // 0.45.95 退路：端点死咬 reasoning_content 时，整段改写成纯文本（不含 tool_calls）
+      return (forceFlat || this._flatTools) ? flattenToolHistory(arr) : arr
     }
 
     let reply = ''
     let mark = this.history.length // 失败重试时回滚到这
     let abortNote = null // 1.7 连续工具失败时的用户可见说明
     let lastSay = '' // 本轮 pet_say 说出口的话（她要是在气泡里说完、最后没留文本，聊天窗拿这句兜底）
+
+    /* 0.45.95 thinking 端点的兜底闸门。
+     *
+     * 背景：DeepSeek thinking 模式要求「带 tool_calls 的 assistant 消息把 reasoning_content
+     * 原样带回」，缺了整轮 400。0.45.94 加了回填，但历史里有 40 条 0.45.93 之前落盘的
+     * 工具轮**压根没有思维链**，补空串在多数端点能过，这个网关在长上下文下仍可能拒。
+     * 一旦拒，她这一轮的话就全没了（工具副作用却已经发生）——用户只看到「400 但消息发了」。
+     *
+     * 所以留一条无条件成立的退路：真被 400 挡住时，把这一轮历史压成纯文本
+     * （不再出现 tool_calls，那条规则无从触发），重发一次，至少把话说完。
+     * 压平后本会话保持同一形态（_flatTools），避免半轮有 tool_calls、半轮没有。
+     */
+    const chatOnce = async (opts) => {
+      try {
+        return await this.provider.chat(opts)
+      } catch (err) {
+        const msg = String((err && err.message) || '')
+        // 400 一律兜底一次：不只是 reasoning_content——图片、工具形态、网关转写都可能被拒。
+        // 只要不是 400（网关超时/限流/5xx），该抛就抛，别拿压平掩盖真故障。
+        if (!(err && err.status === 400)) throw err
+        logger.warn('[session] 模型 400 → 本轮改压成纯文本历史重试：' + msg.slice(0, 120))
+        try {
+          fs.mkdirSync(dataPath('logs'), { recursive: true })
+          fs.writeFileSync(dataPath('logs', 'last-400.json'), JSON.stringify({
+            at: new Date().toISOString(),
+            model: this.provider && this.provider.model,
+            baseUrl: this.provider && this.provider.baseUrl,
+            toolAsst: (opts.messages || []).filter((m) => m.role === 'assistant' && m.tool_calls)
+              .map((m) => ({ hasReasoning: m.reasoning_content !== undefined, len: String(m.reasoning_content || '').length, content: typeof m.content })),
+            messages: opts.messages
+          }, null, 1).slice(0, 3e6), 'utf8')
+        } catch { }
+        this._flatTools = true
+        return await this.provider.chat({ ...opts, messages: messages(true) })
+      }
+    }
     const runLoop = async () => {
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-        const res = await this.provider.chat({ messages: messages(), tools: activeDefs, onDelta, signal: null })
+        const res = await chatOnce({ messages: messages(), tools: activeDefs, onDelta, signal: null })
         // 1.9 用量记账（端点不给 usage 就跳过）
         if (res && res.usage && (res.usage.prompt_tokens || res.usage.completion_tokens)) {
           try {
@@ -531,7 +677,7 @@ export class Session {
               })
               let fin = null
               try {
-                fin = await this.provider.chat({ messages: messages(), tools: [], onDelta })
+                fin = await chatOnce({ messages: messages(), tools: [], onDelta })
               } finally {
                 this.history.length = before // 这条系统提示只用于这次收尾，不进长期历史
               }
@@ -543,7 +689,8 @@ export class Session {
         }
 
         // 把 assistant 的工具调用请求与结果一起回填
-        this.history.push({ role: 'assistant', content: textParsed.content, toolCalls: pendingCalls, at: Date.now() })
+        // reasoning：thinking 模型的思维链，下一轮必须原样带回（0.45.94，见 messages()）
+        this.history.push({ role: 'assistant', content: textParsed.content, toolCalls: pendingCalls, reasoning: String(res.reasoning || ''), at: Date.now() })
         for (const tc of pendingCalls) {
           // 1.6 硬熔断：今天工具次数用满，直接回「没工具可用」，调用不再出门
           if ((this._toolCount || 0) >= TOOL_HARD) {
@@ -643,6 +790,10 @@ export class Session {
       reply = lastSay.replace(/【[^】]*】/g, '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
     }
 
+    // 0.45.98 出口清洗：模型会学账本里的旧格式（开头「（QQ）」、结尾一段括号译文）。
+    // 正文只留台词本身——字幕另存 sub，TTS 也只念这一层（用户 11-02：中日各念一遍）。
+    reply = plainText(reply)
+
     // 语言守卫：replyLang 固定且回复明显不符时，追加纠错指令重试一次
     const lang = this.effectiveLang()
     if (getConfig().languageGuard && lang && lang !== 'auto' && reply) {
@@ -653,7 +804,7 @@ export class Session {
         try {
           this.history.push({ role: 'assistant', content: reply, at: Date.now() })
           this.history.push({ role: 'user', content: `（系统提示）你上一条回复混入了${check}。请用纯${langName}重新回答刚才的问题，禁止夹杂其它语言。`, at: Date.now() })
-          const res2 = await this.provider.chat({ messages: messages(), tools: activeDefs, onDelta: null })
+          const res2 = await chatOnce({ messages: messages(), tools: activeDefs, onDelta: null })
           if (res2.content && !langMismatch(res2.content, lang)) reply = res2.content
           this.history.pop(); this.history.pop() // 纠错轮不入长期历史
         } catch (e) { logger.warn('[guard] 纠正重试失败，保留原回复:', e.message) }

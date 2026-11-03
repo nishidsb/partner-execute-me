@@ -62,8 +62,11 @@ function init ({ dataRoot, log, assistant }) {
       try { return require('../companion').userProfileText().replace(/^用户资料：/, '') } catch { return '' }
     },
     // 0.18.0 M8：每轮完整回复后写长期记忆账本（ roleId 为空 = 当前桌面角色）
-    onMemoryTurn: (roleId, userText, reply) => {
+    // 0.45.99 只记主人：meta.isOwner === false（群友 / 白名单里别人的号）→ 不入长期记忆。
+    // 她照样回话，只是「别人的话」不会被当成发生过的事实记下来。
+    onMemoryTurn: (roleId, userText, reply, meta) => {
       try {
+        if (meta && meta.isOwner === false) return
         const a = ctx
         if (a && typeof a.memoryExtract === 'function') a.memoryExtract(roleId || currentCharId(), userText, reply)
       } catch { }
@@ -235,7 +238,14 @@ function init ({ dataRoot, log, assistant }) {
   ipcMain.handle('wx:probe', async () => await wxMod.pollOnce(true))
 
   outerLog('[im] 群聊接入模块就绪 home=' + home)
-  return { brain, client, wx: wxMod }
+  // 0.45.91：client 用 getter 暴露 —— 原来这里返回的是 init 那一刻的快照，
+  // 一旦走 im:connect 重建客户端，外部（main.js 的 QQ 主动找人桥接）拿到的还是旧对象，
+  // 状态永远停在断开，主动消息全哑。
+  return {
+    brain,
+    wx: wxMod,
+    get client () { return client }
+  }
 }
 
 module.exports = { init }

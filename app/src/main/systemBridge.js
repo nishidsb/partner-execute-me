@@ -34,13 +34,19 @@ function looksLikeGame (name) {
 
 /* ---------------- 电脑画像（0.24.0，只读） ---------------- */
 
-/** 当前角色工作区（画像跟角色卡走） */
+/** 当前角色工作区（画像跟角色卡走）
+ *  0.46.10 修复：原实现 require('./config')，但 src/main 下根本没有这个文件——
+ *  MODULE_NOT_FOUND 被下面的 catch 吞掉后恒返回 ''，导致 pc_profile 永远「还没采到」、
+ *  pc_refresh 必败「还没拿到角色工作区」（真机 2026-11-02 19:34 实锤：搜索记录数据
+ *  明明就在工作区 pc/search.md，134 条）。定时采集端写的就是 companion 当前角色的
+ *  工作区，这里对齐同一个源。 */
 function currentWs () {
   try {
-    const cfgMod = require('./config')
-    const role = cfgMod.getConfig().currentRole
-    return require('./assistant').workspaceDirFor(role) || ''
-  } catch { return '' }
+    const char = require('./companion/character').get()
+    const id = char && char.id
+    if (id) return require('./assistant').workspaceDirFor(id) || ''
+  } catch { }
+  return ''
 }
 
 function pcOn () {
@@ -115,7 +121,8 @@ async function pcImpression ({ note, remove } = {}) {
      每轮被硬塞进去，却永远不会被「想起」。账本有强度和召回，聊到相关话题时会自己浮上来。 */
   if (r.added && note) {
     try {
-      const role = require('./config').getConfig().currentRole
+      const char = require('./companion/character').get()
+      const role = char && char.id // 0.46.10：原来引用的 config 模块不存在（见 currentWs 注释）
       if (role) {
         require('./companion/memory').addEvent(role, {
           cat: 'fact', text: String(note).slice(0, 120), importance: 4, source: 'profile'

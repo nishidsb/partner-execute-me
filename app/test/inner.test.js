@@ -199,7 +199,9 @@ test('护栏：废话通道的频控与时段必须写死，不能被后人改�
   assert.match(src, /MAX_PER_DAY\s*=\s*\d+/, '每天上限')
   assert.match(src, /q\s*>=\s*0\.6/, '她太安静时不碎碎念')
   assert.match(src, /不要提问/, '废话不能变成提问（没人会回答）')
-  assert.match(src, /speech:\s*false/, '废话只出气泡、不朗读')
+  // 0.46.0 朗读改为「默认开、低频」：出口 speech 由开关×概率×每日上限决定，不许写死常开
+  assert.match(src, /voiceCfgOf/, '朗读参数集中管理（开关/概率/每日上限）')
+  assert.match(src, /chatterVoiceDailyMax/, '每日朗读上限必须在场')
 })
 
 test('护栏：闹钟类开口不受安静度拦截（功能不能因为心情失效）', () => {

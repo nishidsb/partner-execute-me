@@ -12,6 +12,9 @@ const path = require('path')
 const { fileURLToPath } = require('url')
 const { segmentsToText, isAtMe, imageSegmentsOf } = require('./onebot')
 const pcTools = require('./pc-tools')
+// 0.45.98 回复清洗只留台词本身：模型会照抄账本里的格式（（QQ）前缀、括号译文），
+// 这里统一剥掉，QQ 对面不会看到标注，朗读也不会把译文念出来。
+const { stripChannelTag, plainText, readableText } = require('../../shared/reply-text')
 
 /** FF14 专属角色模块（懒加载：数据包缺失时返回 null，退化为普通聊天） */
 let _ff14 = null
@@ -91,10 +94,15 @@ const DEFAULTS = {
   // 关掉它时，破坏性命令（rm -rf / shutdown / reg add / 重定向覆盖…）仍然强制确认
   pcTerminalAsk: true,
   // 0.45.12 她主动在 QQ 上找主人（主人不在电脑前时）：只发给 reachAccount（默认取 ownerAccounts[0]）
+  // 0.45.97：不再有 reachMinGapMin / reachDailyMax——用户 11-02「随机发就可以了，不用在意多少条」
   reachOn: true,
   reachAccount: '',              // 指定发给谁（QQ 号）；空 = 用 ownerAccounts 第一个
-  reachMinGapMin: 120,           // 两次主动找他最小间隔（分钟）
-  reachDailyMax: 3,              // 每天最多主动找几次
+  // 0.45.93 主动消息的时段策略（用户 11-02：「谷价可发和全时段可发，都要有对应功能」）
+  //   all    = 全时段可发（默认：先保证「想找他就发得出去」）
+  //   valley = 只在谷时窗口内发（跨零点也支持，例如 23:00→08:00）
+  reachWindowMode: 'all',
+  reachValleyFrom: '23:00',
+  reachValleyTo: '08:00',
   // 0.45.21 NapCat 自动守护：im 连不上时她自己去拉协议端（一次配置扫码后零操作）
   napcatCmd: '',                 // NapCatWinBootMain.exe 全路径
   napcatArgs: '',                // 启动参数（登录过一次后填 QQ 号 = quick 免扫码）
@@ -163,8 +171,11 @@ function clampCfg (patch) {
   if (typeof p.napcatCmd === 'string') out.napcatCmd = p.napcatCmd.trim().slice(0, 300)
   if (typeof p.napcatArgs === 'string') out.napcatArgs = p.napcatArgs.trim().slice(0, 120)
   out.napcatAutoStart = p.napcatAutoStart !== undefined ? !!p.napcatAutoStart : DEFAULTS.napcatAutoStart
-  out.reachMinGapMin = n(p.reachMinGapMin, 15, 1440, DEFAULTS.reachMinGapMin)
-  out.reachDailyMax = n(p.reachDailyMax, 1, 20, DEFAULTS.reachDailyMax)
+  // 0.45.93 时段策略：只认两种模式，时间必须是合法 HH:MM（坏值退回默认，别让设置页能把自己锁死）
+  out.reachWindowMode = p.reachWindowMode === 'valley' ? 'valley' : 'all'
+  const hhmm = (v, d) => (/^([01]?\d|2[0-3]):[0-5]\d$/.test(String(v || '').trim()) ? String(v).trim().padStart(5, '0') : d)
+  out.reachValleyFrom = hhmm(p.reachValleyFrom, DEFAULTS.reachValleyFrom)
+  out.reachValleyTo = hhmm(p.reachValleyTo, DEFAULTS.reachValleyTo)
   return out
 }
 
@@ -177,6 +188,7 @@ const SYSTEM_RULES = `
 
 - 你正在以一个普通账号的身份在聊天软件里跟人聊：可能是群，也可能是一对一私聊。
 - ⭐ 像群友一样说话：短句、口语、有性格，一两句就够了，别写作文，别列条目，别用标题和 markdown。
+- ⭐ 一条消息只写一种语言：对方发中文就用中文回（QQ/微信对面只看得到文字，不会听到你的声音）。不要在同一条里「原文 + 括号译文」写两遍，也不要给自己加「（QQ）」这类场合标注——那是系统记的账，不是你说话的一部分。
 - ⭐ 不要自报家门说自己是 AI/机器人/助手，除非对方直接追问且不好再躲。
 - 看不懂的梗就大方问，别硬接；被骂了可以怼回去，人设第一。
 - 群里没人 @ 你时你偶尔插话 —— 那是「听到有意思的话题随口一句」，别接不上的话茬。
@@ -256,6 +268,9 @@ function buildSystem (cfg, ctx, perm) {
  *  注意保留 ？! 这种合法语气组合（run 收敛只对「同一个字符」连打生效）。 */
 function cleanReply (s) {
   let t = String(s || '')
+  // 0.45.98：模型会照抄账本里的格式（开头「（QQ）」、末尾一段括号译文）。
+  // QQ 是纯文字通道，一条消息只留一种语言——有括号译文就发译文，否则发原文。
+  t = readableText(t)
   t = t.replace(/([，。、；：？！])\1+/g, '$1')                // 同字符标点连打收敛
   t = t.replace(/[ \t]+([，。、；：？！])/g, '$1')             // 标点前不留空格
   t = t.replace(/([，。、；：？！])[ \t]+/g, '$1')             // 标点后不留空格
@@ -315,9 +330,10 @@ function resolveSlot (slots, ev) {
   return list.find((s) => !(s.chats || []).length) || null
 }
 
-/** 0.45.27 QQ 场合说明（追加进主账本 sys）：入账条目带（QQ）前缀只是一半——
- *  她还得被告知「你在 QQ 上有号、那些带（QQ）的消息就是 QQ 上的往来」，
+/** 0.45.27 QQ 场合说明（追加进主账本 sys）：只给她自己看的标注——
+ *  她得被告知「你在 QQ 上有号、标着 [QQ] 的那些往来就是 QQ 上发生的」，
  *  否则模型把主账本里的 QQ 消息当主人复述（真机实锤 22:28「QQ の中身は見えない」）。
+ *  0.45.98 标注只在上下文里加，账本正文干净；这里顺带说明「别自己写这个标注」。
  *  her 号从 napcatArgs 提取（快速登录参数就是 QQ 号）；没配齐就返回空（不出声）。 */
 function qqWorldBlock (cfg) {
   const c = cfg || {}
@@ -328,8 +344,9 @@ function qqWorldBlock (cfg) {
   return [{
     text: '【你的 QQ】' + (self ? `你在 QQ 上有自己的账号（${self}），` : '你在 QQ 上有自己的账号，') +
       `主人的号是 ${owner}。你会在 QQ 私聊上收发消息，有时也主动找他。` +
-      '这些往来会同步进这段聊天记录——消息前带（QQ）标注的，就是发生在 QQ 上的：主人从 QQ 发来的、还有你在 QQ 上的回复。' +
-      '那也是你，不是转述，不是别人替你记录。说起「刚才在 QQ 上」时你其实记得，别说自己看不到。'
+      '这些往来会同步进这段聊天记录——消息前标着 [QQ] 的，就是主人从 QQ 上发来的；紧跟着的那句回复就是你在 QQ 上说过的话。' +
+      '那也是你，不是转述，不是别人替你记录。说起「刚才在 QQ 上」时你其实记得，别说自己看不到。' +
+      '（[QQ] 只是给你看的标注，你说话时自己不要写它，也不要在一条消息里另附译文。）'
   }]
 }
 
@@ -506,8 +523,18 @@ function createBrain ({ home, getProvider, getContext, send, callApi = null, syn
     }
     persist()
     // 长期记忆：每轮完整回复后本地提取 + 攒轮次（每 4 轮 LLM 整理）——失败不影响聊天
+    // 0.45.99 只记主人：群里别人 @ 她、白名单里别的号私聊，照常聊但不写长期记忆。
+    // 起因（用户 11-02）：「这个我只是自己用的，不是还有主人账号吗」——主人名单该是
+    // 「谁说的话算事实」的边界，而不是只管命令权限。群聊一句「我明天考试」被记成 imp5
+    // 的约定，就是这么来的。isOwner 由 permOf 判定，跟命令权限同一份。
     if (typeof onMemoryTurn === 'function') {
-      try { Promise.resolve(onMemoryTurn(roleId, text, reply)).catch(() => { }) } catch { }
+      try {
+        Promise.resolve(onMemoryTurn(roleId, text, reply, {
+          isOwner: !!perm.isOwner,
+          group: ev.message_type === 'group',
+          uid: perm.uid
+        })).catch(() => { })
+      } catch { }
     }
     return reply
   }
@@ -698,17 +725,40 @@ function createBrain ({ home, getProvider, getContext, send, callApi = null, syn
     const ffDefs = (ff && ff.TOOL_DEFS) || []
     if (!ffDefs.length && !imDefs.length) return provider.chat({ messages: msgs })
     const tools = [...ffDefs, ...imDefs]
+    // 0.45.95：DeepSeek thinking 模式要求带 tool_calls 的 assistant 消息回传思维链，
+    // 否则下一轮 400（用户侧看到的就是「QQ 里她突然不回了」）。这里跟助手核心同一套规则。
+    const echoRsn = /deepseek/i.test(String((provider && provider.baseUrl) || '')) || /deepseek/i.test(String((provider && provider.model) || ''))
     let last = null
     for (let round = 0; round <= 5; round++) {
-      const r = await provider.chat({ messages: msgs, tools })
+      let r
+      try {
+        r = await provider.chat({ messages: msgs, tools })
+      } catch (err) {
+        // 只处理「端点要思维链」这一类 400：图片/上下文超长的 400 交给外层已有的降级逻辑，
+        // 别抢在它前面把带图的那条也重发了（那等于把图片降级彻底盖掉）。
+        if (!(err && err.status === 400 && /reasoning_content/i.test(String(err.message || '')))) throw err
+        log('[im] 模型 400，改用纯文本上下文重试：' + String(err.message).slice(0, 120))
+        const flat = msgs.filter((m) => m.role !== 'tool').map((m) => {
+          if (m.role === 'assistant' && m.tool_calls) {
+            const names = m.tool_calls.map((t) => (t.function && t.function.name) || '').filter(Boolean).join('、')
+            return { role: 'assistant', content: (String(m.content || '') + '\n（我调用了工具：' + names + '）').trim() }
+          }
+          return m
+        })
+        msgs.length = 0
+        msgs.push(...flat)
+        r = await provider.chat({ messages: msgs, tools })
+      }
       last = r
       const calls = (r.toolCalls && r.toolCalls.length) ? r.toolCalls : []
       if (!calls.length || round === 5) break
-      msgs.push({
+      const asstMsg = {
         role: 'assistant',
         content: r.content || null,
         tool_calls: calls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.arguments } }))
-      })
+      }
+      if (echoRsn) asstMsg.reasoning_content = String(r.reasoning || '')
+      msgs.push(asstMsg)
       for (const tc of calls) {
         let args = {}
         try { args = JSON.parse(tc.arguments || '{}') } catch { }

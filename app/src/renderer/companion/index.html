@@ -17,6 +17,7 @@
         </div>
       </div>
       <div id="titleRight">
+        <button id="btnAct" class="tb-btn" data-i18n-title="nav.actTitle">动作</button>
         <button id="btnMemory" class="tb-btn" data-i18n="nav.memory" data-i18n-title="nav.memoryTitle">记忆</button>
         <button id="btnModel" class="tb-btn" data-i18n="nav.model" data-i18n-title="nav.modelTitle">模型</button>
         <button id="btnMic" class="tb-btn" data-i18n-title="win.mic">🎙</button>
@@ -45,6 +46,18 @@
       <button id="btnSend" data-i18n-title="win.send">➤</button>
       <button id="btnStop" data-i18n-title="win.stop" hidden>■</button>
     </footer>
+
+    <!-- 动作测试面板（0.45.87 从助手控制台搬进主窗）：手动点播动作词验证演出 -->
+    <aside id="actPanel" hidden>
+      <div class="ap-head"><b>动作测试</b><button id="actClose" class="cd-btn">✕</button></div>
+      <p class="ap-lead">点一个词，她当场演一遍。平时的动作仍由她自己决定，这里只做手动验证。</p>
+      <div id="actGrid"></div>
+      <div class="ap-custom">
+        <input id="actInput" placeholder="任意词 / 动作文件名">
+        <button id="actPlay" class="cd-btn">播放</button>
+      </div>
+      <p id="actMsg"></p>
+    </aside>
 
     <!-- 角色抽屉 -->
     <aside id="charDrawer" hidden>
@@ -633,6 +646,7 @@
         <label class="cd-check"><input type="checkbox" id="cpDiagContext"> <span data-i18n="inner.diag">在日志里记录每轮上下文字数（排障用，平时关着）</span></label>
         <label class="cd-check"><input type="checkbox" id="cpIdleNudge" checked> <span data-i18n="inner.nudge">黏人模式（太久没理她，她会阶梯式地主动来找你：先轻轻问一句，久了一点不安，再久了写小作文；说「去睡了」她就不吵你）</span></label>
         <label class="cd-check"><input type="checkbox" id="cpChatterBoost"> <span data-i18n="inner.chatterBoost">高频碎碎念（试险）：她的自言自语从每天 5 条提到 15 条——更「家里有人」，也更容易腻，腻了随时关回去</span></label>
+        <label class="cd-check"><input type="checkbox" id="cpChatterVoice" checked> <span data-i18n="inner.chatterVoice">自言自语出声：她嘀咕时会自动用轻声念出来（音量约三成半，像自顾自嘟囔；每天最多 12 句；关掉就只冒气泡）</span></label>
         <div class="hint" id="cpInteractStat" style="white-space:pre-wrap">读取中…</div>
 
         <h4 class="sp-sec" data-i18n="sec.petSound">音效与说话声</h4>
@@ -1071,6 +1085,26 @@
           <div class="hint" data-i18n="im.pcToolsHint">主人名单里的人发「看看电脑在干嘛」「帮我关机」她会直接照做；名单外的人连这组工具都看不到。名单为空 = 电脑工具永远不挂。</div>
           <label class="cd-check"><input type="checkbox" id="imPcTerminalAsk" checked> <span data-i18n="im.pcTerminalAsk">执行命令前要主人回一句「确认」</span></label>
           <div class="hint" data-i18n="im.pcTerminalHint">QQ/微信里没人看着屏幕，所以命令先摆出来再等主人确认；关掉后普通命令直接跑，但破坏性命令（rm -rf / shutdown / reg add / 重定向覆盖…）仍然强制确认。</div>
+          <div class="sp-sec" style="margin-top:14px;font-weight:600" data-i18n="im.reachSec">她主动在 QQ 上找你</div>
+          <div class="row">
+            <label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="imReachOn" checked> <span data-i18n="im.reachOn">允许她主动给你发 QQ 消息</span></label>
+          </div>
+          <div class="hint" data-i18n="im.reachHint">只发给你（主人账号第一个 / 下面填的收件人），绝不发给别人。她答应「几点找你」会真的排上闹钟到点发；聊到「你什么时候会给我发消息」会当场发一条。</div>
+          <div class="field-label"><span data-i18n="im.reachWindowLabel">什么时候可以主动发</span></div>
+          <select id="imReachWindow">
+            <option value="all" data-i18n="im.reachAll">全时段可发（任何时间都行）</option>
+            <option value="valley" data-i18n="im.reachValley">谷时可发（只在下面这个时间段）</option>
+          </select>
+          <div class="row" id="imReachWindowRow">
+            <span data-i18n="im.reachFrom" style="white-space:nowrap">谷时：从</span>
+            <input id="imReachFrom" type="time" style="width:120px">
+            <span data-i18n="im.reachTo" style="white-space:nowrap">到</span>
+            <input id="imReachTo" type="time" style="width:120px">
+            <small data-i18n="im.reachWrap">跨零点也支持（如 23:00 → 08:00）</small>
+          </div>
+          <div class="hint" data-i18n="im.reachWindowHint">「谷时」= 只在这个时间段发（默认 23:00–08:00，可以改成你想要的任何时段）。全时段 = 不设时间限制。她按自己的节奏随机找你，不设每天条数；屏幕前的陪伴和 QQ 算同一件事，一边说过话，另一边就不会跟着补一句。</div>
+          <div class="field-label" data-adv><span data-i18n="im.reachAccountLabel">收件人 QQ 号</span><small data-i18n="im.reachAccountSmall">留空 = 用主人账号第一个</small></div>
+          <input id="imReachAccount" placeholder="收件人 QQ 号（留空 = 主人账号第一个）" data-adv>
           <input id="imGroups" placeholder="只在这些 QQ 群里说话，逗号分隔；留空 = 所有群" data-adv>
           <div class="row" data-adv>
             <span data-i18n="im.hourly" style="white-space:nowrap">每群每小时最多回</span>

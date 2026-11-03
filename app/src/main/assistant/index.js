@@ -166,6 +166,8 @@ async function confirmFn (name, args, risk) {
   // 兜底：设置页里 allowTools 已经放行的工具（registry 也会判，这里防旧调用）
   if ((perm.allowTools || []).includes(name)) return true
   if (name === 'open_app' && appAllowed(args && args.name, perm)) return true
+  // 0.45.92 每天排查「又在问我」时，这行是唯一能看出「问的是什么」的线索
+  log('[assistant] 需要确认：' + name + '（档位 ' + perm.mode + '）')
 
   // 0.18.0 第二批：终端类专用确认——把命令原文摆在最显眼处，只给「执行这一次 / 拒绝」，
   // 不给「30 分钟内都允许」（那等于把一整类不可逆操作一次性放行）。
@@ -209,7 +211,10 @@ async function confirmFn (name, args, risk) {
       (TOOL_WHAT[name] ? '\n（这会真的动你的鼠标键盘）' : ''),
     buttons,
     rememberIndex: 1,
-    rememberLabel: canRememberApp ? '' : '',
+    // 0.45.92 原来这里传空串，但 CSS 里 .remember{display:flex} 会盖掉 hidden，
+    // 于是那个「记住」勾选框一直显示、没有文字、勾了主进程也不读 —— 勾了等于没勾。
+    // 现在语义只走按钮（第二个按钮就是「记住」），勾选框彻底不放出来。
+    rememberLabel: '',
     timeoutMs: 60000
   })
   if (r.index < 0) {
@@ -218,8 +223,10 @@ async function confirmFn (name, args, risk) {
   }
   const denied = buttons.length - 1
   if (r.index === denied) return false
-  if (canRememberApp && r.index === 1) { rememberApp(args.name); return true }
-  if (!canRememberApp && r.index === 1) { grantOnce(); return true }
+  // r.remember 是勾选框（历史遗留）——留着兼容，等价于按了「记住」
+  const remembered = r.index === 1 || !!r.remember
+  if (canRememberApp && remembered) { rememberApp(args.name); return true }
+  if (!canRememberApp && remembered) { grantOnce(); return true }
   // ask-once 档位本身就是「问一次」：选了允许就把这半小时一起放过
   if (r.index === 0 && perm.mode === 'ask-once') { grantOnce(); return true }
   return r.index === 0
@@ -266,6 +273,20 @@ async function init ({ logDir, dataRoot: root, bcast } = {}) {
   // S3：桌宠六工具交给主进程实现（懒加载，避免与 pet 模块的 boot 顺序耦合）
   if (tools && typeof tools.setPetBridge === 'function') {
     tools.setPetBridge((name, args) => require('../petBridge').invoke(name, args))
+  }
+  // 0.45.93 主动发 QQ 四工具：走同一条 petBridge（companion 里才有 imApi 和计划队列）
+  if (tools && typeof tools.setReachBridge === 'function') {
+    tools.setReachBridge((name, args) => require('../petBridge').invoke(name, args))
+  }
+  // 0.46.6 闹钟三工具桥：alarm.js 的注释写着「与 pet_* 共用同一条桥」，实际却建了独立的
+  // module 级 bridge，宿主从来没注入过——她每次设闹钟都报「闹钟未连接（宿主没有注入定时器）」
+  // （ryza.log 10-31 起多次实证），只能用 remember 曲线救国。学习三工具同款（setStudyBridge
+  // 也没人喂），petBridge 里 case 全都写好了，一并接上。
+  if (tools && typeof tools.setAlarmBridge === 'function') {
+    tools.setAlarmBridge((name, args) => require('../petBridge').invoke(name, args))
+  }
+  if (tools && typeof tools.setStudyBridge === 'function') {
+    tools.setStudyBridge((name, args) => require('../petBridge').invoke(name, args))
   }
   // S6.5：开程序 / 开游戏 / 游戏模式
   if (tools && typeof tools.setSystemBridge === 'function') {
@@ -537,7 +558,11 @@ async function handleSend (_e, text, images) {
       onDelta: (chunk) => bcastAll('assistant:delta', { seq, text: chunk }),
       onTool: (name) => bcastAll('assistant:tool', { seq, name }),
       confirmFn,
-      policy: { mode: perm.mode, allowTools: perm.allowTools, grantUntil: perm.grantUntil },
+      // 0.45.92 之前这里漏了 allowTerminal —— permSettings 算出来了、registry 也在等它，
+      // 唯独没人传。结果「终端命令单独询问」这个开关是死的：关了照样每条命令问一次。
+      // 0.45.93 用户明确要求「不需要询问我是否执行」：开关关掉就是一条都不问（原先我加的
+      // 「危险命令仍问一次」也算打扰，撤掉了——他要的是不被打断，风险由他自己认）。
+      policy: { mode: perm.mode, allowTools: perm.allowTools, grantUntil: perm.grantUntil, allowTerminal: perm.allowTerminal },
       replyLang: lang.reply,
       // 截图要不要发给模型：纯文本模型 / 用户关掉了「允许截屏看桌面」就纯文本跑。
       // 模型本身读不了图时也直接关掉——否则每轮都要先吃一次 400 再降级重跑。
@@ -1024,17 +1049,18 @@ function pushExternalReply (text, display) {
  *  via 标记来源（qq/pet/chatter/autonomy/proactive），条目 external:true；assistant 台词可带 sub 字幕。
  *  主人的要求（10-30）：所有功能中涉及到的行为聊天都必须进记忆。
  *  0.45.27 场合可见：qq/pet 通道的条目带（QQ）/（气泡）前缀——上下文组装只发 role/content，
- *  via 字段模型看不到；不带前缀她就不知道那几条消息是 QQ 上发生的（真机实锤 22:28「QQ の中身は見えない」）。 */
-const CHANNEL_TAGS = { qq: '（QQ）', pet: '（气泡）' }
+ *  via 字段模型看不到；不带前缀她就不知道那几条消息是 QQ 上发生的（真机实锤 22:28「QQ の中身は見えない」）。
+ *  0.45.98 改成「标注只在请求里加」：以前把（QQ）写进 content，模型照抄进回复，
+ *  QQ 对面直接看到「（QQ）好，六点…」。现在 content 只存台词本身，via 保留在字段里，
+ *  session.messages() 组装上下文时再给 user 侧补 [QQ]/[桌面] 标注（见那边的注释）。 */
 function ledgerNote ({ via, user, assistant: aText, self, sub }) {
   try {
     if (!ready) return { ok: false }
     const { session } = getSession()
     const at = Date.now()
     const v = String(via || 'ext')
-    const tag = CHANNEL_TAGS[v] || ''
-    if (user) session.history.push({ role: 'user', content: tag + String(user), at, external: true, via: v })
-    if (aText) session.history.push({ role: 'assistant', content: tag + String(aText), ...(sub ? { sub: String(sub) } : {}), at: at + 1, external: true, via: v })
+    if (user) session.history.push({ role: 'user', content: String(user), at, external: true, via: v })
+    if (aText) session.history.push({ role: 'assistant', content: String(aText), ...(sub ? { sub: String(sub) } : {}), at: at + 1, external: true, via: v })
     if (self) session.history.push({ role: 'assistant', content: String(self), at: at + 2, external: true, via: v }) // self 自带说明（如 reach 的「我用 QQ 发消息找他」），不加 tag
     try { session.saveHistory() } catch { }
     return { ok: true }

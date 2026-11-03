@@ -109,12 +109,17 @@ function goalBlockOf (state) {
 /**
  * 泄压（纯函数，返回新状态）。
  * kind = 'session' 自主活动散场：无聊泄到大半、好奇泄掉一截、想分享不动（没跟主人讲就不算分享）
+ * kind = 'interrupt' 主人回来被打断（0.46.4）：也算出了半趟门——真的看了做了，好奇泄一半；
+ *                    以前 user-back 完全不泄压，好奇常年顶在 100，她永远处于「憋着一股劲」状态
  * kind = 'chat'    主人开口聊天：想分享泄掉、无聊也松一点
  */
 function dischargeOf (state, now, kind) {
   const base = gainOf(state, now, {})
   if (kind === 'chat') {
     return Object.assign({}, base, { share: 10, boredom: clamp(base.boredom - 15) })
+  }
+  if (kind === 'interrupt') {
+    return Object.assign({}, base, { boredom: clamp(base.boredom - 20), curiosity: clamp(base.curiosity - 25) })
   }
   // session：无聊回到 15，好奇打对折再减一点
   return Object.assign({}, base, { boredom: 15, curiosity: clamp(base.curiosity - 45) })

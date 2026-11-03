@@ -616,3 +616,108 @@ test('autonomy: 挡3 工具集带 read_text（读正文能力）', async () => {
   const names = (defs || []).map((d) => d.function.name)
   assert.ok(names.includes('read_text'), 'tools 里要有 read_text：' + names.join(','))
 })
+
+/* ---- 0.46.17 性格层：品味 / 牵挂 / 活动可见 ---- */
+const fs2 = require('node:fs')
+const osp = require('node:os')
+const pth = require('node:path')
+
+test('0.46.17 品味：讨厌的话题被剔除，喜欢的话题加权，只剩讨厌的就不出门', () => {
+  const pool = { themes: ['显卡', '做饭', '显卡评测'] }
+  const tastes = [
+    { what: '做饭', polarity: 'dislike' },
+    { what: '显卡', polarity: 'like' }
+  ]
+  for (let i = 0; i < 60; i++) {
+    const t = a.pickTopic(pool, Math.random, tastes)
+    assert.notEqual(t, '做饭', '讨厌的话题不该被选中')
+  }
+  assert.equal(a.pickTopic({ themes: ['做饭'] }, () => 0, [{ what: '做饭', polarity: 'dislike' }]), '', '只剩讨厌的就宁可不出门')
+  assert.equal(a.pickTopic({ themes: ['显卡'] }, () => 0, []), '显卡', '不带喜恶时行为照旧')
+})
+
+test('0.46.17 品味：常去的站点权重高，留 20% 探索余地', () => {
+  const dir = fs2.mkdtempSync(pth.join(osp.tmpdir(), 'ryza-sites-'))
+  assert.equal(a.readSiteStats(dir).bili, undefined, '没统计前没有偏好')
+  assert.equal(a.pickSite(dir, () => 0.5), a.SITES[1], '无统计 = 均匀分布')
+  a.bumpSite(dir, 'bili'); a.bumpSite(dir, 'bili'); a.bumpSite(dir, 'bili')
+  assert.equal(a.readSiteStats(dir).bili.n, 3)
+  assert.equal(a.pickSite(dir, () => 0.5), a.SITES[0], '常去的站同样的 rand 会落回去')
+  assert.equal(a.pickSite(dir, () => 0.1), a.SITES[0], '20% 探索分支照样能出门')
+})
+
+test('0.46.17 牵挂：写入/读取/销账/三天过期', () => {
+  const dir = fs2.mkdtempSync(pth.join(osp.tmpdir(), 'ryza-carry-'))
+  assert.equal(a.readCarry(dir), null, '没有牵挂就是没有')
+  a.writeCarry(dir, 'SQL 表结构', 'history.19.sql - 哔哩哔哩')
+  const c = a.readCarry(dir)
+  assert.equal(c.topic, 'SQL 表结构')
+  assert.match(a.carryLineOf(c), /还没看完，接着看/, '续接要有开场白')
+  a.clearCarry(dir)
+  assert.equal(a.readCarry(dir), null, '销账后不再牵挂')
+  a.writeCarry(dir, '旧线索', '')
+  const p = pth.join(dir, 'pc', 'autonomy', 'carry.json')
+  const o = JSON.parse(fs2.readFileSync(p, 'utf8'))
+  o.t = Date.now() - 4 * 86400000
+  fs2.writeFileSync(p, JSON.stringify(o))
+  assert.equal(a.readCarry(dir), null, '超过三天的牵挂该放下了')
+})
+
+test('0.46.17 牵挂时间词：几小时前=刚才，隔天=昨天，更久=前几天', () => {
+  const now = Date.now()
+  const mk = (t) => ({ t, topic: 'X' })
+  assert.match(a.carryLineOf(mk(now - 2 * 3600000)), /^刚才那个/)
+  assert.match(a.carryLineOf(mk(now - 20 * 3600000)), /^昨天那个/)
+  assert.match(a.carryLineOf(mk(now - 3 * 86400000)), /^前几天那个/)
+})
+
+test('0.46.17 活动可见：出门嘀咕一声（确认到浏览器才说），翻够 3 下再说一句', async () => {
+  const calls = []
+  const lines = []
+  const r = await a.runBrowse({
+    ...base,
+    cua: cuaStub(calls),
+    foreground: fgSeq([
+      { pn: 'Code', title: 'main.js', hwnd: 1 },
+      { pn: 'msedge', title: '显卡驱动 - 哔哩哔哩', hwnd: 2 },
+      { pn: 'msedge', title: '显卡驱动 - 哔哩哔哩', hwnd: 2 },
+      { pn: 'msedge', title: '教程A - 哔哩哔哩', hwnd: 2 },
+      { pn: 'msedge', title: '教程B - 哔哩哔哩', hwnd: 2 },
+      { pn: 'msedge', title: '教程B - 哔哩哔哩', hwnd: 2 }
+    ]),
+    onSoliloquy: async (l) => { lines.push(l) }
+  })
+  assert.equal(r.ok, true)
+  assert.ok(lines.length >= 1 && lines.length <= 2, '嘀咕 1~2 句：' + JSON.stringify(lines))
+  assert.match(lines[0], /去康康/)
+})
+
+test('0.46.17 活动可见：续接线索用传入的开场白；没翻到东西就只此一句；上限 0 = 安静', async () => {
+  const lines = []
+  await a.runBrowse({
+    ...base,
+    cua: cuaStub([]),
+    foreground: fgSeq([
+      { pn: 'Code', title: 'main.js', hwnd: 1 },
+      { pn: 'msedge', title: 'SQL 表结构', hwnd: 2 },
+      { pn: 'msedge', title: 'SQL 表结构', hwnd: 2 }
+    ]),
+    carryLine: '昨天那个「SQL 表结构」还没看完，接着看',
+    onSoliloquy: async (l) => { lines.push(l) }
+  })
+  assert.equal(lines[0], '昨天那个「SQL 表结构」还没看完，接着看')
+  assert.equal(lines.length, 1, '没翻够就只有开场一句')
+  const lines2 = []
+  await a.runBrowse({
+    ...base,
+    cua: cuaStub([]),
+    foreground: fgSeq([
+      { pn: 'Code', title: 'main.js', hwnd: 1 },
+      { pn: 'msedge', title: 'x', hwnd: 2 },
+      { pn: 'msedge', title: 'x', hwnd: 2 }
+    ]),
+    onSoliloquy: async (l) => { lines2.push(l) },
+    soliMax: 0
+  })
+  assert.equal(lines2.length, 0, '上限 0 = 安静模式')
+})

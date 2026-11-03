@@ -98,13 +98,16 @@ function setTalking (on) {
   if (figureLoop && figureLoop.setTalk) { try { figureLoop.setTalk(on) } catch {} }
 }
 /** 播放一段语音；返回 Promise，在播放结束/失败/被打断时 resolve（气泡靠它跟语音对齐） */
-function playVoice (url, speed) {
+function playVoice (url, speed, vol) {
   return new Promise((resolve) => {
     try {
       if (nowPlaying) { nowPlaying.pause(); nowPlaying = null }
       settleVoice() // 上一段被打断 → 它的等待者立即收尾
       const a = new Audio(url)
       if (speed && speed !== 1) a.playbackRate = speed
+      // 0.46.11 嘀咕音量：自言自语用低音量播（缺省 1 = 正常说话）
+      const v = Number(vol)
+      if (Number.isFinite(v)) a.volume = Math.min(1, Math.max(0.05, v))
       nowPlaying = a
       let done = false
       const finish = () => {
@@ -333,7 +336,9 @@ function statusClear () {
  * 助手核心的回复此前只有文字气泡、没有声音；这里把正文清洗后走 TTS，失败回退系统语音。 */
 let readReply = true // 设置项「朗读 AI 回复」，默认开（用户澄清气泡音≠朗读，保持原默认）
 function cleanForSpeech (text) {
-  return String(text || '')
+  // 0.45.98 先剥「（QQ）」前缀与结尾的括号译文（那是字幕，不该念出来）
+  const raw = (window.replyText && window.replyText.plainText) ? window.replyText.plainText(String(text || '')) : String(text || '')
+  return raw
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`]*`/g, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -343,15 +348,17 @@ function cleanForSpeech (text) {
     .replace(/\s+/g, ' ')
     .trim()
 }
-/** 朗读一段回复；返回 Promise，在「真的念完」时 resolve（气泡靠它决定何时淡出） */
-async function speakReplyText (content) {
+/** 朗读一段回复；返回 Promise，在「真的念完」时 resolve（气泡靠它决定何时淡出）
+ *  0.46.11 opts.vol：嘀咕音量（0.05~1，自言自语专用；缺省 = 正常音量） */
+async function speakReplyText (content, opts) {
   if (!petHosted) return false // 非宿主屏不朗读（多屏时会和宿主屏叠成双声道）
   if (isQuiet()) return false // pet_quiet 期间不出声（气泡照常显示，只是不念）
+  const vol = opts ? opts.vol : undefined
   const text = cleanForSpeech(content)
   if (!text || !window.aura || !window.aura.speakReply) return false
   let r = null
   try { r = await window.aura.speakReply(text) } catch {}
-  if (r && r.ok && r.url) { await playVoice(r.url, r.speed); return true }
+  if (r && r.ok && r.url) { await playVoice(r.url, r.speed, vol); return true }
   // 未配置 API TTS → 系统语音念一遍（同样等它念完，气泡不会提前消失）
   if (window.speechSynthesis) {
     return await new Promise((resolve) => {
@@ -359,6 +366,8 @@ async function speakReplyText (content) {
         speechSynthesis.cancel()
         const u = new SpeechSynthesisUtterance(text.slice(0, 600))
         u.lang = { zh: 'zh-CN', ja: 'ja-JP', en: 'en-US' }[touchLang] || 'zh-CN'
+        const vFall = Number(vol)
+        if (Number.isFinite(vFall)) u.volume = Math.min(1, Math.max(0.05, vFall))
         // 音色：主进程带回的 voiceName（角色卡优先）精确匹配；匹配不到再按语言挑
         const voices = speechSynthesis.getVoices()
         const byName = r && r.voiceName && voices.find((x) => x.name === r.voiceName)
@@ -527,10 +536,120 @@ function applyPetLook (c) {
 /* ---------------- S3：动作/表情播放（模型用 pet_act 与 pet_say 的标记驱动） ----------------
  * 只有 Spine 角色有动作词表；立绘/VRM 没有骨骼动画，用一档轻微的抖动反馈（仍算「已执行」）。
  * 表情走轨道 1（不打断身体动作），身体动作走轨道 0 并自动接回 idle。 */
-let spineAnimCtx = null // { state, anims, idle, faceTimer }
+let spineAnimCtx = null // { state, anims, idle, faceTimer, skelBase }
 let quietUntil = 0 // pet_quiet：安静截止时间（主进程到点会再广播解除）
 
 function isQuiet () { return Date.now() < quietUntil }
+
+/* ---- 0.45.90 Spine 动作全量接入（AgentAtelierR 素材 + 权威中文词典） ----
+ * 坐卡/命令坐下时整个骨架切到坐姿版（0001_01，867 条动画，含拍手/比耶/耳语/伸懒腰等），
+ * 站姿骨架（0001_99，164 条）做日常待机。词→动画组映射来自 spine-words.js（资源 Label 译注）。 */
+let spineSkelMode = 'stand' // 'stand' | 'sit'
+/** 0.45.91 当前姿势真正该用的骨架。不同皮肤不换（坐下换衣服=用户报的「自动换成其他皮肤」） */
+function spineSkelFor (v, mode) {
+  const mod = window.SPINE_SKIN
+  if (mod && typeof mod.pickSkel === 'function') {
+    return mod.pickSkel({ mode: mode || spineSkelMode, spine: (v && v.spine) || {} })
+  }
+  // 兜底：没有共享模块时按老逻辑（同皮肤判定缺席，宁可沿用站姿也不换装）
+  return { skel: v && v.spine && v.spine.skel, atlas: v && v.spine && v.spine.atlas, png: v && v.spine && v.spine.png, switched: false, reason: 'no-module' }
+}
+/* 骨架切换串行化：sit→stand→sit 连发时原来几个 dispose/showVisual 会互相插队，
+ * 最后一个跑完的未必是最后请求的那个（皮肤就停在了错的姿势上）。 */
+let skelSwitchChain = Promise.resolve()
+function applySpineSkelMode (mode) {
+  skelSwitchChain = skelSwitchChain.then(() => doApplySpineSkelMode(mode)).catch((e) => {
+    console.warn('[pet-ov] 骨架切换失败', mode, e && e.message)
+  })
+  return skelSwitchChain
+}
+async function doApplySpineSkelMode (mode) {
+  if (!spineAnimCtx) return // 没跑 spine（立绘/VRM）时忽略
+  if (spineSkelMode === mode) return
+  try {
+    const st = await window.aura.petState()
+    const v = st && st.char && st.char.visual
+    if (!(v && v.spine)) return
+    const cur = spineSkelFor(v, spineSkelMode)
+    const next = spineSkelFor(v, mode)
+    spineSkelMode = mode
+    // 同一套皮肤（或没有坐姿骨架）：只记姿势，不重载骨架 → 不会换衣服
+    if (String(cur.skel) === String(next.skel)) {
+      console.warn('[pet-ov] spine 姿势 → ' + mode + '（沿用当前皮肤：' + next.reason + '）')
+      return
+    }
+    disposeSpine()
+    await showVisual(st.char)
+    console.warn('[pet-ov] spine 骨架切换 →', mode, '(' + next.reason + ')')
+  } catch (e) { console.warn('[pet-ov] 骨架切换失败', mode, e && e.message) }
+}
+
+function spineAnimByName (n) {
+  return (spineAnimCtx && spineAnimCtx.anims || []).find((a) => a.name === n) || null
+}
+
+/** 播一条 spine 动作（自动分轨）：
+ *  facial_* → 轨 5（表情，短时淡出）；motion_oneshot_* → 轨 0（全身一次性，接回 idle）；
+ *  其余（motion_add、motion_touch、effect 等叠加层）→ 轨 1..3 叠在 idle 上，保持几秒后淡出。 */
+function playSpineAction (names) {
+  const ctx = spineAnimCtx
+  if (!ctx || !ctx.state) return false
+  try {
+    if (!ctx.mixWired) { try { ctx.state.data.defaultMix = 0.2 } catch {} ; ctx.mixWired = true }
+    const face = [], oneshot = [], body = []
+    for (const n of names) {
+      if (/^facial/i.test(n) || /blush|tear|sweat/i.test(n)) face.push(n)
+      else if (/^motion_oneshot/i.test(n)) oneshot.push(n)
+      else body.push(n)
+    }
+    if (face.length) {
+      ctx.state.setAnimation(5, face[0], false)
+      clearTimeout(ctx.faceTimer)
+      const fa = spineAnimByName(face[0])
+      const fd = Number(fa && fa.duration) || 1.2
+      ctx.faceTimer = setTimeout(() => { try { ctx.state.setEmptyAnimation(5, 0.25) } catch {} }, Math.max(600, fd * 1000))
+    }
+    if (oneshot.length) {
+      ctx.state.setAnimation(0, oneshot[0], false)
+      if (ctx.idle) ctx.state.addAnimation(0, ctx.idle.name, true, 0)
+    }
+    // 0.46.15 轨道优先级修正：组合里数组首位才是主手势（如害羞 grp_fg_111 = 遮嘴 F_030 + 支撑 G_051），
+    // Spine 高轨完全盖过共享骨骼的低轨——此前主手势在 1 号最低轨、G_051「右手放腿上」支撑在 2 号轨，
+    // 共享骨骼被支撑动画压住，观感就成了「只是把手放腿上」（真机用户实测：害羞/托腮/叉腰/挥手全中招）。
+    // 反转分配：主手势上最高轨（3），支撑手位落低轨。
+    body.slice(0, 3).forEach((n, i) => {
+      const tr = 3 - i
+      ctx.state.setAnimation(tr, n, false)
+      ctx.bodyTimers = ctx.bodyTimers || {}
+      clearTimeout(ctx.bodyTimers[tr])
+      const ba = spineAnimByName(n)
+      const bd = Number(ba && ba.duration) || 1.2
+      // 叠加层多为「摆姿」类：播完保持 4s 再淡出，叉腰/抱臂这类才有存在感
+      ctx.bodyTimers[tr] = setTimeout(() => { try { ctx.state.setEmptyAnimation(tr, 0.35) } catch {} }, Math.max(1500, bd * 1000 + 4000))
+    })
+    try { window.aura.reportError && window.aura.reportError('pet-act', '播放: ' + names.join(' + ') + (face.length ? ' +表情' + face[0] : '')) } catch { }
+    return true
+  } catch (e) { console.warn('[pet-ov] spine 动作播放失败', names.join('/'), e && e.message); return false }
+}
+
+/** 词 → 动画组（spine-words.js 目录，站/坐骨架各试一次；只收当前骨架真有的动画） */
+function resolveSpineWord (w) {
+  const map = window.SPINE_WORD_MAP || {}
+  const cat = window.SPINE_GROUP_CATALOG || {}
+  const entry = map[w]
+  if (!entry || !spineAnimCtx) return null
+  const order = spineSkelMode === 'sit' ? ['sit', 'stand'] : ['stand', 'sit']
+  for (const sk of order) {
+    const gid = entry[sk]
+    if (!gid || !cat[sk] || !cat[sk][gid]) continue
+    const names = (cat[sk][gid].anims || []).filter((n) => spineAnimByName(n))
+    if (!names.length) continue
+    let dur = 0
+    for (const n of names) { const a = spineAnimByName(n); if (a) dur = Math.max(dur, Number(a.duration) || 0) }
+    return { name: names[0], combo: names, duration: dur }
+  }
+  return null
+}
 
 /* 语义词 → 动画名正则：兼容本机 motion_ 与 facial_ 前缀命名，以及参考项目那套词表 */
 const ACTION_SEMANTICS = {
@@ -556,6 +675,9 @@ function findAnim (word) {
   if (!ctx) return null
   const w = String(word || '').trim()
   if (!w) return null
+  // 0.45.90 目录词优先（挥手/拍手/叉腰…→ 权威词典映射的动画组）
+  const viaMap = resolveSpineWord(w)
+  if (viaMap) return viaMap
   const anims = ctx.anims || []
   const low = w.toLowerCase()
   const byName = anims.find((a) => a.name === w) ||
@@ -756,9 +878,42 @@ function playFromPool (name) {
   return true
 }
 
+/** 0.46.9 语义动作（AgentAtelierR 自动调用规则 1:1）：
+ * [action:think] 等标签 / [action:grp_fg_106] 直接组号 → 按当前骨架取计划动作组依次试播；
+ * 全部选不中 → 回退 D 系一次性动画（motion_oneshot_D_*，轨0 接回 idle）。
+ * 计划数据在 shared/spine-actions.js（1:1 抄自 character_performance.dart）。 */
+function playSemanticAction (tag) {
+  const t = String(tag || '').trim().toLowerCase()
+  if (!spineAnimCtx) return false
+  // 直接组号：只认当前骨架目录里存在的组
+  if (/^grp_[a-z0-9_]+$/.test(t)) {
+    const sk = spineSkelMode === 'sit' ? 'sit' : 'stand'
+    const info = (window.SPINE_GROUP_CATALOG || {})[sk] && window.SPINE_GROUP_CATALOG[sk][t]
+    const names = info && (info.anims || []).filter((n) => spineAnimByName(n))
+    if (names && names.length) { console.warn('[pet-ov] 语义动作[组]', t, '→', names[0]); return playSpineAction(names) }
+    return false
+  }
+  const mode = spineSkelMode === 'sit' ? 'sit' : 'stand'
+  const plan = ((window.SPINE_ACTION_PLANS || {})[mode] || {})[t]
+  if (!plan) return false
+  for (const gid of plan.groups || []) {
+    const info = (window.SPINE_GROUP_CATALOG || {})[mode] && window.SPINE_GROUP_CATALOG[mode][gid]
+    const names = info && (info.anims || []).filter((n) => spineAnimByName(n))
+    if (names && names.length) { console.warn('[pet-ov] 语义动作', t, '→', gid, names[0]); return playSpineAction(names) }
+  }
+  if (plan.oneShot && spineAnimByName(plan.oneShot)) {
+    console.warn('[pet-ov] 语义动作', t, '→ 回退', plan.oneShot)
+    return playSpineAction([plan.oneShot])
+  }
+  return false
+}
+
 /** 播一个动作词；返回是否真的播上了 */
 function playActionWord (word) {
-  vrmEmotion(word)
+  const w0 = String(word || '').trim()
+  // 0.46.9 语义标签词（pet_act 里传来的 'action:think' / 'action:grp_fg_106'）
+  if (/^action:/i.test(w0)) return playSemanticAction(w0.slice(7))
+  vrmEmotion(w0)
   const w = String(word || '').trim()
   // 0.45.35 坐/站词接持续姿态；坐着时来别的动作先站起来再演
   if (vrmRuntime && typeof vrmRuntime.setPose === 'function') {
@@ -791,12 +946,27 @@ function playActionWord (word) {
   // 0.32.0：官方动画优先（有映射/直接编号时），比程序化手势可读
   if (vrmRuntime && typeof vrmRuntime.playClip === 'function') {
     if (/^gust_\d+$/.test(w) && vrmRuntime.playClip(w)) return true
-    for (const [re, clip] of VRM_ACT_CLIPS) {
-      if (re.test(w) && vrmRuntime.playClip(clip)) return true
+    // 0.45.89 官方烘入 clip / 语义池整体停用（主人 11-01 逐词实测：挥手/打招呼/万岁/加油/
+    // 蹲下/躺下/睡觉/坐地上 手臂全坏——外张/左右镜像问题烘在 clip 数据里，运行时修不动）。
+    // 这些词改走下面的程序化手势（手写代码驱动，实测没问题）。gust_XXXXX 直通编号保留给诊断。
+    // 要恢复官方 clip：把 OFFICIAL_CLIPS_ON 改回 true。
+    const OFFICIAL_CLIPS_ON = false
+    if (OFFICIAL_CLIPS_ON) {
+      for (const [re, clip] of VRM_ACT_CLIPS) {
+        if (re.test(w) && vrmRuntime.playClip(clip)) return true
+      }
+      // 0.41.0：没核对过硬编号的动作词，按语义池挑（369 个官方 clip 都能派上用场）
+      for (const [re, poolName] of VRM_ACT_POOLS) {
+        if (re.test(w) && playFromPool(poolName)) return true
+      }
     }
-    // 0.41.0：没核对过硬编号的动作词，按语义池挑（369 个官方 clip 都能派上用场）
-    for (const [re, poolName] of VRM_ACT_POOLS) {
-      if (re.test(w) && playFromPool(poolName)) return true
+  }
+  // 0.45.90：spine 骨骼动画最优先——中文词表/动画名直接命中就播，不再落到下面的抖动兜底。
+  // （此前 spine 判定排在 VRM 手势之后，VRM 移除后中文词一个都匹配不上 =「全是无效动作」。）
+  if (spineAnimCtx) {
+    const aSpine = findAnim(word)
+    if (aSpine) {
+      if (playSpineAction(aSpine.combo && aSpine.combo.length ? aSpine.combo : [aSpine.name])) return true
     }
   }
   // 3D 模型：动作词优先接到程序化手势（挥手/点头/轻跳……），比抖一下可读得多
@@ -809,26 +979,11 @@ function playActionWord (word) {
     const act = figureActOf(word)
     if (act && figureLoop.play(act)) return true
   }
-  const ctx = spineAnimCtx
-  const a = findAnim(word)
-  if (!ctx || !a) { buzzAction(); return false }
-  try {
-    const isFace = /^(facial|effect)/i.test(a.name) || /blush|tear|sweat/i.test(a.name)
-    if (isFace) {
-      ctx.state.setAnimation(1, a.name, false)
-      clearTimeout(ctx.faceTimer)
-      const dur = Number(a.duration) || 1.2
-      ctx.faceTimer = setTimeout(() => { try { ctx.state.clearTrack(1) } catch {} }, Math.max(600, dur * 1000))
-    } else {
-      ctx.state.setAnimation(0, a.name, false)
-      if (ctx.idle) ctx.state.addAnimation(0, ctx.idle.name, true, 0)
-    }
-    return true
-  } catch (e) {
-    console.warn('[pet-ov] 动作播放失败', word, e && e.message)
-    buzzAction()
-    return false
-  }
+  // 0.45.90 spine 上面已优先处理；到这里还没有可播的 → 轻抖反馈
+  // 0.46.14 诊断留痕：以前这里静默 return false，动作测试面板点了没反应查不到原因
+  try { window.aura.reportError && window.aura.reportError('pet-act', '未识别动作词: ' + w0) } catch { }
+  buzzAction()
+  return false
 }
 
 /** 顺序播放一串动作（间隔取动作自身时长，最多 2.2s） */
@@ -1002,8 +1157,20 @@ async function showSpine (v) {
     try { $('petFallback').hidden = false } catch {}
     return false
   }
+  // 0.45.90 坐姿骨架：坐卡/命令坐下时切到 sitSkel，起身切回站姿。
+  // 0.45.91 只允许「同一套皮肤」之间切（0001_99 ⇄ 0001_01）；主形象 0005_01 自带坐姿动作，
+  // 不再为了坐下换成 0001_01 常服（用户报的「spine 有时候会自动换成其他皮肤」就是这个）。
+  const pick = spineSkelFor(v, spineSkelMode)
+  if (pick.skel && String(pick.skel) !== String(v.spine.skel)) {
+    v = Object.assign({}, v, {
+      spine: Object.assign({}, v.spine, { skel: pick.skel, atlas: pick.atlas, png: pick.png })
+    })
+  } else if (spineSkelMode === 'sit') {
+    console.warn('[pet-ov] 坐下沿用当前皮肤（' + pick.reason + '），不换骨架')
+  }
   const atlasUrl = await assetUrl(v.spine.atlas)
   const skelUrl = await assetUrl(v.spine.skel)
+  console.warn('[pet-ov] showSpine mode=' + spineSkelMode + ' skel=' + String(v.spine.skel || '').replace(/.*[\\\\/]/, '') + ' url=' + (skelUrl ? 'ok' : '空'))
   const sig = atlasUrl + skelUrl
   if (spineRuntime && spineRuntime.sig === sig) return
   currentSig = sig
@@ -1161,7 +1328,7 @@ async function showSpine (v) {
   console.warn('[pet-ov] 加载成功 → 播放', idle && idle.name)
   if (idle) state.setAnimation(0, idle.name, true)
   // S3：动作词表挂到模块级，供 pet_act / pet_say 标记使用
-  spineAnimCtx = { state, anims, idle, faceTimer: null }
+  spineAnimCtx = { state, anims, idle, faceTimer: null, skelBase: spineSkelMode }
   // WebGL 路径：GPU 画 mesh，30fps 足够流畅且几乎不占主线程
   if (useGL) {
     const sceneRenderer = new GL.SceneRenderer(glCanvas, managedGl)
@@ -1782,11 +1949,11 @@ function setupChat () {
    * 气泡跟语音对齐：回复先显示，等 TTS 真正念完再淡出。
    * 旧行为是 done 之后固定 8s 淡出 → 长回复「话没说完气泡先没了」。
    */
-  async function bubbleHoldVoice (content) {
+  async function bubbleHoldVoice (content, opts) {
     const my = ++bubbleSeq
     clearTimeout(bubbleTimer)
     if (readReply && content) {
-      try { await speakReplyText(content) } catch {}
+      try { await speakReplyText(content, opts) } catch {}
     }
     if (my !== bubbleSeq) return // 期间用户又发了新一轮 → 让新一轮接管气泡
     bubbleKeep(1800) // 语音结束（或没有语音）后留 1.8s 收尾
@@ -1976,8 +2143,10 @@ function setupChat () {
           // dm=true：这句话已经由弹幕层显示（游戏模式），气泡就不再冒出来挡画面
           if (cmd.text && !cmd.dm) {
             bubbleShow(cmd.text)
+            // 0.46.11 cmd.vol：自言自语的嘀咕音量（正常对话没有 vol = 正常音量）
+            const volOpts = cmd.vol != null ? { vol: cmd.vol } : undefined
             if (cmd.speak === false) bubbleKeep(Math.max(2500, Math.min(9000, cmd.text.length * 200)))
-            else bubbleHoldVoice(cmd.text)
+            else bubbleHoldVoice(cmd.text, volOpts)
           }
           if (cmd.inline && cmd.inline.length) playActions(cmd.inline)
           break
@@ -2021,8 +2190,18 @@ function setupChat () {
           try {
             const st = await window.aura.petState()
             const charId = st && st.char ? st.char.id : ''
+            // 0.45.90 附中文标签：反查动画目录（哪个组用到这条动画）
+            const cat = window.SPINE_GROUP_CATALOG || {}
+            const zhOf = (name) => {
+              for (const sk of Object.keys(cat)) {
+                for (const g of Object.values(cat[sk])) {
+                  if (g.anims && g.anims.includes(name)) return g.zh
+                }
+              }
+              return ''
+            }
             const list = spineAnimCtx && spineAnimCtx.anims
-              ? spineAnimCtx.anims.map((a) => ({ name: a.name, duration: Number(a.duration || 0) }))
+              ? spineAnimCtx.anims.map((a) => ({ name: a.name, duration: Number(a.duration || 0), zh: zhOf(a.name) }))
               : []
             if (window.aura.petAnimReport) window.aura.petAnimReport({ charId, list })
           } catch (e) { console.warn('[pet] anim-list 失败', e && e.message) }
@@ -2031,18 +2210,8 @@ function setupChat () {
         case 'anim-play': {
           const name = String(cmd.name || '')
           if (!name || !spineAnimCtx || !spineAnimCtx.state) break
-          try {
-            spineAnimCtx.state.setAnimation(0, name, false)
-            const a = (spineAnimCtx.anims || []).find((x) => x.name === name)
-            const dur = a && a.duration ? Math.min(8, Math.max(0.4, a.duration)) : 1.2
-            setTimeout(() => {
-              try {
-                if (spineAnimCtx && spineAnimCtx.idle && spineAnimCtx.state) {
-                  spineAnimCtx.state.setAnimation(0, spineAnimCtx.idle.name, true)
-                }
-              } catch {}
-            }, dur * 1000)
-          } catch (e) { console.warn('[pet] anim-play 失败', e && e.message) }
+          // 0.45.90 统一走分轨播放器（叠加层不再硬塞轨道 0）
+          if (!playSpineAction([name])) console.warn('[pet] anim-play 失败', name)
           break
         }
         case 'quiet':
@@ -2112,7 +2281,10 @@ function setupChat () {
   if (window.aura.onPetPose) {
     window.aura.onPetPose(({ pose, style }) => {
       if (vrmRuntime && typeof vrmRuntime.setPose === 'function') vrmRuntime.setPose(pose, style)
-      actSit = pose === 'sit' // 0.45.35 主进程的坐/站广播与 pet_act 持续坐共用一个状态
+      const wantSit = pose === 'sit'
+      actSit = wantSit // 0.45.35 主进程的坐/站广播与 pet_act 持续坐共用一个状态
+      // 0.45.90 spine：坐下=整个骨架切坐姿版（含拍手/比耶等富动作），起身切回
+      applySpineSkelMode(wantSit ? 'sit' : 'stand')
     })
   }
   window.addEventListener('resize', () => { requestAnimationFrame(() => { positionChat(); positionBubble() }) })

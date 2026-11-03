@@ -51,7 +51,7 @@ function wantFixed (kind, opts) {
 
 /** 不发全文时至少留一行索引，避免模型「忘记自己有这个能力」 */
 const FIXED_INDEX = {
-  petTools: '（可用表现工具：pet_say 说话 / pet_act 动作 / pet_move_to 走路 / pet_ask 提问 / pet_set 外观 / pet_quiet 安静）',
+  petTools: '（可用表现工具：pet_say 说话 / pet_act 动作 / pet_move_to 走路 / pet_ask 提问 / pet_set 外观 / pet_quiet 安静。动作词例：挥手/打招呼/再见/叉腰/抱臂/害羞/过来/卖萌/坐下/站起来；拍手/加油/比耶/耳语/伸懒腰/晃脚/慌张/等一下/托腮 要她坐着时才会演。也可以在回复正文里直接嵌 [action:标签] 让她边说边做动作（自动调用，不用工具）：acknowledge认同/disagree不认同/think思考/explain说明/excited兴奋/wave挥手/shy害羞/surprised惊讶/comfort安慰/playful俏皮/invite邀请，按这句话的真实语气自然嵌，一句最多一个，不是每句都要加）',
   sysTools: '（可用系统工具：open_app 开程序 / launch_game 开游戏 / game_mode 游戏模式）',
   cua: '（可用电脑工具：截图 / 点击 / 输入 / 按键 / 窗口管理，具体参数见工具表）'
 }

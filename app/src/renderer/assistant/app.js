@@ -310,22 +310,12 @@ const ACT_WORDS = [
   // 语义池代表词
   '挥手', '打招呼', '万岁', '加油', '跳', '蹲下', '躺下', '转圈',
   // 官方硬映射
-  '睡觉', '坐地上', '说吧',
-  // VRMA 动作（MMD 转换，motions/ 目录）
-  '跳舞', '走路'
+  '睡觉', '坐地上', '说吧'
 ]
-$('btnAct').addEventListener('click', () => {
-  const p = $('actPanel')
-  p.hidden = !p.hidden
-  $('memPanel').hidden = true
-  $('modelPanel').hidden = true
-  $('rolePanel').hidden = true
-  $('cuaPanel').hidden = true
-})
-$('actClose').addEventListener('click', () => { $('actPanel').hidden = true })
-{
+function renderActGrid (words) {
   const grid = $('actGrid')
-  for (const w of ACT_WORDS) {
+  grid.innerHTML = ''
+  for (const w of words) {
     const b = document.createElement('button')
     b.className = 'act-btn'
     b.textContent = w
@@ -333,6 +323,27 @@ $('actClose').addEventListener('click', () => { $('actPanel').hidden = true })
     grid.appendChild(b)
   }
 }
+renderActGrid(ACT_WORDS)
+$('actClose').addEventListener('click', () => { $('actPanel').hidden = true })
+// 0.45.87 打开面板时动态拉 motions/ 目录的全部 VRMA 动作词（含待机池里的鼓掌/思考/看手机等），
+// 与官方词合并去重——动作加了不用改代码，面板自动跟上。
+$('btnAct').addEventListener('click', async () => {
+  const p = $('actPanel')
+  p.hidden = !p.hidden
+  $('memPanel').hidden = true
+  $('modelPanel').hidden = true
+  $('rolePanel').hidden = true
+  $('cuaPanel').hidden = true
+  if (!p.hidden) {
+    try {
+      const r = await api.petListActs()
+      if (r && r.ok) {
+        const merged = [...new Set([...(r.vrma || []), ...ACT_WORDS, ...(r.builtin || [])])]
+        renderActGrid(merged)
+      }
+    } catch { }
+  }
+})
 async function playAct (words) {
   $('actMsg').textContent = '播放中：' + words.join('、')
   try {

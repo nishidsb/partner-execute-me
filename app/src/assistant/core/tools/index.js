@@ -9,10 +9,14 @@ import './shell.js'
 import { setPetBridge } from './pet.js'
 // 0.18.0 第一批：闹钟三工具（alarm_set / alarm_list / alarm_cancel），走同一条宿主桥
 import './alarm.js'
+import { setAlarmBridge } from './alarm.js'
 // 0.18.0 第二批：联网搜索 + 网页正文抓取（零依赖；结果一律按外部内容包裹）
 import './web.js'
 // 0.45.71 学习监督三工具（study_start / study_peek / study_stop）
 import './study.js'
+import { setStudyBridge } from './study.js'
+// 0.45.93 主动发 QQ 消息四工具（qq_send / qq_plan / qq_plan_list / qq_plan_cancel）
+import { setReachBridge } from './reach.js'
 // S4：长期记忆三工具（写 PARTNER.md + Git 提交）
 import './memory.js'
 // S6.5：系统操作三工具（开程序 / 开游戏 / 游戏模式）
@@ -42,10 +46,12 @@ function cuaActive () {
 export {
   exec, listDefs, list, get, needConfirm, setGate, isAllowed, register, unregister,
   setPetBridge, setSystemBridge, setCuaBridge, hasCua, cuaActive, setCuaVision, cuaVision, cuaPrompt,
-  setProfileBridge, setHealthBridge, setUserToolsBridge, syncUserTools, USER_TOOL_CHAT
+  setProfileBridge, setHealthBridge, setUserToolsBridge, setReachBridge, syncUserTools, USER_TOOL_CHAT,
+  setAlarmBridge, setStudyBridge
 }
 export default {
   exec, listDefs, list, get, needConfirm, setGate, isAllowed, register, unregister,
   setPetBridge, setSystemBridge, setCuaBridge, hasCua, cuaActive, setCuaVision, cuaVision, cuaPrompt,
-  setProfileBridge, setHealthBridge, setUserToolsBridge, syncUserTools, USER_TOOL_CHAT
+  setProfileBridge, setHealthBridge, setUserToolsBridge, setReachBridge, syncUserTools, USER_TOOL_CHAT,
+  setAlarmBridge, setStudyBridge
 }

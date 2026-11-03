@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('assistantAPI', {
   extras: () => ipcRenderer.invoke('assistant:provider-extras'),
   // 0.45.37 动作测试面板：手动点播动作词（主进程转 petBridge pet_act）
   petAct: (words) => ipcRenderer.invoke('pet:test-act', words),
+  petListActs: () => ipcRenderer.invoke('pet:list-acts'),
   // 1.3 ChatGPT 账号登录
   chatgptLogin: () => ipcRenderer.invoke('assistant:chatgpt-login'),
   chatgptLogout: () => ipcRenderer.invoke('assistant:chatgpt-logout'),

@@ -59,7 +59,7 @@ const TERMINAL_TOOLS = new Set(['exec_command', 'job_kill', 'job_run_background'
  * 是否需要向用户确认。
  * 权限档位、单工具白名单、30 分钟授权期三者任一放行则免问（终端类另按上面规则从严）。
  */
-export function needConfirm (risk, name, policy = {}, meta = {}) {
+export function needConfirm (risk, name, policy = {}, meta = {}, args = null) {
   if (risk === 'low') return false
   const mode = policy && policy.mode ? String(policy.mode) : 'ask-before-acting'
   const allow = (policy && Array.isArray(policy.allowTools)) ? policy.allowTools : []
@@ -68,6 +68,11 @@ export function needConfirm (risk, name, policy = {}, meta = {}) {
   // 终端类：档位管不到，必须单独问（除非用户明确关掉「终端单独询问」）
   const isTerminal = !!(meta && meta.terminal) || TERMINAL_TOOLS.has(String(name))
   if (isTerminal && !(policy && policy.allowTerminal)) return true
+  // 0.45.92 关掉「终端单独询问」≠ 什么都放行：删盘/关机/改注册表这类不可逆命令
+  // 仍然问一次。判定逻辑由宿主注入（core 不绑 Windows/命令名单）。
+  if (isTerminal && typeof policy.terminalDanger === 'function') {
+    try { if (policy.terminalDanger(name, args || {})) return true } catch {}
+  }
   if (mode === 'never-ask') return false
   if (mode === 'ask-once' && Number(policy.grantUntil || 0) > Date.now()) return false
   return true
@@ -90,7 +95,7 @@ export async function exec (name, args, ctx = {}) {
   }
   if (!tool) throw new Error(`未注册的工具: ${name}`)
   if (!allowed(tool.name)) throw new Error(`工具 ${tool.name} 当前未启用（用户还没有开启电脑操作）`)
-  if (needConfirm(tool.risk, tool.name, policy, tool)) {
+  if (needConfirm(tool.risk, tool.name, policy, tool, args)) {
     const ok = confirmFn ? await confirmFn(tool.name, args, tool.risk) : false
     if (!ok) {
       const err = new Error(`用户没有允许执行工具: ${tool.name}`)

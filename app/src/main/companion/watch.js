@@ -42,6 +42,7 @@ const LANG_NAME = { zh: '中文', en: '英文', ja: '日文' }
 
 /** 语言粗判（与字幕判定同一套规则，统一来自 subtitle.js，避免三处各写一份） */
 const { langMismatch } = require('./subtitle')
+const voicesim = require('./voicesim')
 
 /** 'HH:mm' 静音时段判定（支持跨零点；start/end 为空 = 不静音） */
 function inQuietHours (now, start, end) {
@@ -533,6 +534,18 @@ function createWatch ({ cfgGet, cfgPatch, shoot, chat, getContext, say, isFullsc
         // 手动触发也遵守——这一条旧的防连发约定不能因为换了闸就丢掉
         state.skipped++
         return { ok: true, interesting: true, skip: 'cooldown' }
+      }
+      // 0.45.85 复读硬闸：跟最近说过的台词撞车就咽回去（观察已记，不亏）。
+      // 用户实锤 20:48：屏幕残留文字 19:24 说过一次，100 分钟后画面微变绕过
+      // dHash，她对着同一行字又来了一遍——提示词里的「别重复」拦不住变体。
+      if (!manual && timeSaid.length) {
+        const rep = voicesim.isRepeat(String(v.comment || ''), timeSaid)
+        if (rep.repeat) {
+          log('[watch] 跟最近台词撞车（' + rep.against.slice(0, 20) + '），咽回去：' + String(v.comment).slice(0, 36))
+          state.skipped++
+          state.lastSkip = 'repeat'
+          return { ok: true, interesting: true, skip: 'repeat' }
+        }
       }
       await speakNow(v.comment, 'speech')
       return { ok: true, interesting: true, said: v.comment, mood: v.mood }

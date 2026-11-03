@@ -1155,7 +1155,7 @@ async function renderCpSettings () {
   }
   $('cpPetOn').checked = cs.petOn !== false
   $('cpReadReply').checked = cs.readReply !== false
-  $('cpPetWalk').value = cs.petWalk || 'calm'
+  $('cpPetWalk').value = cs.petWalk || 'off'
   $('cpPetFullscreen').checked = cs.petFullscreenHide !== false
   $('cpPetScale').value = Math.round((cs.petScale != null ? cs.petScale : 1) * 100)
   $('cpPetScaleV').textContent = ($('cpPetScale').value / 100).toFixed(1) + '×'
@@ -1203,6 +1203,7 @@ async function renderCpSettings () {
   if ($('cpDiagContext')) $('cpDiagContext').checked = cs.diagContext === true
   if ($('cpIdleNudge')) $('cpIdleNudge').checked = cs.idleNudgeOn !== false
   if ($('cpChatterBoost')) $('cpChatterBoost').checked = cs.chatterBoostOn === true
+  if ($('cpChatterVoice')) $('cpChatterVoice').checked = cs.chatterVoiceOn !== false
   interactRefresh().catch(() => { })
   syncReactionVisible()
   syncSpeechVisible()
@@ -1762,6 +1763,7 @@ const cpGather = () => ({
   diagContext: $('cpDiagContext').checked,
   idleNudgeOn: $('cpIdleNudge').checked,
   chatterBoostOn: $('cpChatterBoost') ? $('cpChatterBoost').checked : false,
+  chatterVoiceOn: $('cpChatterVoice') ? $('cpChatterVoice').checked : true,
   watchEnabled: $('cpWatch').checked,
   proactivePerHour: Number($('cpProactivePerHour').value) || 3,
   watchQuiet: $('cpWatchQuiet').checked,
@@ -3098,6 +3100,50 @@ $('btnMemory').addEventListener('click', () => {
   showDrawerTab('memory')
 })
 $('btnModel').addEventListener('click', () => { setView('char'); showDrawerTab('settings') })
+
+/* ---------------- 动作测试面板（0.45.87 从助手控制台搬进主窗） ----------------
+   手动点播动作词，走 petBridge pet_act 同一条链路；网格动态列 motions/ 全部动作。
+   0.45.90 词表换成 spine 词典有出处的词（挥手指问候、拍手/比耶/耳语等需她坐下时才演，
+   因为那些动画只在坐姿骨架里；坐下/站起来接主进程坐卡状态机）。 */
+const ACT_BUILTIN = ['坐下', '站起来', '挥手', '打招呼', '再见', '叉腰', '抱臂', '害羞', '过来', '卖萌', '拍手', '鼓掌', '加油', '比耶', '耳语', '悄悄话', '伸懒腰', '晃脚', '慌张', '等一下', '托腮']
+function renderActGrid (words) {
+  const grid = $('actGrid')
+  grid.innerHTML = ''
+  for (const w of words) {
+    const b = document.createElement('button')
+    b.className = 'act-btn'
+    b.textContent = w
+    b.addEventListener('click', () => playAct([w]))
+    grid.appendChild(b)
+  }
+}
+async function playAct (words) {
+  $('actMsg').textContent = '播放中：' + words.join('、')
+  try {
+    const r = await window.companion.petAct(words)
+    $('actMsg').textContent = r && r.error ? '失败：' + r.error : '已播放：' + words.join('、')
+  } catch (e) { $('actMsg').textContent = '失败：' + (e && e.message) }
+  setTimeout(() => { $('actMsg').textContent = '' }, 2600)
+}
+$('btnAct').addEventListener('click', async () => {
+  const p = $('actPanel')
+  p.hidden = !p.hidden
+  if (!p.hidden) {
+    $('charDrawer').hidden = true
+    try {
+      const r = await window.companion.petListActs()
+      if (r && r.ok) {
+        renderActGrid([...new Set([...(r.vrma || []), ...ACT_BUILTIN, ...(r.builtin || [])])])
+      } else renderActGrid(ACT_BUILTIN)
+    } catch { renderActGrid(ACT_BUILTIN) }
+  }
+})
+$('actClose').addEventListener('click', () => { $('actPanel').hidden = true })
+$('actPlay').addEventListener('click', () => {
+  const w = String($('actInput').value || '').trim()
+  if (w) playAct([w])
+})
+$('actInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('actPlay').click() })
 // 主进程可以要求打开某个视图（托盘 / 伙伴 ⚙ 按钮）
 if (window.companion.onView) window.companion.onView((v) => setView(v === 'char' || v === 'settings' ? v : 'chat'))
 // 托盘里切了角色：主窗同步换角色（形象 + 人格）
@@ -3130,7 +3176,7 @@ $('btnAnimList').addEventListener('click', async () => {
     for (const a of list) {
       const b = document.createElement('button')
       b.className = 'cd-btn'
-      b.textContent = a.name
+      b.textContent = a.zh ? a.zh + ' ' + a.name : a.name
       b.onclick = () => { try { window.companion.animPlay(a.name) } catch {} }
       box.appendChild(b)
     }
@@ -3471,6 +3517,14 @@ async function imRender () {
   $('wxOwners').value = Array.isArray(c.wxOwnerAccounts) ? c.wxOwnerAccounts.join(',') : ''
   $('imPcTools').checked = c.pcToolsOn !== false
   $('imPcTerminalAsk').checked = c.pcTerminalAsk !== false
+  // 0.45.93 主动消息：时段策略（全时段 / 谷时）+ 收件人
+  // 0.45.97：去掉「两次至少隔 / 每天最多」两个设置项——随机节奏，本来就不该让人调
+  $('imReachOn').checked = c.reachOn !== false
+  $('imReachWindow').value = c.reachWindowMode === 'valley' ? 'valley' : 'all'
+  $('imReachFrom').value = c.reachValleyFrom || '23:00'
+  $('imReachTo').value = c.reachValleyTo || '08:00'
+  $('imReachAccount').value = c.reachAccount || ''
+  imSyncReachWindow()
   $('imGroups').value = Array.isArray(c.groups) ? c.groups.join(',') : ''
   $('imHourly').value = Number(c.perGroupHourly) || 20
   // 微信人设（brain 配置里，跟 QQ 分开）
@@ -3583,6 +3637,11 @@ function imCollect () {
     wxOwnerAccounts: $('wxOwners').value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean),
     pcToolsOn: $('imPcTools').checked,
     pcTerminalAsk: $('imPcTerminalAsk').checked,
+    reachOn: $('imReachOn').checked,
+    reachWindowMode: $('imReachWindow').value === 'valley' ? 'valley' : 'all',
+    reachValleyFrom: $('imReachFrom').value || '23:00',
+    reachValleyTo: $('imReachTo').value || '08:00',
+    reachAccount: $('imReachAccount').value.trim(),
     groups: $('imGroups').value.split(/[,，\s]+/).map((s) => s.replace(/\D/g, '')).filter(Boolean),
     perGroupHourly: Number($('imHourly').value) || 20,
     wxPersonaMode: $('wxPersonaMode').value,
@@ -3610,6 +3669,16 @@ $('imGroupRate').addEventListener('change', imSave)
 $('imPrivate').addEventListener('change', imSave)
 $('imVoice').addEventListener('change', imSave)
 $('imStickerDir').addEventListener('change', imSave)
+// 0.45.93 主动消息时段：切到「谷时」才显示起止时间；改了立刻存
+function imSyncReachWindow () {
+  const row = $('imReachWindowRow')
+  if (row) row.hidden = $('imReachWindow').value !== 'valley'
+}
+;['imReachOn', 'imReachWindow', 'imReachFrom', 'imReachTo', 'imReachAccount'].forEach((id) => {
+  const el = $(id)
+  if (!el) return
+  el.addEventListener('change', () => { if (id === 'imReachWindow') imSyncReachWindow(); imSave() })
+})
 $('mrAdd').addEventListener('click', mrAddRow)
 $('mrFf14Role').addEventListener('change', imSave)
 $('ff14Server').addEventListener('change', imSave)
@@ -3960,7 +4029,7 @@ function guideRender () {
   $('guideBody').innerHTML = guideStepBody(step)
   const set = (id, v) => { const el = $(id); if (el && v != null && v !== '') el.value = v }
   if (step === 'lang') set('gdLang', localStorage.getItem(UI_LANG_KEY) || (s.uiLang || 'auto'))
-  if (step === 'walk') set('gdWalk', s.petWalk || 'calm')
+  if (step === 'walk') set('gdWalk', s.petWalk || 'off')
   if (step === 'voice') set('gdTts', s.ttsMode || 'browser')
   $('guidePrev').disabled = guideIdx === 0
   $('guideNext').textContent = guideIdx === GUIDE_STEPS.length - 1 ? t('guide.done') : t('guide.next')

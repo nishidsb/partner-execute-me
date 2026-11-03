@@ -43,4 +43,19 @@ function subtitleTarget (text, subLang) {
   return langMismatch(t, subLang) ? name : ''
 }
 
-module.exports = { LANG_NAME, langMismatch, subtitleTarget }
+/**
+ * 原文 + 译文的合体文案（历史实现，0.45.98 起 QQ 不再用）。
+ *
+ * 为什么废弃：译文拼在同一条里，模型看到自己的旧消息就学样，新回复也开始自带
+ * 一段括号中文 → QQ 里一条消息两种语言、桌面 TTS 中日各念一遍（用户 11-02 报的
+ * 就是这个）。现在 QQ 只发译文一条（见 companion/index.js 的 deliverReach），
+ * 气泡依旧是「台词 + 字幕」两层。函数留着是因为还有单测按它的口径跑。
+ */
+function withTranslation (text, translated) {
+  const t = String(text || '').trim()
+  const tr = String(translated || '').trim()
+  if (!tr || tr === t) return t
+  return t + '\n（' + tr + '）'
+}
+
+module.exports = { LANG_NAME, langMismatch, subtitleTarget, withTranslation }

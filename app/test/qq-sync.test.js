@@ -108,13 +108,14 @@ test('qqWorldBlock：关着/没配主人号不出声', () => {
   assert.deepEqual(qqWorldBlock(null), [])
 })
 
-test('qqWorldBlock：配置齐全时告诉她在 QQ 上有号、（QQ）标注 = QQ 上的往来', () => {
+test('qqWorldBlock：配置齐全时告诉她在 QQ 上有号、[QQ] 标注 = QQ 上的往来（且叫她别自己写）', () => {
   const r = qqWorldBlock({ enabled: true, napcatArgs: '2738649075', ownerAccounts: ['359524452'] })
   assert.equal(r.length, 1)
   const t = r[0].text
   assert.ok(t.includes('2738649075'), '带她的号')
   assert.ok(t.includes('359524452'), '带主人号')
-  assert.ok(t.includes('（QQ）标注'), '交代（QQ）标注含义')
+  assert.ok(t.includes('[QQ]'), '交代 [QQ] 标注含义')
+  assert.ok(t.includes('自己不要写它'), '0.45.98：标注只是给她看的，不许写进回复')
   assert.ok(t.includes('别说自己看不到'), '硬规则：别说看不到')
 })
 
@@ -125,14 +126,17 @@ test('qqWorldBlock：napcatArgs 非纯数字时不出号码但段落照给', () 
   assert.ok(r[0].text.includes('你在 QQ 上有自己的账号'), '段落照给')
 })
 
-test('ledgerNote 场合前缀：qq/pet 带 tag，self 不带；session 支持追加式世界段', () => {
+/* 0.45.98：场合标注从「写进正文」改成「组装上下文时才加」——
+ * 写进正文会被模型照抄进回复，QQ 对面直接看到「（QQ）」两个字母（用户 11-02 的截图）。 */
+test('ledgerNote 不再往正文里写场合前缀；上下文组装时才补 [QQ]/[桌面]', () => {
   const src = read('src/main/assistant/index.js')
-  assert.ok(/CHANNEL_TAGS = \{ qq: '（QQ）', pet: '（气泡）' \}/.test(src), '通道前缀表')
-  assert.ok(/content: tag \+ String\(user\)/.test(src), 'user 条目带 tag')
-  assert.ok(/content: tag \+ String\(aText\)/.test(src), 'assistant 条目带 tag')
+  assert.ok(!/CHANNEL_TAGS/.test(src), '正文不再带通道前缀表')
+  assert.ok(!/content: tag \+ String/.test(src), '正文不拼 tag（模型会照抄）')
   const selfLine = (src.match(/if \(self\) session\.history\.push\(\{ role: 'assistant', content: ([^,]+),/) || [])[1] || ''
-  assert.ok(selfLine === 'String(self)', 'self 不加 tag（reach 自带说明）: ' + selfLine)
+  assert.ok(selfLine === 'String(self)', 'self 原样入账: ' + selfLine)
   const core = read('src/assistant/core/core/session.js')
+  assert.ok(/const CHANNEL_MARK = \{ qq: '\[QQ\] ', pet: '\[桌面\] ' \}/.test(core), '标注只在请求里加')
+  assert.ok(/content: tag \+ m\.content/.test(core), 'user 侧补标注')
   assert.ok(/export function addWorldPrompts/.test(core), 'core 支持追加式世界段')
   const im = read('src/main/im/index.js')
   assert.ok(/addWorldPrompts\(\(\) => require\('\.\/brain'\)\.qqWorldBlock/.test(im), 'im 注册 QQ 场合段')

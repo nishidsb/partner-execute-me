@@ -15,6 +15,9 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { app, net, session } = require('electron')
 const { log } = require('../logger')
+// 0.45.98 朗读只念台词：剥掉「（QQ）」前缀和拼在后面的括号译文
+// （用户 11-02：TTS 变成日语念一遍、中文念一遍——那段中文其实是字幕，不该念）。
+const { plainText } = require('../../shared/reply-text')
 
 /* 语音请求走独立 session：系统代理可能是「API 中转网关」，会接管 api.fish.audio
    并替换 Authorization（实测 Fish 收到的 key 与发送的不一致 → 401）。
@@ -64,11 +67,13 @@ function tmpDir () {
 
 /** 朗读文本清洗（主人 2026-10-31 反馈：说话没必要连动作也念出来）：
  * 【动作/神态】括段只给气泡和动作链路看，TTS 一律剥掉只念台词。
+ * 0.45.98 再去掉「（QQ）」前缀和结尾那段括号译文（那是给人看的字幕，不是台词）。
  * 若剥完全空（整条回复都是动作）则退回原文，避免拿空文本去合成报错。 */
 function spokenOnly (text) {
   const src = String(text || '')
-  const t = src.replace(/【[^】]*】/g, ' ').replace(/\s{2,}/g, ' ').trim()
-  return t || src.trim()
+  const clean = plainText(src)
+  const t = clean.replace(/【[^】]*】/g, ' ').replace(/\s{2,}/g, ' ').trim()
+  return t || clean.trim() || src.trim()
 }
 
 /** 合成语音，返回 { ok, url } 或 { ok:false }（渲染层回退 browser TTS） */

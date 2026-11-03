@@ -233,59 +233,82 @@ $badClass = @('Progman','WorkerW','Shell_TrayWnd','Shell_SecondaryTrayWnd','Wind
 $skipPid = 0
 if ($env:AURA_PID) { try { $skipPid = [int]$env:AURA_PID } catch {} }
 
+# ---- resident-loop memory guard ----------------------------------------------
+# PowerShell 5.1 pins per-scan closures (scriptblock->delegate cache) and never
+# returns heap to the OS. Measured: ~0.9MB per scan -> ~29GB after 2 days of
+# 1.5s scans on AuraDesk. Two mitigations:
+#   1. reuse the enum callback + builders across scans (no per-scan closures)
+#   2. watchdog: self-exit when private bytes cross the cap, the main process
+#      already auto-restarts on exit. Worst case is one bounded bump per cycle.
+$memCap = 400MB
+$procCacheSweeps = 20          # refresh process-name list every N scans
+$script:procNames = @()
+$script:procSweep = 0
+$script:sbT = New-Object System.Text.StringBuilder 512
+$script:sbC = New-Object System.Text.StringBuilder 256
+$script:scanList = New-Object System.Collections.ArrayList
+$script:pCache = @{}
+$script:fgHwnd = [IntPtr]::Zero
+
+$script:cb = {
+  param([IntPtr]$h, [IntPtr]$lp)
+  try {
+    if (-not [Aura.W32]::IsWindowVisible($h)) { return $true }
+    $ex = [Aura.W32]::GetWindowLongW($h, -20)
+    if (($ex -band 0x80) -ne 0) { return $true } # WS_EX_TOOLWINDOW
+    [void]$script:sbT.Clear()
+    [Aura.W32]::GetWindowTextW($h, $script:sbT, 512) | Out-Null
+    $title = $script:sbT.ToString().Trim()
+    if (-not $title) { return $true }
+    [void]$script:sbC.Clear()
+    [Aura.W32]::GetClassNameW($h, $script:sbC, 256) | Out-Null
+    $cls = $script:sbC.ToString()
+    if ($badClass -contains $cls) { return $true }
+    $cloak = 0
+    if ([Aura.W32]::DwmGetWindowAttribute($h, 14, [ref]$cloak, 4) -eq 0 -and $cloak -ne 0) { return $true }
+    $r = New-Object Aura.W32+RECT
+    if (-not [Aura.W32]::GetWindowRect($h, [ref]$r)) { return $true }
+    $w = $r.R - $r.L; $hh = $r.B - $r.T
+    if ($w -le 0 -or $hh -le 0) { return $true }
+    $procId = 0
+    [Aura.W32]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
+    if ($procId -eq $skipPid) { return $true }
+    $pn = ''; $pp = ''
+    if ($script:pCache.ContainsKey($procId)) {
+      $pn = $script:pCache[$procId][0]; $pp = $script:pCache[$procId][1]
+    } else {
+      $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+      if ($p) { $pn = $p.Name; $pp = $p.Path }
+      $script:pCache[$procId] = @($pn, $pp)
+    }
+    if ($hostProc -contains $pn) { return $true }
+    [void]$script:scanList.Add(@{
+      h = [int64]$h
+      t = $title
+      pn = $pn
+      pp = $pp
+      min = [bool][Aura.W32]::IsIconic($h)
+      fg = ($h -eq $script:fgHwnd)
+      r = @($r.L, $r.T, $w, $hh)
+    })
+  } catch {}
+  return $true
+}
+
 function Get-WinList {
-  $list = New-Object System.Collections.ArrayList
-  $fg = [Aura.W32]::GetForegroundWindow()
-  $pCache = @{}
-  $cb = {
-    param([IntPtr]$h, [IntPtr]$lp)
-    try {
-      if (-not [Aura.W32]::IsWindowVisible($h)) { return $true }
-      $ex = [Aura.W32]::GetWindowLongW($h, -20)
-      if (($ex -band 0x80) -ne 0) { return $true } # WS_EX_TOOLWINDOW
-      $sb = New-Object System.Text.StringBuilder 512
-      [Aura.W32]::GetWindowTextW($h, $sb, 512) | Out-Null
-      $title = $sb.ToString().Trim()
-      if (-not $title) { return $true }
-      $sb2 = New-Object System.Text.StringBuilder 256
-      [Aura.W32]::GetClassNameW($h, $sb2, 256) | Out-Null
-      $cls = $sb2.ToString()
-      if ($badClass -contains $cls) { return $true }
-      $cloak = 0
-      if ([Aura.W32]::DwmGetWindowAttribute($h, 14, [ref]$cloak, 4) -eq 0 -and $cloak -ne 0) { return $true }
-      $r = New-Object Aura.W32+RECT
-      if (-not [Aura.W32]::GetWindowRect($h, [ref]$r)) { return $true }
-      $w = $r.R - $r.L; $hh = $r.B - $r.T
-      if ($w -le 0 -or $hh -le 0) { return $true }
-      $procId = 0
-      [Aura.W32]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
-      if ($procId -eq $skipPid) { return $true }
-      $pn = ''; $pp = ''
-      if ($pCache.ContainsKey($procId)) {
-        $pn = $pCache[$procId][0]; $pp = $pCache[$procId][1]
-      } else {
-        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-        if ($p) { $pn = $p.Name; $pp = $p.Path }
-        $pCache[$procId] = @($pn, $pp)
-      }
-      if ($hostProc -contains $pn) { return $true }
-      [void]$list.Add(@{
-        h = [int64]$h
-        t = $title
-        pn = $pn
-        pp = $pp
-        min = [bool][Aura.W32]::IsIconic($h)
-        fg = ($h -eq $fg)
-        r = @($r.L, $r.T, $w, $hh)
-      })
-    } catch {}
-    return $true
-  }
-  [Aura.W32]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+  $script:scanList = New-Object System.Collections.ArrayList
+  $script:pCache = @{}
+  $script:fgHwnd = [Aura.W32]::GetForegroundWindow()
+  [Aura.W32]::EnumWindows($script:cb, [IntPtr]::Zero) | Out-Null
   # process name list (for tray-only / windowless running apps)
-  $procs = @()
-  try { $procs = @(Get-Process | ForEach-Object { $_.Name.ToLower() } | Sort-Object -Unique) } catch {}
-  return @{ type = 'windows'; list = $list; procs = $procs } | ConvertTo-Json -Compress -Depth 4
+  # cached across sweeps: Get-Process enumerates every process with full
+  # objects; repeating that per scan is pure waste and hammers the GC
+  $script:procSweep--
+  if ($script:procSweep -le 0 -or -not $script:procNames) {
+    $script:procSweep = $procCacheSweeps
+    try { $script:procNames = @(Get-Process | ForEach-Object { $_.Name.ToLower() } | Sort-Object -Unique) } catch { $script:procNames = @() }
+  }
+  return @{ type = 'windows'; list = $script:scanList; procs = $script:procNames } | ConvertTo-Json -Compress -Depth 4
 }
 
 function Out-Vol {
@@ -427,4 +450,8 @@ while ($true) {
   if ($cmd -eq 'quit' -or $cmd -eq 'exit') { break }
   Invoke-Cmd $cmd
   [Console]::Out.Flush()
+  # memory watchdog: cross the cap -> self-exit, main process restarts us clean
+  try {
+    if ([System.Diagnostics.Process]::GetCurrentProcess().PrivateMemorySize64 -gt $memCap) { break }
+  } catch {}
 }

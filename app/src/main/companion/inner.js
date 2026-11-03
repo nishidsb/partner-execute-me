@@ -76,6 +76,20 @@ function recentVoices (n) {
   } catch { return [] }
 }
 
+/** 0.45.85 她最后一次开口（say/narration/reply）的时刻，没开过口返回 0。
+ *  给「观察翻篇」用：上次开口之前瞥见的东西就算念过/翻篇了，
+ *  不能在主动通道里被反复翻出来当新话题（trackid 嘀咕 6 遍的教训）。 */
+function lastVoiceAt () {
+  if (!ctx.wsDir) return 0
+  try {
+    let last = 0
+    for (const e of self.readEvents(ctx.wsDir)) {
+      if (e && (e.kind === self.SAY || e.kind === self.NARRATION || e.kind === 'reply') && (Number(e.t) || 0) > last) last = Number(e.t)
+    }
+    return last
+  } catch { return 0 }
+}
+
 /** 0.45.0 悄悄观察：她瞥见的关于主人的一行白描——不说话，只记。
  *  跟 narration（她自己做的事）分开，日记里「我对他的观察」有真材实料可写。 */
 function noteObserve (text) {
@@ -638,6 +652,7 @@ module.exports = {
   noteSuppress,
   noteObserve,
   observesToday,
+  lastVoiceAt,
   sweepSays,
   settleYesterday,
   /** opts.query 决定注入摘要还是正文（问过去时给正文），见 self.promptBlock */

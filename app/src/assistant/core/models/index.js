@@ -12,6 +12,10 @@ export function createProvider (providerCfg) {
   if (!impl) throw new Error(`未知的模型接入类型: ${providerCfg.type}（可用: ${Object.keys(REGISTRY).join(', ')}）`)
   return {
     type: providerCfg.type,
+    // 0.45.95：把实际在用的 baseUrl/model 暴露出来。上层要判「这个端点是不是 DeepSeek 系」
+    // （thinking 模式要求回传 reasoning_content），以前只能猜 config，猜错就整轮 400。
+    baseUrl: providerCfg.baseUrl,
+    model: providerCfg.model,
     chat: (opts) => impl.chat({
       ...opts,
       baseUrl: providerCfg.baseUrl,

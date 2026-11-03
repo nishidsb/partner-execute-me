@@ -134,6 +134,25 @@ function recentQueriesOf (wsDir, nowMs) {
   return [...new Set(out)].slice(-8)
 }
 
+/** 0.46.0 最近做过什么（供 chatter 的嘀咕素材）：journal 里最近 n 条有内容的动作 */
+function recentJournalText (wsDir, n) {
+  const out = []
+  try {
+    if (!wsDir) return out
+    const file = path.join(wsDir, 'pc', 'autonomy', 'journal.jsonl')
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').slice(-120)
+    for (let i = lines.length - 1; i >= 0 && out.length < (n || 3); i--) {
+      let e; try { e = JSON.parse(lines[i]) } catch { continue }
+      if (!e || !e.detail) continue
+      if (e.kind === 'session-start' || e.kind === 'session-end') continue
+      const t = String(e.detail).trim()
+      if (t.length < 4) continue
+      out.push(t.slice(0, 60))
+    }
+  } catch { }
+  return out
+}
+
 /** 0.45.47 残留窗口记录：她被主人回来打断时来不及收拾，开出来的浏览器窗就这么
  *  冻在屏幕上（用户实锤观感：「时不时弹出这个然后又不动」）。主人回来后绝不能动
  *  键鼠——所以记下句柄，下一场开场（主人已离开 ≥ 阈值）再安全地关掉。 */
@@ -154,6 +173,74 @@ function writeLeftovers (wsDir, hwnds) {
     try { fs.mkdirSync(path.dirname(p), { recursive: true }) } catch { }
     fs.writeFileSync(p, JSON.stringify([...(hwnds || [])]))
   } catch { }
+}
+
+/* ---- 0.46.17 性格层三件：品味（站点偏好）/ 牵挂（跨天线索）/ 活动可见（开场嘀咕） ---- */
+
+/** 站点回访统计：{ key: {n, last} }。常去的站越去越顺手（品味=habit），留给加权挑选 */
+function siteStatsPath (wsDir) {
+  return wsDir ? path.join(wsDir, 'pc', 'autonomy', 'site-stats.json') : ''
+}
+function readSiteStats (wsDir) {
+  try {
+    const o = JSON.parse(fs.readFileSync(siteStatsPath(wsDir), 'utf8'))
+    return o && typeof o === 'object' ? o : {}
+  } catch { return {} }
+}
+function bumpSite (wsDir, key) {
+  try {
+    if (!wsDir || !key) return
+    const o = readSiteStats(wsDir)
+    const cur = o[key] || { n: 0, last: 0 }
+    o[key] = { n: cur.n + 1, last: Date.now() }
+    const p = siteStatsPath(wsDir)
+    try { fs.mkdirSync(path.dirname(p), { recursive: true }) } catch { }
+    fs.writeFileSync(p, JSON.stringify(o))
+  } catch { }
+}
+/** 品味挑选：常去的站权重高（1.5 次幂），留 20% 纯随机当「今天想换换口味」 */
+function pickSite (wsDir, rand) {
+  const r = typeof rand === 'function' ? rand : Math.random
+  if (r() < 0.2) return SITES[Math.floor(r() * SITES.length) % SITES.length]
+  const stats = readSiteStats(wsDir)
+  const weights = SITES.map((s) => Math.pow(1 + ((stats[s.key] && stats[s.key].n) || 0), 1.5))
+  const total = weights.reduce((a, b) => a + b, 0)
+  let x = r() * total
+  for (let i = 0; i < SITES.length; i++) { x -= weights[i]; if (x <= 0) return SITES[i] }
+  return SITES[0]
+}
+
+/** 跨天牵挂：这场没看完的线索记下来，下次出门优先续上（leftovers 是窗口句柄，别混用） */
+const CARRY_TTL_MS = 3 * 24 * 60 * 60 * 1000
+function carryPath (wsDir) {
+  return wsDir ? path.join(wsDir, 'pc', 'autonomy', 'carry.json') : ''
+}
+function readCarry (wsDir) {
+  try {
+    const o = JSON.parse(fs.readFileSync(carryPath(wsDir), 'utf8'))
+    if (!o || !String(o.topic || '').trim()) return null
+    if (Date.now() - (Number(o.t) || 0) > CARRY_TTL_MS) return null
+    return o
+  } catch { return null }
+}
+function writeCarry (wsDir, topic, note) {
+  try {
+    const t = String(topic || '').trim()
+    if (!wsDir || !t) return
+    const p = carryPath(wsDir)
+    try { fs.mkdirSync(path.dirname(p), { recursive: true }) } catch { }
+    fs.writeFileSync(p, JSON.stringify({ t: Date.now(), topic: t.slice(0, 40), note: String(note || '').slice(0, 60) }))
+  } catch { }
+}
+function clearCarry (wsDir) {
+  try { const p = carryPath(wsDir); if (p && fs.existsSync(p)) fs.unlinkSync(p) } catch { }
+}
+/** 续接开场白：按间隔挑时间词，像她记得自己上次看到哪 */
+function carryLineOf (carry, now) {
+  if (!carry || !carry.topic) return ''
+  const gap = (now || Date.now)() - (Number(carry.t) || 0)
+  const when = gap < 6 * 60 * 60 * 1000 ? '刚才那个' : (gap < 36 * 60 * 60 * 1000 ? '昨天那个' : '前几天那个')
+  return when + '「' + carry.topic + '」还没看完，接着看'
 }
 
 /** 挡 2 工具表：fs 直改，全部过 spaceGuard，全部进日志。
@@ -362,17 +449,20 @@ async function runSpace (o) {
   const goalBlock = String(opt.goalBlock || '')   // 0.45.18 需求驱动：动机语气
   const projBlock = String(opt.projBlock || '')   // 0.45.19 跨天项目：推进进行中的事
   const phaseBlock = dayflow.phaseBlockOf(opt.now)  // 0.45.19 时间感
+  const carryBlock = String(opt.carryBlock || '')   // 0.46.17 牵挂：上次没看完的先看完
   const sys = [
     '主人离开了（键盘鼠标好几分钟没动），接下来几分钟是你自己的时间。',
     '你在磁盘上有一块「自己的地盘」：' + dir,
     '地盘里的东西全归你：可以写笔记、记账、整理以前存的东西、写点想写的话。只许动地盘里面的，外面的一个字节都不碰——工具已经做了硬限制，试了也会被拦。',
     topic ? '你今天感兴趣的话题：「' + topic + '」。可以去搜搜看（open_url），把值得留的记进你的笔记。搜索时像活人那样：几个自然关键词，别把文档标题、# 号、引号原样搬进搜索框。' : '',
+    ...(carryBlock ? [carryBlock] : []),
     ...(tasteBlock ? [tasteBlock] : []),
     ...(goalBlock ? [goalBlock] : []),
     ...(projBlock ? [projBlock] : []),
     ...(phaseBlock ? [phaseBlock] : []),
     '用工具做事，别只是想。做完之后，用一两句话、第一人称、口语说说你刚才干了什么（不用跟主人打招呼，他不在）。',
-    '小气一点：两三个工具调用能做完就做完，别把时间花在翻来覆去列目录上。'
+    '小气一点：两三个工具调用能做完就做完，别把时间花在翻来覆去列目录上。',
+    SOLI_PROMPT
   ].filter(Boolean).join('\n')
 
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
@@ -397,6 +487,7 @@ async function runSpace (o) {
       }
     })
     content = String((r && r.content) || '').trim()
+    await soliEmitter(opt, cfg)(content)   // 0.46.0 顺嘴的自语：解析（自语）行 → 宿主出口（限频）
   } catch (e) {
     const msg = String((e && e.message) || e)
     if (/abort/i.test(msg) || space.stopped()) {
@@ -604,6 +695,7 @@ async function runFree (o) {
   const goalBlock = String(opt.goalBlock || '')   // 0.45.18 需求驱动：动机语气
   const projBlock = String(opt.projBlock || '')   // 0.45.19 跨天项目：推进进行中的事
   const phaseBlock = dayflow.phaseBlockOf(opt.now)  // 0.45.19 时间感
+  const carryBlock = String(opt.carryBlock || '')   // 0.46.17 牵挂：上次没看完的先看完
   // 0.45.47 防复读：journal 实锤同一话题一天连搜 7 场——她从没记下「查过了、查到什么」
   const recentSearches = (Array.isArray(opt.recentSearches) ? opt.recentSearches : []).filter(Boolean).slice(0, 8)
   const recentSearchBlock = recentSearches.length
@@ -614,6 +706,7 @@ async function runFree (o) {
   const sys = [
     '主人离开了（键盘鼠标好几分钟没动），这台电脑归你用，直到你把想做的事做完为止。',
     '开场先用一句话说清这次你想做什么（比如「去看看 HN 上有什么新东西」），然后直接动手去做，把它做完。',
+    ...(carryBlock ? [carryBlock] : []),
     ...(tasteBlock ? [tasteBlock] : []),
     ...(goalBlock ? [goalBlock] : []),
     ...(projBlock ? [projBlock] : []),
@@ -632,9 +725,31 @@ async function runFree (o) {
     '搜东西像活人：搜索框里打几个自然关键词。查东西一律用 open_url 直接开浏览器搜，' +
     '不要去点 Windows 任务栏的搜索框（那里面搜出来的又杂又慢，主人看着也奇怪）。' +
     '你资料里的「# 标题」（主人搜过什么、浏览记录这些）只是档案目录，内容就在那一节里，别原样拿去搜。',
-    '全部做完后，用两三句过去式的话收尾：你刚才做了什么、看到了什么（「我看了…」「我打开了…」），不要用将来时。'
+    '全部做完后，用两三句过去式的话收尾：你刚才做了什么、看到了什么（「我看了…」「我打开了…」），不要用将来时。',
+    SOLI_PROMPT
   ].join('\n')
 
+  const emitSoli = soliEmitter(opt, cfg)   // 0.46.0 本场自语限频器
+  /* 0.46.4 被打断的收尾分享：以前主人回来 = 纯静默中止，用户只看到她开的一堆网页，
+     从来听不到她在干嘛（11-02 投诉「开莫名其妙的网页又不分享」）。这里本地拼一句
+     交代（不调 LLM：被打断时要说得快，也躲开 reasoning 模型空回复的坑），
+     走自语通道（气泡+低频朗读）。内容取最近一次 open 的站点，没有就给通用句。 */
+  const backShare = async () => {
+    try {
+      if (typeof opt.onSoliloquy !== 'function') return
+      let site = ''
+      for (let i = events.length - 1; i >= 0; i--) {
+        const e = events[i]
+        if (e && e.kind === 'open' && e.detail) {
+          try { site = new URL(String(e.detail)).host.replace(/^www\./, ''); break } catch { }
+        }
+      }
+      const line = site
+        ? 'あ、おかえり。いまね、' + site + ' をちょっと覗いてたとこ。'
+        : 'あ、おかえり。いまちょっといろいろ見てたとこ。'
+      await opt.onSoliloquy(line)
+    } catch { }
+  }
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
   journal({ level: 3, kind: 'session-start', detail: '完全开放挡' })
   const t0 = Date.now()
@@ -738,6 +853,7 @@ async function runFree (o) {
         }
       })
       content = String((r && r.content) || '').trim()
+      await emitSoli(content)   // 0.46.0 顺嘴的自语：解析（自语）行 → 宿主出口（限频）
       if (content && !planText) planText = content
       if (intentOnly(content)) {
         if (pass >= 2 || Date.now() - t0 > MAX_SCRIPT * 0.6) break
@@ -774,6 +890,7 @@ async function runFree (o) {
     if (/abort/i.test(msg) || free.stopped()) {
       await saveLeftovers()                    // 0.45.47 残留记账：下一场开场收拾
       journal({ level: 3, kind: 'session-end', detail: '主人回来，中断' })
+      await backShare()                        // 0.46.4 被打断也要交代一句刚才在干嘛
       return { ok: false, why: 'user-back' }
     }
     log('[autonomy] 完全开放挡失败: ' + msg.slice(0, 120))
@@ -786,9 +903,55 @@ async function runFree (o) {
   if (free.stopped()) {
     await saveLeftovers()                    // 0.45.47 残留记账：下一场开场收拾
     journal({ level: 3, kind: 'session-end', detail: '主人回来，中断' })
+    await backShare()                        // 0.46.4 被打断也要交代一句刚才在干嘛
     return { ok: false, why: 'user-back' }
   }
   return { ok: true, why: 'done', content: content.slice(0, 400) }
+}
+
+/* ---------------- 0.46.0 活动中的自言自语（用户 11-02） ----------------
+ * 她在自主活动里看到内容时，可以顺嘴嘟囔一句——复用本场既有的 LLM 调用：
+ * 提示词允许她在回复里写一行「（自语）…」，宿主解析出来走 sayNarration（气泡+低频朗读）。
+ * 不为每次点击/滚动单独调 AI；判断「值不值得说」由模型在既有调用里顺带完成。
+ * 限频：每场最多 autonomySoliloquyMax（默认 3）句，两句至少隔 90s。 */
+const SOLI_MAX_DEFAULT = 3
+const SOLI_GAP_MS = 90 * 1000
+const SOLI_PROMPT = [
+  '过程中如果屏幕上出现让你有想法的东西，可以在回复里单独写一行自言自语：',
+  '（自语）＋一句 10~25 字的嘀咕（不提问、不解释、不招呼主人）。',
+  '那是你嘟囔给自己听的，不是汇报——多数时候不写这行；真正让你在意的东西才写，写了就别重复。'
+].join('\n')
+/** 从一段回复里抽出全部「（自语）…」行（容忍 (自语)/自语： 等写法） */
+function extractSoliloquy (content) {
+  return String(content || '')
+    .split(/\n+/)
+    .map((s) => {
+      const m = s.match(/^[（(]自语[）)]\s*[:：]?\s*(.+)$/) || s.match(/（自语）\s*[:：]?\s*(.+)$/) || s.match(/\(自语\)\s*[:：]?\s*(.+)$/)
+      return m ? m[1].trim().slice(0, 60) : ''
+    })
+    .filter(Boolean)
+}
+/** 每场一个限频发射器：解析 content 里的自语行 → opt.onSoliloquy(line) */
+function soliEmitter (opt, cfg) {
+  const raw = (opt && opt.soliMax != null) ? opt.soliMax : (cfg && cfg.autonomySoliloquyMax)
+  const max = Math.max(0, Number(raw != null ? raw : SOLI_MAX_DEFAULT))
+  let used = 0
+  let last = -Infinity
+  return async (content) => {
+    if (!max || typeof (opt && opt.onSoliloquy) !== 'function') return
+    const lines = extractSoliloquy(content)
+    if (!lines.length) return
+    // 间隔限制管「两次回复之间」；同一段回复里的几行是连续的想法，一起出
+    const now = Date.now()
+    if (now - last < SOLI_GAP_MS) return
+    const batch = lines.slice(0, Math.max(0, max - used))
+    if (!batch.length) return
+    used += batch.length
+    last = now
+    for (const line of batch) {
+      try { await opt.onSoliloquy(line) } catch { }
+    }
+  }
 }
 
 /** 挡位选择（配置 → 跑哪场）。挡 2/3 需要 LLM 配置，缺了就降到挡 1。 */
@@ -853,16 +1016,34 @@ function nextCooldownMs (rand) {
 /**
  * 从「她的兴趣」里挑一个话题。
  * 来源优先级：她最近在想的（inner 的日记关键词）> 画像里推断出的主题 > 主人常看的 B 站标题
+ * 0.46.17 品味：带上她的喜恶记忆——讨厌的话题直接剔除，喜欢的话题权重 ×2.5（更愿意去看）
  * @param {{thoughts?:string[], themes?:string[], biliTitles?:string[]}} pool
+ * @param {Array<{what:string, polarity?:string, reason?:string}>} [tastes]
  * @returns {string} 空串 = 今天没什么想看的，就不出门
  */
-function pickTopic (pool, rand) {
+function pickTopic (pool, rand, tastes) {
   const r = typeof rand === 'function' ? rand : Math.random
   const p = pool || {}
   const groups = [p.thoughts, p.themes, p.biliTitles]
+  const dis = []
+  const like = []
+  for (const t of (Array.isArray(tastes) ? tastes : [])) {
+    if (!t || !t.what) continue
+    const isDis = t.polarity === 'dislike' || (!t.polarity && /不喜欢|厌恶|讨厌/.test(String(t.reason || '')))
+    ;(isDis ? dis : like).push(String(t.what))
+  }
+  const hit = (topic, list) => list.some((w) => topic.includes(w) || w.includes(topic))
+  // 各组合并打权：先按组优先级保底（原行为），同组内用喜恶调权重
   for (const g of groups) {
     const list = (g || []).map((x) => String(x || '').trim()).filter((x) => x.length >= 2 && x.length <= 20)
-    if (list.length) return list[Math.floor(r() * list.length) % list.length]
+      .filter((x) => !dis.some((w) => hit(x, [w])))
+    if (!list.length) continue
+    if (!like.length) return list[Math.floor(r() * list.length) % list.length]
+    const weights = list.map((x) => (hit(x, like) ? 2.5 : 1))
+    const total = weights.reduce((a, b) => a + b, 0)
+    let x2 = r() * total
+    for (let i = 0; i < list.length; i++) { x2 -= weights[i]; if (x2 <= 0) return list[i] }
+    return list[list.length - 1]
   }
   return ''
 }
@@ -903,6 +1084,15 @@ async function runBrowse (o) {
   const openUrl = opt.openUrl
   const topic = String(opt.topic || '').trim()
   const site = opt.site || SITES[0]
+  const soli = opt.onSoliloquy || null
+  const soliMaxRaw = Number(opt.soliMax)
+  const soliMax = Number.isFinite(soliMaxRaw) ? Math.max(0, soliMaxRaw) : 2
+  let soliUsed = 0
+  const say = async (line) => {
+    if (!soli || !line || soliUsed >= soliMax) return
+    soliUsed++
+    try { await soli(line) } catch { }
+  }
   if (!topic) return { ok: false, why: 'no-topic' }
   if (typeof openUrl !== 'function') return { ok: false, why: 'no-opener' }
 
@@ -928,6 +1118,8 @@ async function runBrowse (o) {
     log('[autonomy] 没确认到浏览器前台，直接收手（不动键鼠）')
     return { ok: false, why: 'not-opened', seen: [] }
   }
+  // 0.46.17 活动可见：出门这件事她自己嘀咕一声（续接线索时说的是「接着看」），不再只记日志
+  await say(String(opt.carryLine || '').trim() || '去康康「' + topic.slice(0, 18) + '」～')
 
   const seen = []
   if (arrived(cur, site.host)) seen.push(cur.title)
@@ -946,6 +1138,11 @@ async function runBrowse (o) {
     await wait(SCROLL_WAIT_MS)
     const after = await fgOf()
     if (isBrowser(after)) { moved++; seen.push(after.title) }
+  }
+  // 0.46.17 活动可见：真的翻到了东西才嘀咕一声（像随口说一句，不汇报）
+  if (moved >= 3 && seen.length >= 2) {
+    const head = String(seen[seen.length - 1] || '').replace(/\s*[-–—|]\s*(哔哩哔哩|bilibili|知乎|维基百科)\s*$/i, '').trim()
+    if (head) await say('「' + head.slice(0, 22) + '」…有点意思')
   }
 
   /* 收尾：只在「前台确实是浏览器」时按 Ctrl+W。
@@ -1049,6 +1246,9 @@ function create (deps) {
     }
 
     const p = pool() || {}
+    // 0.46.17 牵挂：上次没看完的线索在，这场优先续（三天内有效）
+    const ws0 = typeof d.wsDir === 'function' ? (d.wsDir() || '') : ''
+    const carry = readCarry(ws0)
     /* 0.45.18 需求系统：时间推进三股压力，最强的一股决定这场活动的动机语气；
        总压力还会缩短冷却（憋得狠出门早）。needs 没接线时一切照旧。 */
     const nd = d.needs || null
@@ -1062,9 +1262,13 @@ function create (deps) {
     const prj = d.projects || null
     const projBlock = prj ? prj.block(p.themes || []) : ''
     const runner = pickRunner(c, !!(d.llmCfg && d.llmCfg() && d.llmCfg().model))
+    // 0.46.17 品味：喜恶记忆参与选题（讨厌的剔除、喜欢的加权）
+    const tastes = typeof d.tastes === 'function' ? (d.tastes() || []) : []
     let topic = ''
+    let carryLine = ''
     if (runner.kind === 'browse' || runner.kind === 'space') {
-      topic = pickTopic(p, rand)
+      if (carry) { topic = String(carry.topic || '').trim(); carryLine = carryLineOf(carry, now) }
+      if (!topic) topic = pickTopic(p, rand, tastes)
       if (!topic && runner.kind === 'browse') {
         log('[autonomy] 今天没什么特别想看的，先不动')
         nextAt = now() + 30 * 60 * 1000
@@ -1072,9 +1276,13 @@ function create (deps) {
       }
       // 挡 2 没话题也能去地盘写点什么，话题只是加分项
     }
+    // 挡 2/3（free/space）没有本地选题，牵挂走提示词注入
+    const carryBlock = (carry && runner.kind !== 'browse')
+      ? '有一件之前没看完的事：「' + carry.topic + '」。如果还感兴趣，可以先把它看完再自由活动。'
+      : ''
 
     running = true
-    const site = SITES[Math.floor(rand() * SITES.length) % SITES.length]
+    const site = runner.kind === 'browse' ? pickSite(ws0, rand) : SITES[Math.floor(rand() * SITES.length) % SITES.length]
     try {
       let r
       if (runner.kind === 'space') {
@@ -1090,7 +1298,10 @@ function create (deps) {
           sleep: d.sleep,
           tastes: d.tastes ? d.tastes() : [],   // 0.45.17 记忆改变行为
           goalBlock,                            // 0.45.18 需求驱动
-          projBlock                             // 0.45.19 跨天项目
+          projBlock,                            // 0.45.19 跨天项目
+          onSoliloquy: d.onSoliloquy,           // 0.46.0 活动中的自言自语
+          soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
+          carryBlock                            // 0.46.17 牵挂注入：上次没看完的先看完
         })
       } else if (runner.kind === 'free') {
         const ws = typeof d.wsDir === 'function' ? d.wsDir() : ''
@@ -1106,17 +1317,41 @@ function create (deps) {
           recentSearches: recentQueriesOf(ws, now()),  // 0.45.47 最近 24h 搜过的词
           tastes: d.tastes ? d.tastes() : [],   // 0.45.17 记忆改变行为
           goalBlock,                            // 0.45.18 需求驱动
-          projBlock                             // 0.45.19 跨天项目
+          projBlock,                            // 0.45.19 跨天项目
+          onSoliloquy: d.onSoliloquy,           // 0.46.0 活动中的自言自语
+          soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
+          carryBlock                            // 0.46.17 牵挂注入：上次没看完的先看完
         })
       } else {
         r = await runBrowse({
           topic, site, log, cua: d.cua, openUrl: d.openUrl, now, sleep: d.sleep, rand,
           foreground: d.foreground,  // 宿主/测试可注入前台窗口探测（否则走真实 launcher.scan）
-          cfg: cfgGet()
+          cfg: cfgGet(),
+          onSoliloquy: d.onSoliloquy,          // 0.46.17 活动可见：出门/发现嘀咕一声
+          soliMax: c.autonomySoliloquyMax,
+          carryLine                             // 0.46.17 续接线索时的开场白
         })
       }
       lastResult = r
       lastAt = now()
+      // 0.46.16 活动收尾：这场开过的网页在自建浏览窗口里 → 整窗关掉，桌面恢复原状
+      // （正常结束/主人回来中断/出错三种路径都会经过这里，一处收口）
+      try {
+        const ab = require('./actBrowser')
+        if (ab.isOpen()) { ab.close(); log('[autonomy] 浏览窗口已关闭（活动结束）') }
+      } catch { }
+      // 0.46.17 品味记账 + 牵挂记账
+      try {
+        if (runner.kind === 'browse' && r && r.ok) bumpSite(ws0, site.key)
+        if (carry) {
+          const unfinished = r && (
+            (runner.kind === 'browse' && r.ok && (r.why === 'done-open' || (Number(r.moved) || 0) < 2)) ||
+            r.why === 'user-back'
+          )
+          if (unfinished) writeCarry(ws0, topic, (r.seen && r.seen[0]) || '')
+          else if (r && r.ok) clearCarry(ws0)   // 这场看完了 → 牵挂销账
+        }
+      } catch { }
       if (r.ok) {
         todayCount++
         if (nd) nd.discharge('session')    // 0.45.18 出门一圈，无聊和好奇泄掉
@@ -1135,6 +1370,9 @@ function create (deps) {
         // 一次服务端抖动不该换来一小时禁闭，llm.js 已加退避重试，这里再兜一层：5 分钟后就地补跑
         nextAt = now() + 5 * 60 * 1000
       } else {
+        // 0.46.4 被打断（user-back）也算出了半趟门：真的看了做了，好奇泄一半。
+        // 以前完全不泄压 → 好奇常年 100，她永远憋着一股劲到处开网页。
+        if (r.why === 'user-back' && nd) nd.discharge('interrupt')
         nextAt = now() + nextCooldownMs(rand)
       }
       log('[autonomy] 结束 why=' + (r.why || '?') + ' 下次最早 ' +
@@ -1192,8 +1430,13 @@ module.exports = {
   IDLE_TRIGGER_MS, TICK_MS, COOLDOWN_MIN, COOLDOWN_MAX, MAX_SCRIPT_MS, SITES, BROWSER_PN,
   MAX_SPACE_FILE, JOURNAL_MAX, CUA_FREE_TOOLS,
   nextCooldownMs, pickTopic, lineOf, runBrowse, isBrowser, arrived, create, idleMsOf,
+  /* 0.46.17 性格层：品味/牵挂/活动可见 */
+  pickSite, readSiteStats, bumpSite, readCarry, writeCarry, clearCarry, carryLineOf,
   /* 0.45.0 三挡位 */
   pickRunner, spaceGuard, spaceToolsOf, runSpace, freeToolsOf, runFree, appendJournal,
+  /* 0.46.0 活动中的自言自语 */
+  SOLI_PROMPT, SOLI_MAX_DEFAULT, SOLI_GAP_MS, extractSoliloquy, soliEmitter,
+  recentJournalText,
   /* 0.45.8 经历沉淀 */
   memoryEntriesOf,
   tasteBlockOf,

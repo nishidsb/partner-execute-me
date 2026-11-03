@@ -349,6 +349,26 @@ test('S4：system prompt 整份注入 PARTNER.md（不再依赖 RAG 命中）', 
   assert.match(sys, /深蓝/, '与当前问题无关的记忆也要整份注入')
 })
 
+test('0.46.12：【动作的自动调用】每轮注入，不再随 petTools 说明书节流', async () => {
+  const tmp = tmpData('petact')
+  const cfgMod = await import(IMP('config.js'))
+  cfgMod.initDataDir(tmp)
+  const { Session } = await import(IMP('core/session.js'))
+  const s = new Session({ id: 'pa1', name: 'PA', persona: '人格' })
+  // 造到第 13 轮（user 数 12）：petTools 说明书在 12 轮整已复述过、本轮 turn=13 不复述，
+  // 用户话里也没有动作相关词 → 旧实现只剩一行索引，模型看不到标签表（真机 0 标记的根因）
+  for (let i = 0; i < 24; i++) {
+    s.history.push({ role: i % 2 ? 'assistant' : 'user', content: '普通聊天内容 ' + i, at: Date.now() })
+  }
+  const sys = s.buildSystem('今天天气怎么样')
+  assert.match(sys, /【动作的自动调用】/, '动作自动调用段必须每轮在场（0.46.9 写进节流说明书=等于没写）')
+  assert.match(sys, /acknowledge认同[\s\S]*invite邀请/, '11 个语义标签表必须完整在场')
+  assert.match(sys, /\[action:grp_fg_106\]/, '组号直嵌语法要在场')
+  assert.match(sys, /绝不要写 <pet_act>/, '硬规则要在场')
+  // 工具说明书本身仍按预算节流：本轮只有一行索引，不再重复全文
+  assert.ok(!/【桌面角色的表现工具】/.test(sys), 'petTools 工具说明书本轮应节流成索引行')
+})
+
 test('S4：记忆三工具已注册并能真正写入', async () => {
   const tmp = tmpData('tools')
   const cfgMod = await import(IMP('config.js'))
@@ -496,7 +516,9 @@ test('S6.5：程序名匹配（大小写/空格/.lnk 后缀/中文名都能命�
 test('S6.5：游戏模式退出能恢复原位置/大小（源码级：保存 + 还原 + 托盘入口）', () => {
   const gm = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'gameMode.js'), 'utf8')
   assert.match(gm, /saved = \{ pos: prevPos/, '进入时保存原位置')
-  assert.match(gm, /pet\.placeAt\(saved\.pos\)/, '退出时恢复原位置')
+  // 0.45.83 起退出走 target=saved.pos（先 glideTo， glide 不了才 placeAt）
+  assert.match(gm, /const target = saved\.pos/, '退出时要按进入前保存的位置还原')
+  assert.match(gm, /pet\.(glideTo|placeAt)\(target/, '退出时恢复原位置')
   assert.match(gm, /call|pet\.setQuiet\(true\)/, '进入时停掉自主走动')
   const pet = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'companion', 'pet.js'), 'utf8')
   assert.match(pet, /function placeAt \(p\)/, 'pet 要能被外部摆位')
@@ -611,4 +633,25 @@ test('0.25.0 回归：整轮只调工具时不能显示「（空回复）」', a
   const r2 = await s2.send('toolonlyempty: 你自己玩玩')
   assert.ok(String(r2.content).trim().length > 0, '收尾请求必须有正文，不能是空回复')
   assert.match(String(r2.content), /mock/, '收尾正文应来自收尾请求：' + r2.content)
+})
+
+test('0.46.17 主动想起：命中升级为「刚刚想起」，同轮缓存 + 冷却闸', async () => {
+  const cfgMod = await import(IMP('config.js'))
+  cfgMod.initDataDir(tmpData('spark'))
+  const { Session } = await import(IMP('core/session.js'))
+  const s = new Session({ id: 'spark', name: 'S', persona: '人格' })
+  const arr = [{ shown: '他最喜欢的颜色是深蓝' }, { shown: '另一条旧事' }]
+  const spark1 = s._takeRecallSpark(arr, 1)
+  assert.match(spark1, /【刚刚想起】/)
+  assert.match(spark1, /他最喜欢的颜色是深蓝/)
+  assert.match(spark1, /自然带出/, '要教她用自己的话说，不是复述')
+  assert.equal(arr.length, 1, '被想起的那条从普通相关记忆里摘走，不重复出现')
+  assert.equal(s._takeRecallSpark(arr, 2), '', '冷却期内不再想起（活人不每句都「我想起来」）')
+  s._recallCoolUntil = 0
+  const arr2 = [{ shown: 'C' }, { shown: 'D' }]
+  const b1 = s._takeRecallSpark(arr2, 3)
+  const b2 = s._takeRecallSpark(arr2, 3)
+  assert.equal(b1, b2, '同一轮多次构建 system prompt，想起的是同一件旧事')
+  assert.match(b1, /【刚刚想起】/)
+  assert.equal(arr2.length, 1)
 })

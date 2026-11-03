@@ -66,7 +66,7 @@ function splitWords (s) {
   return String(s || '').split(/[,，、\s]+/).map((w) => w.trim()).filter(Boolean)
 }
 
-async function say ({ script, speech } = {}) {
+async function say ({ script, speech, vol } = {}) {
   const raw = String(script || '')
   if (!raw.trim()) throw new Error('script 为空：至少要说一句话或做一个动作')
   // 【…】先播动作再出新气泡；<…> 气泡出现后接着播
@@ -82,7 +82,9 @@ async function say ({ script, speech } = {}) {
   // dm 标记让渲染层知道「这条已经有人显示了」，它只管演动作。
   let dm = false
   try { dm = require('./danmaku').isOn() } catch { }
-  bcast('pet:cmd', { kind: 'say', text, lead, inline, speak: speech !== false, dm })
+  // 0.46.11 vol：嘀咕音量（0.05~1，自言自语专用；缺省 = 正常音量）
+  const volN = Number(vol)
+  bcast('pet:cmd', { kind: 'say', text, lead, inline, speak: speech !== false, dm, vol: Number.isFinite(volN) ? Math.min(1, Math.max(0.05, volN)) : undefined })
   if (dm && text) {
     try { require('./danmaku').say(text) } catch (e) { log('[petBridge] 弹幕推送失败:', e && e.message) }
   }
@@ -364,6 +366,56 @@ function parseActWords (body) {
 function extractInlineAct (text) {
   const actions = []
   let t = String(text || '')
+  // 0.46.9 AgentAtelierR 同款：正文内嵌 [action:语义标签] / [action:grp_fg_106]（自动调用规则）。
+  // 标识符样的都剥掉并归一成 'action:xxx' 词（未知语义渲染层按 none 处理、不播也不显示），
+  // 非标识符（含空格/符号的普通方括号文本）原样保留不误伤。
+  t = t.replace(/\[action\s*:\s*([^\[\]\r\n]+)\]/gi, (m, raw) => {
+    const v = String(raw || '').trim().toLowerCase()
+    if (/^grp_[a-z0-9_]+$/.test(v) || /^[a-z_]+$/.test(v)) { actions.push('action:' + v); return ' ' }
+    return m
+  })
+  /* 0.46.13 舞台指示兜底映射（用户两天第三次「手势还是没动」后的换路打法）：
+   * 模型（deepseek 系、日语人格）在正文里写的是【少し照れる】【少し首をかしげる】
+   * 这类舞台指示，[action:] 语法喂了每轮也不理——200 条历史全是【…】惯性，指令压不过。
+   * 与其继续喂规则，不如把她的既有习惯当输入：识别【…】内的日/中动作关键词，
+   * 映射成语义标签（11 标签计划，真机 /act 四路径已验证）或词表里有的中文动作词，
+   * 并从正文剥掉（顺带 TTS 不再念出「【少し照れる】」）。认不出关键词的【…】
+   * 原样保留（可能是正经强调文本，不误伤）。每条回复最多取 2 个（动作闸之外的第二道限）。
+   * 词/标签都必须是渲染层已验证存在的：语义标签走 playSemanticAction 计划，
+   * 中文词走 SPINE_WORD_MAP（278 词覆盖 95+53 组）。 */
+  const STAGE_DIR_ACTIONS = [
+    [/照れ|恥ずか|テレ|害羞|脸红/, 'action:shy'],
+    [/頷|うなず|点头|そうだね|わかった/, 'action:acknowledge'],
+    [/首を振|いやいや|うんうん|摇头|不同意|不行/, 'action:disagree'],
+    [/首をかし|首を傾|かしげ|歪头|考え|思案|思考|沉思|琢磨/, 'action:think'],
+    [/驚き|驚く|びく|びっくり|ドキッ|はっと|吓一跳|惊讶|惊慌|慌张/, 'action:surprised'],
+    [/手を振|手を揺|挥着手|挥手|バイバイ|じゃあね|またね/, 'action:wave'],
+    [/いたずら|悪戯|ニヤ|にやり|俏皮|得意|得逞/, 'action:playful'],
+    [/嬉し|楽しい|わーい|やった|兴奋|激动/, 'action:excited'],
+    [/元気出|なでなで|安慰|摸摸|加油/, 'action:comfort'],
+    [/こっち|おいで|招手|过来|邀请/, 'action:invite'],
+    [/説明|说明|解説|解释|你看啊/, 'action:explain'],
+    /* 0.46.14 补漏：真机 21:55 【少し笑う】没接住——「笑う」不在旧表（只有微笑/笑み），
+     * 而这正是她最高频的舞台指示。注意顺序：ふふっ 是笑声语气归俏皮、笑う 归轻笑。 */
+    [/笑う|笑っ|笑顔|くすり|くすっ|ふふ|微笑|笑み|にっこり|轻笑|偷笑|嘿嘿/, '轻笑'],
+    [/目を丸|まじまじ|瞪|凝视/, 'action:surprised'],
+    [/腕を組|抱臂|双臂交叉/, '抱臂'],
+    [/頬杖|托腮/, '托腮'],
+    [/伸び|伸懒腰/, '伸懒腰'],
+    [/拍手|鼓掌|パチパチ/, '拍手'],
+    [/耳打ち|内緒|悄悄话|耳语/, '悄悄话'],
+    [/ガッツ|握拳|打气/, '加油'],
+    [/座る|腰を下ろ|坐下/, '坐下'],
+    [/立ち上が|站起来|起身/, '站起来']
+  ]
+  let stageDirCount = 0
+  t = t.replace(/【([^【】]{1,14})】/g, (m, body) => {
+    if (stageDirCount >= 2) return m
+    for (const [re, w] of STAGE_DIR_ACTIONS) {
+      if (re.test(body)) { actions.push(w); stageDirCount++; return ' ' }
+    }
+    return m
+  })
   // 带标准 <actions> 包装的（容许漏写收尾标签）
   t = t.replace(/<pet_act>\s*<actions>([\s\S]*?)<\/actions>\s*(?:<\/pet_act>)?/gi, (m, body) => {
     const w = parseActWords(body)
@@ -416,6 +468,21 @@ async function invoke (name, args) {
       }
     }
     case 'alarm_cancel': return require('./companion').alarmCancel(args || {})
+    // 0.45.93 主动发 QQ：立刻发 / 排一条 / 查 / 取消（她答应了就要真发得出去）
+    case 'qq_send': {
+      const t = String((args && args.text) || '').trim()
+      if (!t) throw new Error('要发的内容是空的')
+      const r = await require('./companion').qqSendNow(t, 'qq_send')
+      if (!r || !r.ok) throw new Error((r && r.error) || '没发出去')
+      return { ok: true, sent: true, text: r.text, at: new Date(r.at).toLocaleTimeString('zh-CN', { hour12: false }) }
+    }
+    case 'qq_plan': {
+      const r = await require('./companion').qqPlanAdd(args || {})
+      if (!r || !r.ok) throw new Error((r && r.error) || '没排上')
+      return r
+    }
+    case 'qq_plan_list': return require('./companion').qqPlanList()
+    case 'qq_plan_cancel': return require('./companion').qqPlanCancel(args || {})
     // 0.45.71 学习监督：真实聊天通道的 study_* 也走这条桥（懒加载，理由同上）
     case 'study_start':
     case 'study_peek':

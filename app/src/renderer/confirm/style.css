@@ -1,6 +1,11 @@
 /* 原生控件（select 下拉、滚动条、checkbox）跟随暗色主题——否则下拉弹层白底白字 */
 html { color-scheme: dark; }
 
+/* 0.45.92 hidden 属性必须真的隐藏：下面 .remember{display:flex} 是类选择器，
+   优先级高于 UA 的 [hidden]{display:none}，于是「记住」那一行永远露在外面、
+   还没有文字，用户勾了也白勾（主进程根本没读那个值）。 */
+[hidden] { display: none !important; }
+
 /* 电脑操作确认窗：跟聊天窗同一套深色配色，尺寸小、信息密度高 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }

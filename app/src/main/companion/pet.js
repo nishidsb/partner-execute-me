@@ -27,6 +27,7 @@ let drag = null // { offX, offY, timer, vx, vy, last }
 let userVisible = false // 用户开关（设置里的「在桌面显示角色」）
 let suspended = false // 全屏让位（临时隐藏，不改用户开关）
 let walkTimer = null // 下一次起步的定时器
+let defaultSitTimer = null // 0.46.0 启动后自动坐下的延迟定时器
 let walkAnim = null // 正在走：{ timer }
 let walkDir = 0 // 0.33.0 正在走的方向（-1 左 / 1 右），describeActivity 用
 let glideTimer = null // 0.45.83 平滑滑动（游戏模式进出）进行中的定时器
@@ -36,6 +37,16 @@ const SIT_HIPS = 0.37 // 坐姿时胯部离舞台底边的高度（占身高比�
 let rest = null // { cardId, fromY, timer }
 let groundRest = null // 0.45.29 原地坐下休息：{ timer }（不占卡片，就地坐一会儿再站起来）
 let inertia = null // 抛掷惯性：{ timer }
+// 0.45.90 坐卡资格与防「坐住不挪窝」：起身 90s 冷却内不坐卡/不原地坐，且不重复选上一张卡
+let cardCooldownUntil = 0
+let lastCardId = ''
+function canSitNow () {
+  const vis = state.char && state.char.visual
+  if (!vis) return false
+  if (vis.vrm) return true
+  if (vis.mode === 'spine' && vis.spine && vis.spine.sitSkel) return true // 渲染层切坐姿骨架演出
+  return false
+}
 let roamHold = false // 渲染层说「正在对话/悬停」→ 暂停自主走动（免得说着话人走开）
 let quietOn = false // S3 模型主动要求安静（pet_quiet）：不走动，到点或 minutes=0 解除
 let paused = false // 0.18.0 第一批：右键「暂停」——停掉自主走动，恢复后照原档位继续
@@ -299,7 +310,10 @@ function stopInertia () {
 /* ---------------- 走 动（三档：关 / 悠闲 / 活跃） ---------------- */
 function walkMode () {
   const m = petCfg().petWalk
-  return m === 'off' || m === 'lively' ? m : 'calm'
+  // 0.46.0 默认从 calm 改 off（用户 11-02：现在的 spine 只有坐姿素材，
+  // 默认就坐在卡片/未关闭的程序上，不用来回溜达）；显式配了 calm/lively 照旧尊重。
+  if (m === 'calm' || m === 'lively') return m
+  return 'off'
 }
 
 function scheduleWander () {
@@ -323,22 +337,22 @@ function startWander () {
     const maxX = b.x + b.width - 90
     if (maxX - minX < 120) { scheduleWander(); return } // 屏太窄，不走
     // 先问问 AuraDesk 有没有卡片可坐（走过去 → 坐下 → 它把卡片放大）
-    // 只有 3D 模型有坐姿；立绘/形象包/Spine 坐到卡片上会变成站着悬空，所以不参与
-    // 角色对象结构是 { visual: { mode, vrm, ... } }，不是 char.vrm（写错过一次）
-    const vis = state.char && state.char.visual
-    const canSit = !!(vis && vis.vrm)
-    if (canSit && Math.random() < 0.55) {
+    // 资格：3D 模型，或 Spine 且角色卡配了坐姿骨架（渲染层切骨架演出）
+    const canSit = canSitNow()
+    const sitAllowed = Date.now() > cardCooldownUntil // 0.45.90 起身冷却：强制先溜达
+    if (canSit && sitAllowed && Math.random() < 0.55) {
       // 0.45.29：AuraDesk 上报文件（%TEMP%\auradesk-cards.json）一直没出现——
       // 它的渲染层 publishCards 从未发出（真机验证过文件不存在）。兜底：用窗台
       // 枚举找 AuraDesk 的窗口，把它的顶边当成一张「卡片」坐上去（视觉一致）
       let cards = visibleCards(petlink.readCards())
       if (!cards.length) cards = visibleCards(auraDeskWindowsAsCards())
+      if (cards.length > 1) cards = cards.filter((c) => String(c.id) !== lastCardId) // 别老坐同一张
       const card = petlink.pickCard(cards, state.pos.x, state.pos.y, d)
       if (card) { restOnCard(card); return }
     }
     // 0.45.29 原地坐下休息：用户反馈「坐下/躺下这些动作从没见过」——坐卡联动没数据、
     // pet_act 模型很少主动用，那就让她自己偶尔坐一会儿（坐下→发呆→起身接着溜达）
-    if (canSit && Math.random() < 0.3) { restInPlace(); return }
+    if (canSit && sitAllowed && Math.random() < 0.3) { restInPlace(); return }
     /* 0.45.54 站着待机（真根因修复）：自主活动以前只有「坐卡片 / 原地坐 / 走路」三种，
        从不出现「站着发呆」这个状态 → 渲染层待机 VRMA 池（7 条外采动作）自装进去后
        一次都没播过，用户看到的就是「动作还是一样」。这里给她 8~18s 站立停留，
@@ -428,10 +442,12 @@ function restOnCard (card, opt) {
 function sitOnCommand () {
   if (!state.visible) return { ok: false, reason: '角色当前没有显示' }
   if (drag) return { ok: false, reason: '正被拎着，放下再坐' }
-  const vis = state.char && state.char.visual
-  if (!(vis && vis.vrm)) return { ok: false, reason: '当前形象没有坐姿（只有 3D 模型能坐）' }
+  if (!canSitNow()) return { ok: false, reason: '当前形象没有坐姿（3D 模型，或配了坐姿骨架的 Spine 才能坐）' }
   if (rest) return { ok: true, on: 'card', already: true, note: '已经坐在卡片上了' }
   if (groundRest && groundRest.persistent) return { ok: true, on: 'ground', already: true, note: '已经坐着了' }
+  // 0.46.0 撤掉挂着的溜达定时器：不撤的话，boot 自动坐下后定时器到点会
+  // startWander → leaveCard 把她从卡片上拽下来（真机 0.46.0 首启实测踩到）。
+  clearTimeout(walkTimer); walkTimer = null
   try {
     const { screen } = require('electron')
     const d = screen.getDisplayNearestPoint({ x: Math.round(state.pos.x), y: Math.round(state.pos.y) })
@@ -519,6 +535,7 @@ function leaveGroundRest (thenWander) {
   if (!groundRest) return false
   clearTimeout(groundRest.timer)
   groundRest = null
+  cardCooldownUntil = Date.now() + 90000 // 0.45.90 起身冷却
   try { if (broadcast) broadcast('pet:pose', { pose: 'stand' }) } catch { }
   if (thenWander !== false) scheduleWander()
   return true
@@ -527,6 +544,8 @@ function leaveGroundRest (thenWander) {
 function leaveCard (thenWalk) {
   if (!rest) return false
   clearTimeout(rest.timer)
+  cardCooldownUntil = Date.now() + 90000 // 0.45.90 起身冷却：先溜达再考虑坐下一次
+  lastCardId = String(rest.cardId || '')
   // 落回坐卡前的地面高度（x 保持当前位置）：不还原 y 角色就会悬空待机。
   // 边界：记住的高度不比卡片锚点低（上次悬空时配置里存的就是卡片高度 y）→
   // 说明那不是地面，回落到当前屏幕工作区底边自愈
@@ -850,8 +869,21 @@ function boot () {
     } catch { }
   }
   log('[pet] overlay 模式启动, visible =', state.visible, 'pos =', JSON.stringify(state.pos),
-    'walk =', c.petWalk || 'calm', 'fullscreenHide =', c.petFullscreenHide !== false)
+    'walk =', c.petWalk || 'off', 'fullscreenHide =', c.petFullscreenHide !== false)
   scheduleWander()
+  // 0.46.0 默认坐下（用户 11-02：「现在的 spine 只有坐姿，所以应该默认坐在某一张卡片上
+  // 或者坐在某个还未关闭的程序上。不用移动」）：启动几秒后自动执行一次 sitOnCommand——
+  // 优先坐 AuraDesk 卡片 → AuraDesk 窗口顶边兜底 → 都没有就原地持续坐。
+  // 只在启动时做这一次，之后主人拎起来 / 叫她走 / 命令站起，就不再自动摁回去。
+  clearTimeout(defaultSitTimer)
+  defaultSitTimer = setTimeout(() => {
+    defaultSitTimer = null
+    try {
+      if (!state.visible || drag || rest || (groundRest && groundRest.persistent)) return
+      const r = sitOnCommand()
+      if (r && r.ok) log('[pet] 默认坐下 →', r.on, r.name || '')
+    } catch (e) { log('[pet] 默认坐下失败:', e && e.message) }
+  }, 4000)
 }
 
 function registerIpc (getChar, patchCfgFn) {
@@ -932,5 +964,7 @@ module.exports = {
   // S6.5 游戏模式：摆位 / 取位（0.45.83 加 glideTo 平滑滑动）
   getPos, placeAt, glideTo,
   // 拖拽中：层级/穿透这些会打断指针捕获的操作必须让路
-  isDragging: () => !!drag
+  isDragging: () => !!drag,
+  // 0.46.14 动作测试面板诚实列词用：当前角色卡的 visual 配置
+  currentVisual: () => (state.char && state.char.visual) || null
 }

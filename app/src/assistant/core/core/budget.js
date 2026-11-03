@@ -39,7 +39,7 @@ export function wantFixed (kind, { turn = 0, userText = '' } = {}) {
 
 /** 不发全文时留一行索引，避免模型「忘记自己有这个能力」 */
 export const FIXED_INDEX = {
-  petTools: '（表现工具：pet_say 说话 / pet_act 动作 / pet_move_to 走路 / pet_ask 提问 / pet_set 外观 / pet_quiet 安静）',
+  petTools: '（表现工具：pet_say/pet_act/pet_move_to/pet_ask/pet_set/pet_quiet。正文可嵌 [action:语义标签] 让她边说边做动作，一句最多一个）',
   sysTools: '（系统工具：open_app 开程序 / launch_game 开游戏 / game_mode 游戏模式 / list_running 看开着什么 / set_volume 音量 / show_desktop 显示桌面）',
   cua: '（电脑工具：截图 / 点击 / 输入 / 按键 / 窗口管理，参数见工具表）'
 }
@@ -61,9 +61,63 @@ export function trimHistory (history, maxChars, keepAtLeast = 8) {
   return out
 }
 
+/**
+ * 剔掉开头的孤儿 tool 结果（0.45.94）。
+ * trimHistory 从后往前按预算切，起点可能落在一组工具调用的中间：父 assistant 被切走、
+ * tool 结果留下 → OpenAI 兼容端点 400「tool must be a response to a preceding message
+ * with tool_calls」，且此后每轮都被同一条卡死。
+ */
+export function dropLeadingOrphanTools (arr) {
+  const out = Array.isArray(arr) ? arr.slice() : []
+  while (out.length && out[0] && out[0].role === 'tool') out.shift()
+  return out
+}
+
 /** 由模型上下文上限（token）反推历史字符预算：历史吃 40% */
 export function historyBudget (ctxTokens) {
   const t = Number(ctxTokens) || 0
   if (!t) return 24000
   return Math.max(8000, Math.min(60000, Math.round(t * 0.4 * 1.5)))
+}
+
+/**
+ * 0.45.95：把「工具调用」整段压成纯文本。
+ *
+ * 干什么用的：DeepSeek 的 thinking 模式有一条死规则——带 tool_calls 的 assistant 消息
+ * 必须把 reasoning_content 原样带回，否则整轮 400。多数情况下我们回填得住，
+ * 但历史里的老消息（0.45.93 之前落盘的）、网关转写的工具调用，都可能**根本没有思维链**，
+ * 这时候补空串也不一定被接受（不同端点校验不一致）。
+ *
+ * 所以留一条无条件成立的退路：这一轮把 tool_calls / tool 结果全部改写成普通文本，
+ * 请求里再没有任何 tool_calls，那条规则就无从触发，至少能把话说完，不至于整轮哑掉。
+ * 只在真被 400 挡回来时用一次，正常路径不受影响。
+ */
+export function flattenToolHistory (arr) {
+  const out = []
+  const push = (m) => {
+    const last = out[out.length - 1]
+    // 连续同角色合并：部分端点不接受连着两条 user
+    if (last && last.role === m.role && typeof last.content === 'string' && typeof m.content === 'string') {
+      last.content = last.content + '\n' + m.content
+      return
+    }
+    out.push(m)
+  }
+  for (const m of (Array.isArray(arr) ? arr : [])) {
+    if (m && m.role === 'assistant' && m.tool_calls && m.tool_calls.length) {
+      const names = m.tool_calls.map((t) => (t && t.function && t.function.name) || '').filter(Boolean).join('、')
+      const text = String(m.content || '').trim()
+      push({
+        role: 'assistant',
+        content: [text, names ? '（我调用了工具：' + names + '）' : '（我调用了一个工具）'].filter(Boolean).join('\n')
+      })
+      continue
+    }
+    if (m && m.role === 'tool') {
+      push({ role: 'user', content: '【工具 ' + (m.name || '') + ' 的结果】\n' + String(m.content || '').slice(0, 2000) })
+      continue
+    }
+    push(m)
+  }
+  return out
 }

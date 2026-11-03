@@ -183,10 +183,29 @@ async function chatOnce ({ baseUrl, apiKey, model, messages, temperature = 0, ma
       max_tokens: Math.max(32, Number(maxTokens) || 220),
       stream: false
     }, signal: ctrl.signal, label: 'chatOnce ' })
-    const j = await res.json()
-    const c = j && j.choices && j.choices[0]
-    const out = c && ((c.message && c.message.content) || c.text)
-    return String(out || '').trim()
+    const parse = (j) => {
+      const c = j && j.choices && j.choices[0]
+      return {
+        out: String((c && ((c.message && c.message.content) || c.text)) || '').trim(),
+        fin: (c && c.finish_reason) || ''
+      }
+    }
+    let p = parse(await res.json())
+    // 0.46.4 reasoning 模型（deepseek 等）会先吐 reasoning_content 再给正文：
+    // 小预算调用经常思考就把 max_tokens 吃光，正文一字未出（finish_reason=length），
+    // 表现为「模型空回复」——经历沉淀上线以来 0 次成功（全日志实证）。空 + length
+    // 时原地用 3 倍预算重试一次；真·空回复（stop）不重试，照旧返回。
+    if (!p.out && p.fin === 'length') {
+      const res2 = await openCompletion({ url, headers, body: {
+        model,
+        messages,
+        temperature,
+        max_tokens: Math.min(1200, Math.max(64, (Math.max(32, Number(maxTokens) || 220)) * 3)),
+        stream: false
+      }, signal: ctrl.signal, label: 'chatOnce 预算重试 ' })
+      p = parse(await res2.json())
+    }
+    return p.out
   } finally {
     clearTimeout(timer)
   }

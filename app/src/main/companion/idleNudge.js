@@ -64,6 +64,9 @@ function stageOf (idleMs, rec, now) {
   const t = now || Date.now()
   const r = rec || {}
   const idle = Math.max(0, Number(idleMs) || 0)
+  // 0.45.91 睡前静默期内一律不给阶段（唯一真源：调用点散在四处，漏一处她就会半夜开口）。
+  // 11-02 实锤：23:39 说了「静默到 06:39」，23:56 还是出了「第 5 阶」。
+  if (r.sleepUntil && t < Number(r.sleepUntil)) return 0
   if (idle > MAX_IDLE_TRACK) return 0                       // 超过一天不理就不再追了
   if (t < (Number(r.nextTryAt) || 0)) return 0              // 生成失败退避中
   // 距上一条主动消息太近就先忍着（重启回来不许连发）
@@ -78,11 +81,13 @@ function stageOf (idleMs, rec, now) {
   return 0
 }
 
-/** 主人说了话 → 计时清零（所有已发阶段作废） */
+/** 主人说了话 → 计时清零（所有已发阶段作废），并解除睡前静默
+ *  0.45.91：原来 sleepUntil 只写在默认参数里，被 rec 里的旧值覆盖掉了 ——
+ *  他半夜起来说句话，静默还挂到早上，反而是另一种「不理人」。 */
 function onUserTalk (rec, now) {
   const t = now || Date.now()
   return Object.assign({ stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: t, sleepUntil: 0 }, rec, {
-    stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: t
+    stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: t, sleepUntil: 0
   })
 }
 

@@ -3,6 +3,7 @@ node_modules/
 dist/
 build/
 out/
+package-lock.json
 
 # 运行日志
 *.log
@@ -19,3 +20,7 @@ tools/net-test.js
 # 形象包离线预览的临时目录
 .tmp-figure/
 figure-preview.png
+
+# 破解素材解密工具不进开源仓库
+app/tools/unpack-aarpack.js
+app/tools/unpack-previews.js

@@ -1483,12 +1483,16 @@
         /* 0.45.80 待机手臂自然化（运行时自校正版）：模型烘入的 idle_still 上臂
            离垂线 60°/66°（文件解析实测），官方 clip 每帧写绝对值改不了 clip——
            在所有骨骼写完之后，把上臂世界方向朝「保留水平方位角、仰角 12°」
-           的目标转过去。不累积：每帧 mixer/vrm.update 重写后再修。只在官方
-           idle 占优（非走路/非坐 rig/非池内动作）时生效，权重 0.25s 淡入淡出。 */
+           的目标转过去。不累积：每帧 mixer/vrm.update 重写后再修，权重 0.25s 淡入淡出。
+           0.45.84：池内动作播放期间也修，但只半权重（0.55）——池内 clip 同样带着
+           烘入的外张上臂，之前一进动作手臂就弹回 60°+ 外张原样（用户：手部动作
+           好出戏）；半权重的意思是动作本身的挥动保留，静态外张收掉一半。
+           走路/坐 rig/animHold 仍然完全不修（那些有自己的手臂逻辑）。 */
         try {
           if (st.vrm && st.vrm.humanoid) {
             const poolBusy = st.fadePool || (st.poolPlaying && st.poolAct && st.poolAct.isRunning())
-            const natTarget = (!st.walk.on && !st.rig && !st.animHold && !poolBusy) ? 1 : 0
+            let natTarget = 0
+            if (!st.walk.on && !st.rig && !st.animHold) natTarget = poolBusy ? 0.9 : 1
             const an = st.armNat || (st.armNat = { w: 0 })
             an.w += (natTarget - an.w) * Math.min(1, dt / 0.25)
             if (an.w > 0.01) {
@@ -1497,7 +1501,8 @@
                 { up: 'leftUpperArm', low: 'leftLowerArm' },
                 { up: 'rightUpperArm', low: 'rightLowerArm' }
               ])
-              for (const s of sides) {
+              for (let si = 0; si < sides.length; si++) {
+                const s = sides[si]
                 let up = null, low = null
                 try { up = hm.getRawBoneNode(s.up); low = hm.getRawBoneNode(s.low) } catch { }
                 if (!up || !low || !up.quaternion) continue
@@ -1511,12 +1516,47 @@
                 dir.normalize()
                 const horiz = Math.sqrt(dir.x * dir.x + dir.z * dir.z)
                 if (horiz < 0.05) continue // 已经基本垂直，不用收
+                /* 0.45.85 仰角带通：只收「外张区间」的手臂，抬起来的动作不干预。
+                   elev = 上臂离垂线角（droop 口径）。模型烘入的 idle/动作静置段在
+                   48~71°（探针实测），而鼓掌/挥手/伸懒腰这类 gesture 会把臂抬到
+                   70° 以上甚至水平——对抬臂强行压回 12° 会把动作打断（0.45.84
+                   半权重 0.55 就是为了躲这个，代价是动作静置段还剩 28~38° 依然外张）。
+                   改成按仰角分带：<25° 已贴身不用收；25~40° 渐入；40~72° 全力收；
+                   72~88° 渐出（保护抬臂动作）；≥88° 完全不动。这样动作期间可以用
+                   0.9 的大权重，动作本身的手臂轨迹不受影响。 */
+                const elevDeg = Math.atan2(horiz, -dir.y) * 180 / Math.PI
+                let band = 0
+                if (elevDeg > 25 && elevDeg < 88) {
+                  if (elevDeg < 40) band = (elevDeg - 25) / 15
+                  else if (elevDeg <= 72) band = 1
+                  else band = 1 - (elevDeg - 72) / 16
+                }
+                /* 0.45.86 时间平滑：鼓掌这类动作会让上臂在带通边界（~72°）来回摆，
+                   逐帧的 band 跟着 1→0.5→1 泵动 = 用户说的「抽搐」。0.18s 低通让
+                   权重跨边界时是滑过去的，不跟动作的高频摆动共振。 */
+                const bands = st.__anBands || (st.__anBands = [0, 0])
+                band = bands[si] + (band - bands[si]) * Math.min(1, dt / 0.18)
+                bands[si] = band
+                if (band < 0.02) continue
+                const effW = an.w * band
                 const des = st.__anV4 || (st.__anV4 = new THREE.Vector3())
                 des.set(dir.x / horiz * Math.sin(ARM_NAT_DROOP), -Math.cos(ARM_NAT_DROOP),
                   dir.z / horiz * Math.sin(ARM_NAT_DROOP))
                 const R = st.__anQ1 || (st.__anQ1 = new THREE.Quaternion())
                 R.setFromUnitVectors(dir, des)
-                if (an.w < 0.99) R.slerp(st.__anQi || (st.__anQi = new THREE.Quaternion()), 1 - an.w)
+                if (effW < 0.99) R.slerp(st.__anQi || (st.__anQi = new THREE.Quaternion()), 1 - effW)
+                // 量化探针：动作期间每 600ms 记一次上臂离垂线角（修前→实际修后）
+                if (poolBusy && effW > 0.25) {
+                  const nowMs = Date.now()
+                  if (!st.__anLog || nowMs - st.__anLog > 600) {
+                    st.__anLog = nowMs
+                    const d2 = st.__anV5 || (st.__anV5 = new THREE.Vector3())
+                    d2.copy(dir).applyQuaternion(R)
+                    const h2 = Math.sqrt(d2.x * d2.x + d2.z * d2.z)
+                    const degAfter = Math.round(Math.atan2(h2, -d2.y) * 180 / Math.PI)
+                    console.warn('[arm-nat] 动作中 上臂离垂线 ' + Math.round(elevDeg) + '° → ' + degAfter + '°（w=' + effW.toFixed(2) + '）')
+                  }
+                }
                 // 世界旋转 → 局部增量：qLocal' = parentQ⁻¹ · R · parentQ · qLocal
                 const pq = st.__anQ2 || (st.__anQ2 = new THREE.Quaternion())
                 up.parent.getWorldQuaternion(pq)

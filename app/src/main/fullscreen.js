@@ -20,6 +20,7 @@ const PS_SCRIPT = `
 Add-Type -Namespace Ryza -Name Full -MemberDefinition '
 [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder sb, int max);
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
 [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
 [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern bool GetMonitorInfo(IntPtr hMon, ref MONITORINFO mi);
@@ -31,6 +32,12 @@ $last = ''
 $lastH = ''
 $fgName = ''
 $fgTitle = ''
+# reused across polls: PS 5.1 never returns heap to the OS, so a resident
+# loop must not allocate per iteration. Watchdog: self-exit past the cap,
+# the main process respawns us (proc.on('exit') -> delayed start()).
+$sb = New-Object System.Text.StringBuilder 512
+$memCap = 300MB
+$memTick = 0
 while ($true) {
   $state = 'NORMAL'
   $fgPid = 0
@@ -44,15 +51,25 @@ while ($true) {
       # 标题走 MainWindowTitle，不再加 P/Invoke：这段逻辑挂了只该让她「看不见」，
       # 绝不能把整个全屏探测（Add-Type）一起拖下水。
       $hKey = $h.ToString()
+      # 0.45.86 标题每秒重读（GetWindowText 是一次 P/Invoke，不贵）；
+      # 进程名才按句柄缓存（Get-Process 每秒一次太浪费）。
+      # 只按句柄缓存标题的话，同一窗口里切标签页标题就不更新了。
       if ($hKey -ne $lastH) {
         $lastH = $hKey
         $fgName = ''
-        $fgTitle = ''
         try {
           $p = Get-Process -Id $fgPid -ErrorAction Stop
           $fgName = $p.ProcessName
-          $fgTitle = $p.MainWindowTitle
         } catch { }
+      }
+      $fgTitle = ''
+      try {
+        [void]$sb.Clear()
+        [Ryza.Full]::GetWindowText($h, $sb, 512) | Out-Null
+        $fgTitle = $sb.ToString()
+      } catch { }
+      if (-not $fgTitle) {
+        try { $fgTitle = (Get-Process -Id $fgPid -ErrorAction Stop).MainWindowTitle } catch { }
       }
       $r = New-Object Ryza.Full+RECT
       if ([Ryza.Full]::GetWindowRect($h, [ref]$r)) {
@@ -80,11 +97,20 @@ while ($true) {
   $line = $state + '|' + $fgPid + '|' + $fgName + '|' + $mon + '|' + $title
   if ($line -ne $last) { $last = $line; Write-Output $line }
   Start-Sleep -Milliseconds 1000
+  # memory watchdog (check once a minute): cross the cap -> self-exit clean
+  $memTick++
+  if ($memTick -ge 60) {
+    $memTick = 0
+    try {
+      if ([System.Diagnostics.Process]::GetCurrentProcess().PrivateMemorySize64 -gt $memCap) { break }
+    } catch { }
+  }
 }
 `
 
 let proc = null
 let callback = null
+let restartTimer = null
 let lastFull = false
 let lastInfo = null // { pid, name, monitor:{x,y} }（FULL 时有）
 let lastFg = null // 0.37.0：前台窗口（不分全屏与否）{ pid, name, title, at }
@@ -161,7 +187,11 @@ function start (cb) {
       for (const l of lines) handleLine(l)
     })
     proc.on('error', (e) => { log('[fullscreen] 探测进程启动失败（降级为不让位）:', e && e.message); proc = null })
-    proc.on('exit', () => { proc = null })
+    proc.on('exit', () => {
+      proc = null
+      // 看门狗自杀（内存越限）或意外退出时自动重生，除非正在 stop()
+      if (!stopped) { restartTimer = setTimeout(() => { restartTimer = null; start(callback) }, 3000) }
+    })
     log('[fullscreen] 全屏探测已启动')
   } catch (e) {
     log('[fullscreen] 启动异常（降级为不让位）:', e && e.message)
@@ -171,6 +201,7 @@ function start (cb) {
 
 function stop () {
   stopped = true
+  clearTimeout(restartTimer)
   if (proc) { try { proc.kill() } catch {} proc = null }
 }
 

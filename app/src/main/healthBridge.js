@@ -24,11 +24,14 @@ function resolveDate (v) {
 }
 
 function currentWs () {
+  // 0.46.10 修复：原 require('./config') 在 src/main 下不存在（MODULE_NOT_FOUND 被吞），
+  // 恒返回空 → 健康摘要从来没写进过工作区。对齐 systemBridge：用 companion 当前角色。
   try {
-    const cfgMod = require('./config')
-    const role = cfgMod.getConfig().currentRole
-    return require('./assistant').workspaceDirFor(role) || ''
-  } catch { return '' }
+    const char = require('./companion/character').get()
+    const id = char && char.id
+    if (id) return require('./assistant').workspaceDirFor(id) || ''
+  } catch { }
+  return ''
 }
 
 async function healthLog (args = {}) {

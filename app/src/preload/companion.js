@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('companion', {
   settings: () => ipcRenderer.invoke('companion:settings'),
   // 0.45.14 今日互动统计
   interactStats: () => ipcRenderer.invoke('companion:interact-stats'),
+  petAct: (words) => ipcRenderer.invoke('pet:test-act', words),
+  petListActs: () => ipcRenderer.invoke('pet:list-acts'),
   patchSettings: (patch) => ipcRenderer.invoke('companion:patch-settings', patch),
   // 0.34.0 陪看字幕（OCR 读屏幕字幕 → 提示词）
   screenTextStatus: () => ipcRenderer.invoke('screentext:status'),
