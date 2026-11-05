@@ -19,6 +19,7 @@ const llm = require('./llm')
 /** 当前角色上下文；switchChar 时会更新 */
 let ctx = { wsDir: '', log: () => { }, llmCfg: null, persona: '', feedback: 'on' }
 let writeTimer = null
+let snubTimer = null   // 0.46.33 冷落感知心跳（45s）
 let writing = false
 let distilling = false
 
@@ -66,11 +67,15 @@ function noteNarration (text) {
 /** 0.45.44 最近她主动说过的话（say + narration，最新的在最后），防复读用。
  *  用户 10-31 实锤：nudge 一晚上每句都提「配合ノート」——没有这面镜子，
  *  模型每次都往同一个道具上凑，主动搭话听起来像另一台机器。 */
-function recentVoices (n) {
+function recentVoices (n, sinceMs) {
   if (!ctx.wsDir) return []
   try {
+    // 0.46.42 可选时间窗（毫秒）：复读闸/提示词镜子只要最近一段时间的，
+    // 事件文件跨天留存，无界取「最近 8 句」在话说得少的下午能横跨几小时
+    const since = Number(sinceMs) > 0 ? Date.now() - Number(sinceMs) : 0
     const list = self.readEvents(ctx.wsDir)
       .filter((e) => e && (e.kind === self.SAY || e.kind === self.NARRATION) && e.text)
+      .filter((e) => !since || (Number(e.t) || 0) >= since)
     const k = Number(n)
     return (k > 0 ? list.slice(-k) : list).map((e) => String(e.text).replace(/\s+/g, ' ').slice(0, 60))
   } catch { return [] }
@@ -295,22 +300,48 @@ function noteSayTimeout (text) {
   savePending()
 }
 
-function sweepSays () {
+/** 0.46.33 冷落判定窗口：主人配置 coldShoulderMin 分钟（默认 3，夹 1~30），coldShoulderOn=false 整个关掉 */
+function snubWindowMs () {
+  let c = {}
+  try { c = (typeof ctx.cfgGet === 'function' && ctx.cfgGet()) || {} } catch { }
+  if (c.coldShoulderOn === false) return 0
+  const m = Number(c.coldShoulderMin)
+  return (Number.isFinite(m) && m > 0 ? Math.min(30, Math.max(1, m)) : 3) * 60 * 1000
+}
+
+/**
+ * 清算「她说过但没人接」的话（sweepSays，定时器驱动）。
+ * 0.46.33 重写判定：原来一刀切 10 分钟+只看 lastTalkAt，三个场景全是冤案——
+ * ① 主人根本不在电脑前（人都不在，没人回天经地义）② 游戏/学习模式（他自己说了豁免）
+ * ③ 主人在电脑前却盯着屏幕不理她（这才是真·冷落，要记账+她当场会嘀咕一句）。
+ * @param {number} [nowMs] 测试可注入当前时间
+ */
+function sweepSays (nowMs) {
   if (!ctx.wsDir || !pendingSays.length) return
-  const ANSWER_WINDOW = 10 * 60 * 1000
-  const now = Date.now()
+  const win = snubWindowMs()
+  const now = Number(nowMs) || Date.now()
   const st = self.getState(ctx.wsDir)
-  // 0.35.0 修正：原来用 lastUserAt 判「有回应」，而 lastUserAt 连 grab/drop 都会更新——
-  // 拖一下窗口，她刚才那句话就算「被接住了」，一整天 ignoreStreak 都是 0。
-  // 现在只认 lastTalkAt（真的说了话才更新），摸摸碰碰不算回应。
   const lastTalkAt = Number(st.lastTalkAt) || Number(st.lastUserAt) || 0
+  // 人在不在电脑前：键鼠空闲 < 5 分钟 = 在（idle=0 是刚动过鼠标，更是在）
+  let idle = -1
+  try { idle = (typeof ctx.idleSec === 'function' && Number(ctx.idleSec())) || 0 } catch { }
+  const atScreen = idle >= 0 && idle < 300
+  let exempt = false
+  try { exempt = typeof ctx.exempt === 'function' ? !!ctx.exempt() : false } catch { }
   const keep = []
   for (const p of pendingSays) {
-    if (now - p.at < ANSWER_WINDOW) { keep.push(p); continue }
+    if (win > 0 && now - p.at < win) { keep.push(p); continue }
     if (lastTalkAt > p.at) continue // 有真实的回应
-    if (!feedbackOn()) { log('（负反馈已关闭）不记这次被无视：' + p.text); continue }
-    self.noteIgnored(ctx.wsDir)
-    log('被无视：' + p.text)
+    if (win <= 0 || !feedbackOn() || exempt || !atScreen) {
+      log('（不记冷落' + (win <= 0 ? '：开关关了' : exempt ? '：游戏/学习中' : '：他不在电脑前') + '）' + p.text)
+      continue
+    }
+    const st2 = self.noteSnub(ctx.wsDir, now)
+    const streak = Number(st2 && st2.snubStreak) || 1
+    log('被晾了（第 ' + streak + ' 次，他人在电脑前没接话）：' + p.text)
+    if (streak <= 2 && typeof ctx.onSnubbed === 'function') {
+      try { ctx.onSnubbed(p.text, streak) } catch (e) { log('冷落嘀咕失败: ' + (e && e.message)) }
+    }
   }
   pendingSays.length = 0
   for (const p of keep) pendingSays.push(p)
@@ -613,10 +644,15 @@ function startDaily () {
     } catch { }
   }, 5 * 60 * 1000)
   try { writeTimer.unref && writeTimer.unref() } catch { }
+  // 0.46.33 冷落感知独立心跳：默认窗口 3 分钟，5 分钟的结算心跳太粗（人回来回话了也可能先被判死）。
+  // 45 秒查一次 pending 队列，窗口到点立刻判定。
+  snubTimer = setInterval(() => { try { sweepSays() } catch { } }, 45 * 1000)
+  try { snubTimer.unref && snubTimer.unref() } catch { }
 }
 
 function stopDaily () {
   if (writeTimer) { clearInterval(writeTimer); writeTimer = null }
+  if (snubTimer) { clearInterval(snubTimer); snubTimer = null }
 }
 
 /* ------------------------------------------------------------ 对外 */
@@ -655,6 +691,7 @@ module.exports = {
   lastVoiceAt,
   sweepSays,
   settleYesterday,
+  snubWindowMs,
   /** opts.query 决定注入摘要还是正文（问过去时给正文），见 self.promptBlock */
   promptBlock: (opts) => (ctx.wsDir ? self.promptBlock(ctx.wsDir, opts) : ''),
   /** 指定工作区（systemPrompt 里按 char.id 现算，防切角色时串到上一个人） */

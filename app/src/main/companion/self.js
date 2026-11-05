@@ -240,6 +240,7 @@ function wantsRecall (query) {
 const DEFAULT_STATE = {
   quiet: 0,        // 0~1 安静程度：越高越不想说话
   mood: 0.5,       // 0~1 心情
+  moodAt: 0,       // 0.46.34 上次心情变化时间（自然回血的计时起点，每小时 +MOOD_REGEN_PER_HOUR）
   cold: 0,         // 0~1 短期冷淡（被扔/被连续忽视）
   annoyed: 0,      // 0~1 被碰烦了（0.24.0 触摸负反馈）：高频戳/乱碰/被扔累积，摸头能压下去
   annoyedAt: 0,    // 上次烦躁变化时间（自然消退的计时起点，每小时 -0.3）
@@ -252,18 +253,40 @@ const DEFAULT_STATE = {
   lastSpoke: 0,    // 上次主动开口时间
   lastUserAt: 0,   // 上次主人说话/互动时间（含触摸）
   lastTalkAt: 0,   // 0.35.0 上次主人**真的说话**的时间（触摸不算）——被无视的判定只认这个
+  // 0.46.33 冷落感知（snub）：主人在电脑前却对她主动的搭话不理不睬。
+  // 与 ignoreStreak（跨天总账）分开：snub 是「刚才那阵子」的鲜活情绪，40 分钟内进状态块，2 小时没新增就翻篇。
+  snubStreak: 0,   // 这一阵被连续晾着的次数
+  lastSnubAt: 0,   // 最近一次被晾的时间
   lastDay: '',     // 上次结算日期，防同一天重复结算
   rolledBackAt: 0  // 上次手动回滚/清零的时间（设置页显示用）
 }
 
+/** 0.46.34 心情自然回血：没人碰也按时间慢慢回到满（读时现算，攒够了才落盘）。
+ *  背景：冷落感知每来一次 mood -0.03，旧版只掉不涨——测试几轮心情就沉底再也起不来。
+ *  0.3/小时 ≈ 被晾一次的 -0.03 六分钟就补回来，闷一晚能从 0 回满（有情绪但不记隔夜仇）。 */
+const MOOD_REGEN_PER_HOUR = 0.3
+
 function getState (wsDir) {
   const s = readJson(path.join(selfDir(wsDir), 'state.json'), {})
-  return Object.assign({}, DEFAULT_STATE, s && typeof s === 'object' ? s : {})
+  const st = Object.assign({}, DEFAULT_STATE, s && typeof s === 'object' ? s : {})
+  const mood = Number(st.mood)
+  if (Number.isFinite(mood) && mood < 1) {
+    let at = Number(st.moodAt) || 0
+    if (!at) { at = Date.now(); st.moodAt = at } // 老状态没有计时点：从现在起算，不凭空回血
+    const gain = (Date.now() - at) / 3600e3 * MOOD_REGEN_PER_HOUR
+    if (gain > 0) {
+      st.mood = Math.min(1, Math.round((mood + gain) * 1000) / 1000)
+      st.moodAt = Date.now() // 计时点必须跟着走，否则下次读按旧点重算会重复回血
+      // 攒到 0.002（约 24 秒）才写盘：读是高频的，回血落盘不追着每次读跑
+      if (st.mood - mood >= 0.002) writeJson(path.join(selfDir(wsDir), 'state.json'), st)
+    }
+  }
+  return st
 }
 
 /* ---- 状态快照：测试期随时能回滚 ---- */
 
-const SNAP_KEYS = ['quiet', 'cold', 'mood', 'annoyed', 'ignoreStreak', 'displeasure']
+const SNAP_KEYS = ['quiet', 'cold', 'mood', 'annoyed', 'ignoreStreak', 'displeasure', 'snubStreak']
 
 function stateLogPath (wsDir) { return path.join(selfDir(wsDir), STATE_LOG) }
 
@@ -345,6 +368,7 @@ function rollbackState (wsDir, msAgo) {
   if (!hit) return { ok: false, error: 'no-snapshot' }
   const st = patchState(wsDir, {
     quiet: hit.quiet, cold: hit.cold, mood: hit.mood, ignoreStreak: hit.ignoreStreak,
+    moodAt: Date.now(), // 心情被改写就重置回血计时（0.46.34）
     rolledBackAt: Date.now()
   })
   return { ok: true, at: Number(hit.t), state: st }
@@ -352,7 +376,7 @@ function rollbackState (wsDir, msAgo) {
 
 /** 清零当前情绪（保留事件流与日记——回滚的是情绪，不是经历） */
 function resetState (wsDir) {
-  const st = patchState(wsDir, { quiet: 0, cold: 0, mood: 0.5, annoyed: 0, annoyedAt: 0, touchLog: [], ignoreStreak: 0, rolledBackAt: Date.now() })
+  const st = patchState(wsDir, { quiet: 0, cold: 0, mood: 0.5, moodAt: Date.now(), annoyed: 0, annoyedAt: 0, touchLog: [], ignoreStreak: 0, rolledBackAt: Date.now() })
   return { ok: true, state: st }
 }
 
@@ -518,14 +542,35 @@ function settleDay (wsDir, date) {
   return patchState(wsDir, patch)
 }
 
-/** 被无视时立刻累加（不必等日终结算，行为要能即时反应） */
-function noteIgnored (wsDir) {
+/** 0.46.33 冷落感知记账：主人在电脑前却晾了她一句。
+ *  snubStreak 在 2 小时窗口内累加（超过就从 1 重新数——隔了半天再被晾是另一回事），
+ *  mood 微降（不是机械暴跌——要让语气自然变淡，不是数值表演）。
+ *  返回本次的 state（调用方取 .snubStreak；1=第一次，据此决定要不要当场嘀咕）。
+ *  （0.46.33 起取代 noteIgnored：ignoreStreak/quiet 的累加合并进这里，一次判定一笔账。） */
+const SNUB_WINDOW_MS = 2 * 60 * 60 * 1000
+function noteSnub (wsDir, now) {
+  const t = Number(now) || Date.now()
   const st = getState(wsDir)
-  const streak = (st.ignoreStreak || 0) + 1
+  const fresh = t - (Number(st.lastSnubAt) || 0) <= SNUB_WINDOW_MS
+  const streak = fresh ? (Number(st.snubStreak) || 0) + 1 : 1
   return patchState(wsDir, {
-    ignoreStreak: streak,
-    quiet: Math.min(0.75, (st.quiet || 0) + (streak >= 3 ? 0.15 : 0.05))
+    snubStreak: streak,
+    lastSnubAt: t,
+    mood: Math.max(0, (Number(st.mood) || 0.5) - 0.03),
+    moodAt: t, // 心情动了就重置回血计时（0.46.34）
+    ignoreStreak: (Number(st.ignoreStreak) || 0) + 1,
+    quiet: Math.min(0.75, (st.quiet || 0) + (streak >= 3 ? 0.12 : 0.04))
   })
+}
+
+/** 这一阵被晾到什么程度（0=没有；读时现算，40 分钟内才是「鲜活情绪」）。
+ *  给节奏器（被晾→少主动凑）和状态块用。 */
+function snubStreakNow (wsDir, now) {
+  const t = Number(now) || Date.now()
+  const st = getState(wsDir)
+  if (!(Number(st.lastSnubAt) || 0)) return 0
+  if (t - (Number(st.lastSnubAt) || 0) > SNUB_WINDOW_MS) return 0
+  return Number(st.snubStreak) || 0
 }
 
 /* ---------------- 0.35.0 整体负反馈：她收到的「评价」 ---------------- */
@@ -659,6 +704,7 @@ function noteAttention (wsDir, action) {
   if (a !== 'throw') patch.cold = Math.max(0, (st.cold || 0) - coldCut)
   patch.quiet = Math.max(0, (st.quiet || 0) - quietCut)
   patch.mood = mood
+  patch.moodAt = now // 心情动了就重置回血计时
   patch.annoyed = annoyed
   patch.annoyedAt = annoyed > 0 ? now : 0
   return patchState(wsDir, patch)
@@ -725,6 +771,14 @@ function stateWords (st) {
 
   const streak = Number(st.ignoreStreak) || 0
   if (streak >= 3) lines.push('你有好几次对他说话没得到回应。别质问、别委屈地讨说法，只是把话收着点。')
+
+  // 0.46.33 冷落感知：刚才那阵子他人在电脑前却晾着她（40 分钟内才是「刚才」，2 小时没新增自动翻篇）
+  try {
+    const snubAt = Number(st.lastSnubAt) || 0
+    const snub = snubAt && Date.now() - snubAt <= 40 * 60 * 1000 ? (Number(st.snubStreak) || 0) : 0
+    if (snub >= 3) lines.push('今天你主动说的好几句话，他就坐在那儿却一直没接。你有点泄气了：不太想主动凑过去，他开口你还是会应，但话会收着，语气平平的，不演也不装没事。')
+    else if (snub >= 1) lines.push('刚才你主动跟他说话，他盯着屏幕没接话，一直到现在。你心里有点小失落——接下来的话可以短一点、淡淡地自然带出来，不用点破，也别赌气冷战。')
+  } catch { }
 
   // 0.35.0 整体负反馈：他明确对你不满意过（不是没人接话，是他说话了）
   const disp = Number(st.displeasure) || 0
@@ -873,7 +927,9 @@ module.exports = {
   appendGrowth,
   dayStats,
   settleDay,
-  noteIgnored,
+
+  noteSnub,
+  snubStreakNow,
   noteAttention,
   /* 0.35.0 整体负反馈 */
   effDispleasure,

@@ -11,7 +11,7 @@
  * 核心保持零依赖、纯 Node：服务壳只做进程内接线，不掺业务逻辑。
  * 与 companion 模块完全平行，零改动（回退路径 = 继续用托盘「AI…」）。
  */
-const { ipcMain, dialog, BrowserWindow, app } = require('electron')
+const { ipcMain, BrowserWindow, app } = require('electron')
 const path = require('path')
 const { log } = require('../logger') // v0.4.2 修复：logger 导出的是 { log, logfile }，整体 require 导致 init 末尾抛 log is not a function
 // S6：电脑操作确认窗（自绘，60 秒超时，不阻塞主进程）
@@ -269,6 +269,10 @@ async function init ({ logDir, dataRoot: root, bcast } = {}) {
   if (pendingLive) {
     try { sessMod.setLiveContext(pendingLive[0], pendingLive[1]) } catch { }
   }
+  // 0.46.28 生活线回调同款补挂
+  if (pendingLife) {
+    try { sessMod.setLifeBlocks(pendingLife) } catch { }
+  }
   tools = toolMod.default
   // S3：桌宠六工具交给主进程实现（懒加载，避免与 pet 模块的 boot 顺序耦合）
   if (tools && typeof tools.setPetBridge === 'function') {
@@ -287,6 +291,14 @@ async function init ({ logDir, dataRoot: root, bcast } = {}) {
   }
   if (tools && typeof tools.setStudyBridge === 'function') {
     tools.setStudyBridge((name, args) => require('../petBridge').invoke(name, args))
+  }
+  // 0.46.28 生活线三工具桥（goal_set/list/update → companion/goals.js，同一条 petBridge）
+  if (tools && typeof tools.setGoalBridge === 'function') {
+    tools.setGoalBridge((name, args) => require('../petBridge').invoke(name, args))
+  }
+  // 0.46.31 看视频：bili_watch 走同一条宿主桥
+  if (tools && typeof tools.setBiliBridge === 'function') {
+    tools.setBiliBridge((name, args) => require('../petBridge').invoke(name, args))
   }
   // S6.5：开程序 / 开游戏 / 游戏模式
   if (tools && typeof tools.setSystemBridge === 'function') {
@@ -994,11 +1006,19 @@ function listRoles () {
 let sessRef = null
 // 0.34.0：陪看白板（字幕 → 提示词）。companion 注册得比 init 早，所以先存着，init 时补挂。
 let pendingLive = null
+// 0.46.28：生活线回调同款 pending（companion 注册早于核心 init 时先存，init 后补挂）
+let pendingLife = null
 
 /** 0.34.0 陪看白板：每轮现取一段「你正在看的字幕」，空串不注入；commit 在一轮答完后推进游标 */
 function setLiveContext (fn, commitFn) {
   pendingLive = [fn, commitFn]
   try { if (sessRef && sessRef.setLiveContext) sessRef.setLiveContext(fn, commitFn) } catch { }
+}
+
+/** 0.46.28 她的生活线/作息/仪式感：companion 注册「每轮现算」回调（作息/目标/天数都会变） */
+function setLifeBlocks (fn) {
+  pendingLife = fn
+  try { if (sessRef && sessRef.setLifeBlocks) sessRef.setLifeBlocks(fn) } catch { }
 }
 
 function registerTool (def) {
@@ -1145,7 +1165,7 @@ function memoryDecaySweep (roleId) {
   } catch { return 0 }
 }
 
-module.exports = { init, setAssistantWin, getSession, switchRole, createWindow, openCuaPanel, trayRoles, noteTouch, noteSelfAct, isReady: () => ready, getProvider, getContext, listRoles, registerTool, unregisterTool, setWorldPrompts, addWorldPrompts, setLiveContext, setUserProfile, pushExternalReply, qqNote, ledgerNote, historyTail, memoryExtract, memoryAddFact, memoryFacts, memoryRemoveFact, memoryRemoveBySeq, memoryRecallText, memoryDecaySweep,
+module.exports = { init, setAssistantWin, getSession, switchRole, createWindow, openCuaPanel, trayRoles, noteTouch, noteSelfAct, isReady: () => ready, getProvider, getContext, listRoles, registerTool, unregisterTool, setWorldPrompts, addWorldPrompts, setLiveContext, setLifeBlocks, setUserProfile, pushExternalReply, qqNote, ledgerNote, historyTail, memoryExtract, memoryAddFact, memoryFacts, memoryRemoveFact, memoryRemoveBySeq, memoryRecallText, memoryDecaySweep,
   /** 0.24.0 随身服务用：编程式发一条消息（等价 assistant:send，走同一条管线，桌面端能看到全过程） */
   send: (text, images) => handleSend(null, text, images),
   /** 角色工作区路径（自我层 self/ 建在它下面；partner 还没就绪时按同样规则自己拼，避免启动早期写到空目录） */

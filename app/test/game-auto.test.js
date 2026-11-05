@@ -134,3 +134,27 @@ test('gameAuto: 总闸关了永不进；自动进的会被退掉', () => {
   const r2 = ga.tick(st2, { now: now + 5 * M, full: true, pname: 'sekiro', gameActive: true, gameEnteredBy: 'auto:sekiro', enabled: false })
   assert.equal(r2.action, 'exit', '开关关掉时自动收场')
 })
+
+test('0.46.47 游戏模式默认不接管摆放：未配置时保持原大小、不静音（用户副屏摆好角色，「角色多大我为什么要管」）', () => {
+  const fs = require('fs')
+  const path = require('path')
+  const gm = fs.readFileSync(path.join(__dirname, '..', 'src/main/gameMode.js'), 'utf8')
+  // 默认不缩：scale 缺省走 saved.scale（进入前大小），不再兜底 0.7
+  assert.match(gm, /Number\.isFinite\(scaleRaw\)\s*\n\s*\? Math\.max\(0\.4, Math\.min\(1\.3, scaleRaw\)\)\s*\n\s*: \(saved && Number\.isFinite\(saved\.scale\) \? saved\.scale : 1\)/, '未配置=保持原大小，显式配置才 clamp 0.4~1.3')
+  assert.doesNotMatch(gm, /\? scaleRaw : 0\.7/, '0.7 强缩默认已废除')
+  // 默认不静音：mute 只有显式 true 才开，安静令只在 mute 时下发
+  assert.match(gm, /const mute = c\.gameModeMute === true/, '默认不静音（显式 true 才静）')
+  assert.match(gm, /if \(mute\) \{\s*\n\s*saved\.muted = true\s*\n\s*bcast\('pet:cmd', \{ kind: 'quiet', on: true \}\)/, '安静令只在不静音关掉时下发')
+  assert.doesNotMatch(gm, /sound: c\.gameModeMute/, '死字段 sound 不再发（渲染层从未消费）')
+  // exit 只在真的静过音才解除，不误清别处的安静状态
+  assert.match(gm, /if \(saved && saved\.muted\) bcast\('pet:cmd', \{ kind: 'quiet', on: false \}\)/, '退出只解除自己下过的安静令')
+  // 展示层默认值同步（state/settingsView 不再报 0.7 和静音开）
+  assert.match(gm, /scale: c\.gameModeScale != null \? c\.gameModeScale : \(c\.petScale != null \? c\.petScale : 1\)/, 'state() 展示默认跟随 petScale')
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/index.js'), 'utf8')
+  assert.match(idx, /gameModeMute: c\.gameModeMute === true/, 'settingsView mute 展示默认关')
+  assert.match(idx, /gameModeScale: c\.gameModeScale != null \? c\.gameModeScale : \(c\.petScale != null \? c\.petScale : 1\)/, 'settingsView scale 展示默认跟 petScale')
+  // 渲染层：gmMute checkbox 不再硬编码 checked
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src/renderer/companion/index.html'), 'utf8')
+  assert.match(html, /id="gmMute"> </, 'gmMute 无 checked 硬编码（状态随配置）')
+  assert.match(html, /id="gmScale" type="range" min="40" max="130"/, '滑条装得下 petScale 1.25 的默认显示')
+})

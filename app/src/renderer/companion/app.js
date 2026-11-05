@@ -1199,6 +1199,9 @@ async function renderCpSettings () {
   }
   // 0.21.0 她的内心：负反馈开关 / 历史字符预算 / 上下文诊断
   if ($('cpFeedbackMode')) $('cpFeedbackMode').checked = cs.feedbackMode !== 'off'
+  // 0.46.33 冷落感知
+  if ($('cpColdShoulder')) $('cpColdShoulder').checked = cs.coldShoulderOn !== false
+  if ($('cpColdShoulderMin')) $('cpColdShoulderMin').value = (Number(cs.coldShoulderMin) > 0 ? Math.min(30, Math.max(1, Number(cs.coldShoulderMin))) : 3)
   if ($('cpHistoryChars')) $('cpHistoryChars').value = cs.historyChars > 0 ? cs.historyChars : 18000
   if ($('cpDiagContext')) $('cpDiagContext').checked = cs.diagContext === true
   if ($('cpIdleNudge')) $('cpIdleNudge').checked = cs.idleNudgeOn !== false
@@ -1759,6 +1762,9 @@ const cpGather = () => ({
   reactionTypes: [...document.querySelectorAll('#cpReactionTypes input[data-rtype]:checked')].map((b) => b.dataset.rtype),
   // 0.21.0 她的内心
   feedbackMode: $('cpFeedbackMode').checked ? 'on' : 'off',
+  // 0.46.33 冷落感知
+  coldShoulderOn: $('cpColdShoulder') ? $('cpColdShoulder').checked : true,
+  coldShoulderMin: Math.min(30, Math.max(1, Number($('cpColdShoulderMin') && $('cpColdShoulderMin').value) || 3)),
   historyChars: Number($('cpHistoryChars').value) || 18000,
   diagContext: $('cpDiagContext').checked,
   idleNudgeOn: $('cpIdleNudge').checked,
@@ -2566,7 +2572,7 @@ async function alarmRefresh () {
         alarmRefresh()
       })
       const span = document.createElement('span')
-      span.textContent = (a.daily === false ? '' : '每天 ') + a.time + (a.label ? ' · ' + a.label : '')
+      span.textContent = (a.daily === false ? (a.date ? a.date + ' ' : '') : '每天 ') + a.time + (a.label ? ' · ' + a.label : '')
       const del = document.createElement('button')
       del.className = 'cd-btn'
       del.style.cssText = 'margin-left:auto;padding:2px 8px'
@@ -2790,7 +2796,7 @@ function renderTimeline () {
     d.className = 'tl-item'
     const time = m.at ? new Date(m.at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : ''
     d.innerHTML = `<span class="tl-role ${m.role === 'user' ? 'me' : 'ai'}">${m.role === 'user' ? esc(t('mem.whoYou')) : 'AI'}</span>` +
-      `<span class="mem-text">${esc(stripTags(m.content)).slice(0, 120)}</span>` +
+      `<span class="mem-text">${esc(stripTags(m.content)).slice(0, 120)}${m.sub && m.sub !== m.content ? '<br>' + esc(stripTags(m.sub)).slice(0, 120) : ''}</span>` +
       `<span class="tl-time">${time}</span>`
     list.appendChild(d)
   }
@@ -2911,7 +2917,7 @@ async function loadGame () {
   $('gmScale').value = Math.round(scale * 100)
   $('gmScaleV').textContent = (Math.round(scale * 100) / 100).toFixed(2) + '×'
   $('gmCorner').value = (st && st.corner) || 'bottom-right'
-  $('gmMute').checked = !(st && st.mute === false)
+  $('gmMute').checked = !!(st && st.mute)
   try {
     const cs = await GM.settings()
     $('gmAuto').checked = cs.gameModeAuto !== false

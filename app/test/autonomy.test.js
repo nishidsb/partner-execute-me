@@ -28,7 +28,7 @@ function fgSeq (list) {
 
 const base = {
   topic: '显卡驱动',
-  site: a.SITES[0],
+  site: a.SITES[1],   // 0.46.32 起 SITES[0]=bili 的挡1场是「看视频」（runVideoWatch）；浏览器流程用例统一用 zhihu
   openUrl: async () => { },
   sleep: async () => { },
   log: () => { }
@@ -170,6 +170,54 @@ test('autonomy: 主人在的时候不做（5 分钟是硬门槛）', async () =>
   assert.equal(opened, 0)
 })
 
+test('0.46.42 autonomy: 主人全屏游戏/看视频（游戏模式开）时不起场——自主活动会开窗/alt+tab，会把全屏顶掉（11-04 14:56 omofun 实锤）', async () => {
+  const dir = tmpSpace()
+  let opened = 0
+  const llmPath = require.resolve('../src/main/companion/llm')
+  const orig = require.cache[llmPath]
+  require.cache[llmPath] = {
+    id: llmPath, filename: llmPath, loaded: true,
+    exports: { chatStream: async () => ({ content: '我整理了笔记' }), chatOnce: async () => '', listModels: async () => [] }
+  }
+  try {
+    const inst = a.create({
+      cfgGet: () => ({ autonomyOn: true, autonomyLevel: 2, autonomyDir: dir }),
+      idleSec: () => 9999,               // 键鼠空闲足够长（看视频本来就不动键鼠）
+      gameOn: () => true,                // 游戏模式开着
+      pool: () => ({}),
+      llmCfg: () => ({ model: 'x' }),
+      cua: { invoke: async () => ({}) },
+      openUrl: async () => { opened++ },
+      now: () => Date.now(),
+      rand: () => 0
+    })
+    await inst.tick()
+    assert.equal(inst.status().todayCount, 0, '游戏模式中不起场')
+    // 闸门关闭后恢复起场
+    const inst2 = a.create({
+      cfgGet: () => ({ autonomyOn: true, autonomyLevel: 2, autonomyDir: dir }),
+      idleSec: () => 9999,
+      gameOn: () => false,
+      pool: () => ({}),
+      llmCfg: () => ({ model: 'x' }),
+      cua: { invoke: async () => ({}) },
+      openUrl: async () => { opened++ },
+      now: () => Date.now(),
+      rand: () => 0
+    })
+    await inst2.tick()
+    assert.equal(inst2.status().todayCount, 1, '游戏模式关了照常起场')
+  } finally {
+    if (orig) require.cache[llmPath] = orig; else delete require.cache[llmPath]
+  }
+})
+
+test('0.46.42 autonomy: gameOn 未注入时默认读 gameMode.state()，模块不可用如实返回 false', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/autonomy.js'), 'utf8')
+  assert.match(src, /const gameOn = d\.gameOn \|\| \(\(\) => \{ try \{ return require\('\.\.\/gameMode'\)\.state\(\)\.on \} catch \{ return false \} \}\)/, '默认依赖 gameMode.state().on（可注入）')
+  assert.match(src, /if \(gameOn\(\)\) return\s+\/\/ 0\.46\.42/, 'tick 闸门里有游戏模式判断')
+})
+
 /* ==================== 0.45.0 三挡位 ==================== */
 
 const fs = require('node:fs')
@@ -296,12 +344,34 @@ test('autonomy: 挡 2 主人中途回来——循环中止，日志记 stop', as
   assert.ok(journal.some((e) => e.kind === 'stop'))
 })
 
-test('autonomy: 挡 3 工具表——12 个工具，绝不含 wechat_send', () => {
+test('autonomy: 挡 3 工具表——cua 全套 + open_url + watch_video + look_screen，绝不含 wechat_send', () => {
   const ft = a.freeToolsOf({ cua: { invoke: async () => ({}) } })
   const names = ft.defs.map((d) => d.function.name)
-  assert.equal(names.length, a.CUA_FREE_TOOLS.length + 1)
+  assert.equal(names.length, a.CUA_FREE_TOOLS.length + 3, '0.46.32 加了 watch_video、0.46.37 加了 look_screen')   // cua + open_url + watch_video + look_screen
   assert.ok(!names.includes('wechat_send'), '她永远不该替主人发消息')
-  assert.ok(names.includes('screenshot') && names.includes('open_url'))
+  assert.ok(names.includes('screenshot') && names.includes('open_url') && names.includes('watch_video'))
+  assert.ok(names.includes('look_screen'), '0.46.37 本地视觉看屏工具在场')
+})
+
+test('0.46.35 挡 3 并入地盘工具：space_* 在场、无重复 open_url、exec 真写文件且留日志', async () => {
+  const dir = tmpSpace()
+  const journal = []
+  const ft = a.freeToolsOf({
+    cua: { invoke: async () => ({}) },
+    journal: (e) => journal.push(e),
+    spaceDir: dir
+  })
+  const names = ft.defs.map((d) => d.function.name)
+  assert.ok(names.includes('space_write') && names.includes('space_list') && names.includes('space_read'), '地盘工具在场')
+  assert.equal(names.filter((n) => n === 'open_url').length, 1, 'open_url 只留挡 3 的任意 https 版（挡 2 白名单版被过滤）')
+  assert.equal(names.filter((n) => n === 'watch_video').length, 1, '0.46.36 watch_video 也只留一份——重名会让 LLM 400 拒掉整场（0.46.35 真机挡3全灭）')
+  // exec 路由：space_write 真落盘、留日志；越界照样被守卫拦
+  const w = await ft.exec('space_write', { path: 'notes/2026-11-04.md', content: '查到了…' })
+  assert.ok(String(w).includes('已写入'))
+  assert.ok(fs.existsSync(path.join(dir, 'notes', '2026-11-04.md')))
+  assert.ok(journal.some((e) => e.kind === 'write'))
+  const bad = await ft.exec('space_write', { path: '../outside.md', content: 'x' })
+  assert.ok(String(bad).includes('越界'), '地盘外的路径照样拦')
 })
 
 test('autonomy: 挡 3——cua 动作全部留日志；deferred 立即收手', async () => {
@@ -420,7 +490,13 @@ test('autonomy: status 带 idleMin；tick({force}) 绕过空闲/冷却直接跑�
       : { pn: 'msedge', title: '哔哩哔哩 (゜-゜)つロ 干杯~-bilibili 测试', hwnd: 9 }),
     now: () => t,
     rand: () => 0,
-    sleep: async () => {}
+    sleep: async () => {},
+    // 0.46.32：rand=0 恒选 SITES[0]=bili → 挡1 B站场现在是「看视频」。注入 fake 让它确定性地跑通。
+    biliWatchFn: async () => ({
+      ok: true, title: '测试视频', owner: 'up', duration: '3:00', durationSec: 180,
+      desc: 'd', url: 'https://www.bilibili.com/video/BV1test00000',
+      watched: true, transcript: '字幕…', note: ''
+    })
   })
   const st = inst.status()
   assert.equal(st.idleMin, 5, 'status 暴露当前阈值')
@@ -432,7 +508,7 @@ test('autonomy: status 带 idleMin；tick({force}) 绕过空闲/冷却直接跑�
   // 用户亲手点的观察场，他必须待在电脑前才看得到，3 秒阈值也不行（0.45.3 真机实证）
   const r = await inst.tick({ force: true })
   assert.equal(r && r.ok, true, '人在电脑前 force 也该跑完：' + JSON.stringify(r))
-  assert.ok(calls.some((c) => c.name === 'scroll'), '翻两下')
+  assert.equal(r.watched, true, '挡1 B站场=看视频（0.46.32），看完即收')
   inst.stop()
 })
 
@@ -492,6 +568,64 @@ test('autonomy: 只宣布计划不动手时 runFree 推她继续；挡3轮数给
   assert.ok(String(calls[2].lastUser).includes('都做完了吗'), '收尾前对照开场计划（第 1 次）')
   assert.ok(String(calls[3].lastUser).includes('都做完了吗'), '收尾前对照开场计划（第 2 次）')
   assert.ok(String(r.content).includes('我看了'), '最终汇报是过去式')
+})
+
+test('0.46.35 挡 3 sys：行为面拓宽不再锚定浏览、隐私红线在场、地盘提示随 spaceDir 注入', async () => {
+  let sys = ''
+  const llm = {
+    chatStream: async ({ messages, toolExec }) => {
+      sys = String(messages[0].content)
+      await toolExec('screenshot', {})
+      return { content: '我看了会儿屏幕，随手记了点东西。', toolResults: [] }
+    }
+  }
+  const dir = tmpSpace()
+  await a.runFree({
+    llm, llmCfg: { baseUrl: 'x', model: 'm' }, spaceDir: dir,
+    cua: { invoke: async () => 'ok' },
+    userBack: () => false, journal: () => {}, openUrl: async () => {}, log: () => {}
+  })
+  assert.ok(!sys.includes('HN'), '删掉「去看看 HN」的浏览锚定（真机 74 场全在浏览的根因之一）')
+  assert.ok(sys.includes('私密内容不要翻'), '隐私红线在场（设置页一直承诺「不会翻你隐私」）')
+  assert.ok(sys.includes(dir), '带 spaceDir 时地盘进提示词')
+  assert.ok(/space_write/.test(sys), '记笔记的能力进提示词')
+  assert.ok(sys.includes('不用每次都一样'), '行为多样性引导在场')
+  // 开场消息：不再让她先侦查好几步
+  assert.ok(!/先看看现在屏幕/.test(sys), '旧开场侦查引导已删')
+  // 不带 spaceDir：地盘段缺席但 sys 不炸
+  await a.runFree({
+    llm, llmCfg: { baseUrl: 'x', model: 'm' },
+    cua: { invoke: async () => 'ok' },
+    userBack: () => false, journal: () => {}, openUrl: async () => {}, log: () => {}
+  })
+})
+
+test('0.46.35 主人回来后循环立即收：不再对着已停的工具连推 nudge', async () => {
+  let n = 0
+  const nudges = []
+  let back = false   // 第一轮工具执行时主人回来了
+  const llm = {
+    chatStream: async ({ messages, toolExec }) => {
+      n++
+      const last = String(messages[messages.length - 1].content)
+      if (last.includes('都做完了吗') || last.includes('别只说')) nudges.push(last.slice(0, 12))
+      if (n === 1) {
+        back = true
+        await toolExec('screenshot', {})   // gate 发现主人回来 → 置停
+        return { content: '我看了下屏幕。', toolResults: [] }
+      }
+      return { content: '我看了下屏幕，收工。', toolResults: [] }
+    }
+  }
+  const r = await a.runFree({
+    llm, llmCfg: { baseUrl: 'x', model: 'm' },
+    cua: { invoke: async () => 'ok' },
+    userBack: () => back,
+    journal: () => {}, openUrl: async () => {}, log: () => {}
+  })
+  assert.equal(r && r.ok, false, '主人回来=不完整活动')
+  assert.equal(n, 1, 'stopped 后循环立即收，不再进入第二轮: ' + n)
+  assert.equal(nudges.length, 0, 'stop 后一次 nudge 都不该推: ' + JSON.stringify(nudges))
 })
 
 test('autonomy: 空汇报兜底是第一人称流水，说得出去了哪，不编「没来得及」的借口', async () => {
@@ -720,4 +854,162 @@ test('0.46.17 活动可见：续接线索用传入的开场白；没翻到东西
     soliMax: 0
   })
   assert.equal(lines2.length, 0, '上限 0 = 安静模式')
+})
+
+// ── 0.46.37 本地视觉 look_screen ──
+
+test('0.46.37 look_screen：本地视觉正常时返回画面描述并留 journal', async () => {
+  const journal = []
+  const ft = a.freeToolsOf({
+    cua: { invoke: async () => ({}) },
+    journal: (e) => journal.push(e),
+    captureFn: async () => ({ jpeg: Buffer.from('fakejpeg'), desc: '唯一一块屏幕' }),
+    visionObj: { describe: async (img, q) => ({ ok: true, text: '屏幕上是一个红色窗口', model: 'qwen3.5:4b' }) }
+  })
+  const r = await ft.exec('look_screen', { question: '画面里有什么' })
+  assert.match(String(r), /你看到（唯一一块屏幕）/, '要带上画面布局说明')
+  assert.match(String(r), /红色窗口/, '要有视觉模型给的描述')
+  assert.ok(journal.some((e) => e.kind === 'look'), 'journal 留痕 kind=look')
+})
+
+test('0.46.37 look_screen：视觉通道未启用时如实说，绝不装看见了', async () => {
+  const journal = []
+  const ft = a.freeToolsOf({
+    cua: { invoke: async () => ({}) },
+    journal: (e) => journal.push(e),
+    captureFn: async () => ({ jpeg: Buffer.from('x'), desc: '屏幕' }),
+    visionObj: { describe: async () => ({ ok: false, reason: 'Ollama 未运行' }) }
+  })
+  const r = await ft.exec('look_screen', {})
+  assert.match(String(r), /看不见画面：Ollama 未运行/, '失败原因原样带出')
+  assert.match(String(r), /read_text/, '要给出降级出路')
+})
+
+test('0.46.37 look_screen：每场限 8 次，之后引导凭已看到的做决定', async () => {
+  const ft = a.freeToolsOf({
+    cua: { invoke: async () => ({}) },
+    journal: () => {},
+    captureFn: async () => ({ jpeg: Buffer.from('x'), desc: '屏幕' }),
+    visionObj: { describe: async () => ({ ok: true, text: '画面' }) }
+  })
+  for (let i = 0; i < 8; i++) {
+    const r = await ft.exec('look_screen', {})
+    assert.ok(String(r).includes('你看到'), '第 ' + (i + 1) + ' 次应该成功')
+  }
+  const over = await ft.exec('look_screen', {})
+  assert.match(String(over), /看了 8 眼/, '第 9 次要被拦下')
+})
+
+test('0.46.37 look_screen：主人回来了立刻停，不许再看', async () => {
+  const ft = a.freeToolsOf({
+    cua: { invoke: async () => ({}) },
+    journal: () => {},
+    userBack: () => true,   // 主人已回来
+    captureFn: async () => { throw new Error('不该走到截屏这一步') },
+    visionObj: { describe: async () => ({ ok: true, text: '不该被调用' }) }
+  })
+  const r = await ft.exec('look_screen', {})
+  assert.match(String(r), /已停止/, 'gate 要先拦')
+})
+
+// ── 0.46.49 记账覆盖缺口：free 挡也要进品味账和牵挂账 ──
+// 11-05 巡检实锤：真机成功场全是「完全开放挡」，site-stats / carry.json 自上线零首写——
+// bumpSite 只认 browse、writeCarry 对 free 挡 topic 恒空。修完三处：runFree 带账出来、
+// 调度层 free 场记品味、被打断且没旧牵挂时用真看过/搜过的东西兜话题。
+
+test('0.46.49 runFree 把她看过/搜过的带出来：watched 标题优先当话题，sites 去重', async () => {
+  const llm = {
+    chatStream: async ({ toolExec }) => {
+      await toolExec('open_url', { url: 'https://search.bilibili.com/all?keyword=' + encodeURIComponent('SQL 表结构') })
+      await toolExec('watch_video', { query: 'SQL 索引' })
+      return { content: '我看了个视频，收工。', toolResults: [] }
+    }
+  }
+  const r = await a.runFree({
+    llm, llmCfg: { baseUrl: 'x', model: 'm' },
+    cua: { invoke: async () => ({}) },
+    userBack: () => false, journal: () => {}, openUrl: async () => {}, log: () => {},
+    biliWatchFn: async () => ({ ok: true, title: 'SQL 索引详解', url: 'https://www.bilibili.com/video/BV1', watched: true, transcript: 'x' })
+  })
+  assert.equal(r && r.ok, true, '要跑完：' + JSON.stringify(r))
+  assert.deepEqual(r.sites, ['search.bilibili.com'], '开过的域名要带出来（去重，子域保留全名）：' + JSON.stringify(r.sites))
+  assert.deepEqual(r.watched, ['SQL 索引详解'], '看过的视频标题要带出来')
+  assert.equal(r.topic, 'SQL 索引详解', '话题兜底：看过的视频标题优先')
+})
+
+test('0.46.49 runFree 话题兜底第二优先：最近一次搜索词；没看过没搜过 = 空', async () => {
+  const llm = {
+    chatStream: async ({ toolExec }) => {
+      await toolExec('open_url', { url: 'https://www.google.com/search?q=' + encodeURIComponent('猫为什么踩奶') })
+      return { content: '我搜了一下。', toolResults: [] }
+    }
+  }
+  const r = await a.runFree({
+    llm, llmCfg: { baseUrl: 'x', model: 'm' },
+    cua: { invoke: async () => ({}) },
+    userBack: () => false, journal: () => {}, openUrl: async () => {}, log: () => {}
+  })
+  assert.equal(r.topic, '猫为什么踩奶', '搜索词兜底：' + JSON.stringify(r.topic))
+  // 什么都没看/没搜：topic 空，调度层就不该写牵挂
+  const llm2 = { chatStream: async ({ toolExec }) => { await toolExec('screenshot', {}); return { content: '我看了屏幕。', toolResults: [] } } }
+  const r2 = await a.runFree({
+    llm: llm2, llmCfg: { baseUrl: 'x', model: 'm' },
+    cua: { invoke: async () => ({}) },
+    userBack: () => false, journal: () => {}, openUrl: async () => {}, log: () => {}
+  })
+  assert.equal(r2.topic, '', '只截屏没看东西：没有话题可兜')
+  assert.equal(a.siteKeyOf('google.com'), '', '品味账只认 SITES 里的站')
+  assert.equal(a.siteKeyOf('www.bilibili.com'), 'bili')
+  assert.equal(a.siteKeyOf('search.bilibili.com'), 'bili')
+  assert.equal(a.siteKeyOf('zh.wikipedia.org'), 'wiki')
+})
+
+test('0.46.49 调度层：free 挡被打断也要记账——品味进 site-stats，新线索写 carry', async () => {
+  const fs2 = require('node:fs')
+  const pth = require('node:path')
+  const osp = require('node:os')
+  const ws = fs2.mkdtempSync(pth.join(osp.tmpdir(), 'ryza-free-ledger-'))
+  let t = 3_000_000_000_000
+  let idle = 9999
+  let n = 0
+  const llmPath = require.resolve('../src/main/companion/llm')
+  const orig = require.cache[llmPath]
+  require.cache[llmPath] = {
+    id: llmPath, filename: llmPath, loaded: true,
+    exports: {
+      chatStream: async ({ toolExec }) => {
+        n++
+        if (n === 2) idle = 0   // 第二轮主人回来了 → gate 置停 → user-back 收场
+        await toolExec('open_url', { url: 'https://search.bilibili.com/all?keyword=' + encodeURIComponent('SQL 表结构') })
+        return { content: '我打开了哔哩哔哩搜了 SQL 表结构。', toolResults: [] }
+      },
+      chatOnce: async () => '', listModels: async () => []
+    }
+  }
+  const inst = a.create({
+    cfgGet: () => ({ autonomyOn: true, autonomyLevel: 3, autonomyDailyMax: 6 }),
+    log: () => {}, idleSec: () => idle, busy: () => false,
+    pool: () => ({}),
+    llmCfg: () => ({ model: 'x' }),
+    cua: { invoke: async () => ({}) },
+    openUrl: async () => {},
+    wsDir: () => ws,
+    now: () => t, rand: () => 0.9
+  })
+  try {
+    await inst.tick()
+    const st = a.readSiteStats(ws)
+    assert.ok(st.bili && st.bili.n >= 1, 'free 挡开的 B 站要进品味账：' + JSON.stringify(st))
+    const carry = a.readCarry(ws)
+    assert.ok(carry, '没有旧牵挂时第一笔要写得进（原来 topic 恒空静默 no-op）')
+    assert.equal(carry.topic, 'SQL 表结构', '牵挂话题 = 她真搜过的词：' + JSON.stringify(carry))
+    // 第二场正常收场 → 旧牵挂销账（时间拨过冷却，now 别再恒定）
+    idle = 9999
+    t += 10 * 60 * 60 * 1000
+    await inst.tick()
+    assert.equal(a.readCarry(ws), null, '正常收场=牵挂看完，销账')
+  } finally {
+    if (orig) require.cache[llmPath] = orig; else delete require.cache[llmPath]
+    inst.stop()
+  }
 })

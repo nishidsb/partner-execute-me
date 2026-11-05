@@ -66,7 +66,7 @@ function splitWords (s) {
   return String(s || '').split(/[,，、\s]+/).map((w) => w.trim()).filter(Boolean)
 }
 
-async function say ({ script, speech, vol } = {}) {
+async function say ({ script, speech, vol, dmHold } = {}) {
   const raw = String(script || '')
   if (!raw.trim()) throw new Error('script 为空：至少要说一句话或做一个动作')
   // 【…】先播动作再出新气泡；<…> 气泡出现后接着播
@@ -82,16 +82,20 @@ async function say ({ script, speech, vol } = {}) {
   // dm 标记让渲染层知道「这条已经有人显示了」，它只管演动作。
   let dm = false
   try { dm = require('./danmaku').isOn() } catch { }
-  // 0.46.11 vol：嘀咕音量（0.05~1，自言自语专用；缺省 = 正常音量）
+  // 0.46.22 dmHold：调用方要先把这句话翻译好再上弹幕（原文几秒就飞出屏幕，
+  // 事后 replaceLast 追不上——0.46.20 的补丁用户实测「弹幕还是没有翻译」）。
+  // true = 这里先不推弹幕，由调用方拿到译文后自己 dk.say（失败/超时兜底推原文）。
+  const holdDm = !!(dmHold && dm && text)
   const volN = Number(vol)
   bcast('pet:cmd', { kind: 'say', text, lead, inline, speak: speech !== false, dm, vol: Number.isFinite(volN) ? Math.min(1, Math.max(0.05, volN)) : undefined })
-  if (dm && text) {
+  if (dm && text && !holdDm) {
     try { require('./danmaku').say(text) } catch (e) { log('[petBridge] 弹幕推送失败:', e && e.message) }
   }
   const secs = Math.max(2, Math.ceil(text.length / 6))
   return {
     said: text || undefined,
     actions: lead.concat(inline),
+    dmHeld: holdDm || undefined,
     estimateSeconds: secs,
     note: text ? '气泡已显示，停留时长跟着朗读走' : '只播了动作，没有说话'
   }
@@ -374,6 +378,13 @@ function extractInlineAct (text) {
     if (/^grp_[a-z0-9_]+$/.test(v) || /^[a-z_]+$/.test(v)) { actions.push('action:' + v); return ' ' }
     return m
   })
+  // 0.46.43 畸变裸标签：模型偶尔把 [action:shy] 写丢前缀成 [shy]，正文原样漏出
+  //（11-04 15:36 实锤「う……当たり。[shy]」）。只认 11 个正牌语义标签的裸写，
+  // 命中按同义动作处理并剥掉（她本意是想演）；其它方括号词原样保留不误伤。
+  t = t.replace(/\[\s*(acknowledge|disagree|think|explain|excited|wave|shy|surprised|comfort|playful|invite)\s*\]/gi, (m, v) => {
+    actions.push('action:' + String(v).toLowerCase())
+    return ' '
+  })
   /* 0.46.13 舞台指示兜底映射（用户两天第三次「手势还是没动」后的换路打法）：
    * 模型（deepseek 系、日语人格）在正文里写的是【少し照れる】【少し首をかしげる】
    * 这类舞台指示，[action:] 语法喂了每轮也不理——200 条历史全是【…】惯性，指令压不过。
@@ -468,6 +479,34 @@ async function invoke (name, args) {
       }
     }
     case 'alarm_cancel': return require('./companion').alarmCancel(args || {})
+    // 0.46.28 生活线三工具（她自己的目标：定/看/更新 → companion/goals.js 按工作区落盘）
+    case 'goal_set': {
+      const r = require('./companion').goalAdd(args || {})
+      if (!r || !r.ok) throw new Error((r && r.error) || '目标没记上')
+      return { ok: true, id: r.goal.id, title: r.goal.title, status: r.goal.status }
+    }
+    case 'goal_list': {
+      const list = require('./companion').goalList()
+      return {
+        count: list.length,
+        goals: list.map((g) => ({
+          id: g.id, title: g.title, status: g.status, stuck: !!g.stuck,
+          detail: g.detail || '',
+          latest: g.progress && g.progress.length ? g.progress[g.progress.length - 1].note : ''
+        }))
+      }
+    }
+    case 'goal_update': {
+      const a = args || {}
+      const r = a.action === 'progress'
+        ? require('./companion').goalProgress(a)
+        : require('./companion').goalClose(a)
+      if (!r || !r.ok) throw new Error((r && r.error) || '没更新上')
+      return { ok: true }
+    }
+    // 0.46.31 看视频：关键词/链接 → 视频信息+字幕全文（companion/biliWatch.js 薄接线刷B站模块）
+    case 'bili_watch':
+      return require('./companion/biliWatch').biliWatch(args || {})
     // 0.45.93 主动发 QQ：立刻发 / 排一条 / 查 / 取消（她答应了就要真发得出去）
     case 'qq_send': {
       const t = String((args && args.text) || '').trim()

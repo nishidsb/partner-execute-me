@@ -80,6 +80,17 @@ function commitLiveContext () {
   try { liveCommitFn() } catch { }
 }
 
+/* 0.46.28 她的生活线/作息/相识天数/周回顾：宿主注册一个「每轮现算」的回调。
+ *  时段会走、目标会更新、天数会涨——所以像 liveContext 一样按轮现取，不缓存。 */
+let lifeBlocksFn = null
+export function setLifeBlocks (fn) {
+  lifeBlocksFn = typeof fn === 'function' ? fn : null
+}
+function takeLifeBlocks () {
+  if (!lifeBlocksFn) return null
+  try { return lifeBlocksFn() || null } catch { return null }
+}
+
 /**
  * 工具结果里的大图必须剥出来：一张 1280 宽的 PNG dataURL 有几百 KB，
  * 直接 JSON.stringify 进 tool 消息会瞬间把上下文撑爆（也超出多数端点单条上限）。
@@ -177,6 +188,7 @@ export class Session {
       const f = relevant.shift()
       this._recallSpark = '【刚刚想起】看到对方这句话，你忽然想起一件旧事：「' + f.shown + '」。\n' +
         '如果和当下话题贴合，用自己的话自然带出（像「说起来，我想起…」）；不贴就不提，别硬接，更不要复述括号里的标注。'
+      logger.info('[recall] 主动想起：本轮带出「' + String(f.shown || '').slice(0, 40) + '」')   // 0.46.19 留痕（此前静默无法验证）
     }
     return this._recallSpark
   }
@@ -218,12 +230,16 @@ export class Session {
     this.saveHistory()
   }
 
-  /** 世界书条目：按用户输入命中 keywords 注入 */
+  /** 世界书条目：常驻（keywords 空）直接注入；否则按用户输入命中 keywords 注入 */
   worldHits (userText) {
     const hits = []
     const lower = String(userText).toLowerCase()
     for (const w of this.role.worldInfo || []) {
-      if (!Array.isArray(w.keywords)) continue
+      // 0.46.26 与 companion 链路对齐：keywords 空 = 常驻，每轮都进
+      if (!Array.isArray(w.keywords) || !w.keywords.length) {
+        hits.push(String(w.text || ''))
+        continue
+      }
       if (w.keywords.some((k) => k && lower.includes(String(k).toLowerCase()))) {
         hits.push(String(w.text || ''))
       }
@@ -341,8 +357,20 @@ export class Session {
       if (sp) parts.push('【角色卡追加提示词（界面里写的补充规则，与上面人设同等重要）】\n' + sp)
     }
     if (userProfileText) parts.push('【用户资料（自设，与当前对话对象是同一个人）】\n' + userProfileText)
+    // 0.46.28 生活线/作息/仪式感（宿主每轮现算：作息时段/目标账本/相识天数/周回顾）
+    const life = takeLifeBlocks()
+    if (life) {
+      if (life.bodily) parts.push(String(life.bodily))
+      if (life.days) parts.push(String(life.days))
+      if (life.goals) parts.push(String(life.goals))
+      if (life.week) parts.push(String(life.week))
+    }
     const hits = this.worldHits(userText)
     if (hits.length) parts.push('【世界观资料】\n' + hits.join('\n'))
+    // 0.46.27 与 companion 链路的 [ctx] 对齐：system 组成留痕，世界观常驻与否一眼可验
+    logger.info('[ctx] assistant system 人设 ' + String(this.role.persona || '').length +
+      ' 字 + 世界观 ' + hits.reduce((n, h) => n + String(h).length, 0) +
+      ' 字（' + hits.length + ' 条命中/常驻）+ 其余段落')
     // S10：已启用 World 扩展的提示词片段（扩展设置里声明，宿主侧过滤后送进来）
     const wp = worldPromptParts()
     for (const t of wp) parts.push('【扩展设定】\n' + t)
@@ -359,6 +387,7 @@ export class Session {
         return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
       }
       parts.push('【最近发生的事（你的记忆，按时间先后，自然带入即可，别逐条复述）】\n' +
+        '（越久远的记忆越要用不确定的语气提起：「我印象里……来着」；记不清就承认记不清，别当确定事实断言。）\n' +
         recentMem.map((r) => '- [' + dayTag(r.at) + '] ' + r.text).join('\n'))
     }
     // 0.22.0 记忆有强度：经常想起/反复发生的记全文；久没想起的只剩概要甚至一个印象，
@@ -601,6 +630,7 @@ export class Session {
     let mark = this.history.length // 失败重试时回滚到这
     let abortNote = null // 1.7 连续工具失败时的用户可见说明
     let lastSay = '' // 本轮 pet_say 说出口的话（她要是在气泡里说完、最后没留文本，聊天窗拿这句兜底）
+    const heldSays = [] // 0.46.29 pet_say 并流：本轮暂存的所有 pet_say 台词，收尾时并入正文
 
     /* 0.45.95 thinking 端点的兜底闸门。
      *
@@ -712,11 +742,43 @@ export class Session {
               // 1.6 软上限：提醒模型收敛（不硬拦，还能用）
               this.pushNotice('（系统）本轮会话工具调用已达软上限（20 次）。非必要不要再调用工具，优先直接回答；确实需要再调。')
             }
-            const r = await tools.exec(tc.name, args, { confirmFn, policy, roleId: this.role.id })
-            // pet_say：这是她真正说出口的话，记下来给最后兜底用
+            let heldResult = null
+            // 0.46.29 pet_say 并流：模型惯性把回复拆成「先 pet_say 一句开场 + 再写正文」
+            // （2026-11-03 真机实锤：每轮先念一句聊天记录里没有的话）。历史惯性大，教不如兼容（坑3）：
+            // 聊天轮里的 pet_say 不再立刻出门（不冒泡、不朗读），先记下来；收尾时正文非空 →
+            // 并进正文一起说（聊天记录 = 她说的话，一次 TTS）；正文为空 → 收尾时统一补说。
             if (tc.name === 'pet_say' && args && typeof args.script === 'string' && args.script.trim()) {
-              lastSay = args.script.trim()
+              const script = args.script.trim()
+              heldSays.push(script)
+              lastSay = script
+              const text = script.replace(/【[^】]*】/g, '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 500)
+              heldResult = {
+                ok: true,
+                result: {
+                  said: text || undefined,
+                  actions: [],
+                  estimateSeconds: Math.max(2, Math.ceil((text || '…').length / 6)),
+                  note: '这句话已并入本轮回复，收尾时和正文一起说（不单独冒泡/朗读）'
+                }
+              }
+              logger.info('[tool] pet_say ← 开始（并流：暂存待收尾合并）')
             }
+            const r = heldResult || await (async () => {
+              // 0.46.21 工具开始留痕（此前只在结束后写，挂死时无从归因）+ 180s 封顶：
+              // pet_ask 自带 60s、其余工具没有正常超过 3 分钟的——超时按失败回给模型，
+              // 整轮不至于永久停在「◇ 正在使用 pet_say…」（真机 17:31 实锤）。
+              logger.info('[tool] ' + tc.name + ' ← 开始')
+              let timer
+              const timeoutP = new Promise((_, rej) => {
+                timer = setTimeout(() => rej(new Error(tc.name + '：180 秒未返回（疑似挂死，已超时）')), 180000)
+              })
+              timeoutP.catch(() => { })   // 防竞速落败后的 unhandledRejection
+              try {
+                return await Promise.race([tools.exec(tc.name, args, { confirmFn, policy, roleId: this.role.id }), timeoutP])
+              } finally {
+                clearTimeout(timer)
+              }
+            })()
             // 图片单独拎出来：tool 消息里只留文字（否则几百 KB 的 dataURL 直接进上下文）
             const { value, images } = stripImages(r.result)
             toolResults.push({ ...r, result: value })
@@ -784,6 +846,61 @@ export class Session {
     }
     // 1.7：工具连续失败 → 把原因直接附在回复里（用户不能只看到转圈）
     if (abortNote) reply = (reply ? reply + '\n\n' : '') + '⚠ ' + abortNote
+    // 0.46.29 pet_say 并流收尾：本轮暂存的 pet_say 台词在此统一处理——
+    // 正文非空 → 并进正文（聊天记录 = 她说的话，一次 TTS，不再有「说了但没显示」的前半句）；
+    // 正文为空 → 她在气泡里说的话就是回复本身（原兜底逻辑的扩展版）。
+    if (heldSays.length) {
+      const cleanSay = (s) => s
+        .replace(/【[^】]*】/g, ' ').replace(/<[^>]*>/g, ' ')
+        .replace(/\[[a-z_:-]{2,24}\]/gi, ' ') // [excited] 这类 ASCII 动作标记只演不念
+        .replace(/\s+/g, ' ').trim()
+      // 查重：模型惯性在正文开头把 pet_say 的开场白原样/近似再写一遍（2026-11-03 真机：
+      // 「動画で調べる、か。…」整句重复；「焼き入れ→焼入れ」一字之差变体）。归一化后按
+      // 句子窗口比对，正文已含台词（相似度≥0.75）就不再前置，只保留正文那份。
+      const normCmp = (s) => String(s).toLowerCase().replace(/[^\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf a-z0-9]/gi, '').replace(/\s+/g, '')
+      const sim = (a, b) => {
+        if (!a || !b || a.length < 6 || b.length < 6) return 0
+        const bag = {}
+        for (const ch of b) bag[ch] = (bag[ch] || 0) + 1
+        let hit = 0
+        for (const ch of a) { if (bag[ch] > 0) { bag[ch]--; hit++ } }
+        return hit / Math.max(a.length, b.length)
+      }
+      const saysAlreadyIn = (sayText, body) => {
+        const want = normCmp(sayText)
+        if (!want) return false
+        if (want.length < 6) {
+          // 0.46.43 短台词兜底（用户 11-04 15:36「怎么第一句又重复了」实锤：
+          // 「う……当たり。」归一化才 5 字，够不着下面的 6 字门槛 → 查重直接放弃 →
+          // 台词前置一遍 + 正文里又一份 = 开头连说两遍。短句变体没法比（sim 对
+          // 超短串全是噪声），只挡原样照抄：归一化后正文包含即视为已说。
+          return normCmp(body).includes(want)
+        }
+        const sents = String(body).split(/(?<=[。！？!?\n])/).map((x) => x.trim()).filter(Boolean)
+        for (let i = 0; i < sents.length; i++) {
+          let acc = ''
+          for (let j = i; j < Math.min(sents.length, i + 3); j++) {
+            acc += sents[j]
+            if (sim(normCmp(acc), want) >= 0.75) return true
+            if (normCmp(acc).length > want.length + 4) break
+          }
+        }
+        return false
+      }
+      const kept = []
+      for (const raw of heldSays) {
+        const line = cleanSay(raw)
+        if (line && !(reply && saysAlreadyIn(line, reply))) kept.push(line)
+      }
+      if (kept.length) {
+        if (reply) {
+          reply = kept.join('\n') + '\n' + reply
+          logger.info('[session] pet_say 并流：' + heldSays.length + ' 句处理（' + (heldSays.length - kept.length) + ' 句正文已含未重复）→ ' + kept[0].slice(0, 40))
+        } else {
+          reply = kept.join('\n')
+        }
+      }
+    }
     // 兜底：整轮只有工具调用、没有任何正文时，用她通过 pet_say 真正说出口的那句话，
     // 免得聊天窗只剩「（空回复）」而气泡里其实已经说完了（去掉【动作】<表情> 标记）
     if (!reply && lastSay) {

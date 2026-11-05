@@ -4,7 +4,7 @@ const assert = require('node:assert')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { parseTime, fmtTime, nextFireAt, planDue, createAlarms, MAX_ALARMS } = require('../src/main/companion/alarms')
+const { parseTime, parseDate, fmtTime, nextFireAt, planDue, createAlarms, MAX_ALARMS } = require('../src/main/companion/alarms')
 
 const at = (h, m, day = 26) => new Date(2026, 9, day, h, m, 0, 0).getTime()
 
@@ -90,4 +90,48 @@ test('createAlarms：增删查持久化 + tick 触发一次并推进', () => {
   assert.equal(b.setEnabled(target.id, false), true)
   assert.equal(b.list().find((x) => x.id === target.id).enabled, false)
   fs.rmSync(home, { recursive: true, force: true })
+})
+
+/* ---------------- 0.46.23 date（某天一次性）——用户 11-03「跟角色说明天的事，会在今天的闹钟提醒我」 ---------------- */
+
+test('parseDate：YYYY-MM-DD 严格校验（含日历真实性）', () => {
+  assert.equal(parseDate('2026-11-04'), '2026-11-04')
+  assert.equal(parseDate('2026-2-3'), null, '要补零的两位')
+  assert.equal(parseDate('2026-02-30'), null, '2 月 30 日不存在')
+  assert.equal(parseDate('2026-13-01'), null)
+  for (const bad of ['', '明天', '11-04', '2026/11/04', null]) assert.equal(parseDate(bad), null)
+})
+
+test('nextFireAt + date：就是那一天；过了就是过了（daily 不救）', () => {
+  const now = at(8, 0) // 2026-10-26 08:00
+  assert.equal(nextFireAt({ time: '09:30', date: '2026-10-26' }, now), at(9, 30), '当天未到=当天')
+  assert.equal(nextFireAt({ time: '07:00', date: '2026-10-26' }, now), null, '当天已过=null')
+  assert.equal(nextFireAt({ time: '07:00', date: '2026-10-27' }, now), at(7, 0, 27), '明天=明天')
+  assert.equal(nextFireAt({ time: '07:00', date: '2026-10-25' }, now), null, '过去的日子=null')
+  assert.equal(nextFireAt({ time: '07:00', date: '2026-10-27', daily: true }, now), at(7, 0, 27), 'daily 不改变 date 语义')
+})
+
+test('createAlarms.add：date 落盘 + 已过时间拒绝（不再静默死掉）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-d-'))
+  const a = createAlarms({ home: dir, now: () => at(8, 0), onFire: () => { } })
+  // 明天的一次性：正常入账，date 强制、daily 强制 false
+  const ok = a.add({ time: '07:30', date: '2026-10-27', label: '明天的会', daily: true })
+  assert.equal(ok.ok, true)
+  assert.equal(ok.alarm.date, '2026-10-27')
+  assert.equal(ok.alarm.daily, false, '给了 date 就不是每天')
+  assert.equal(ok.alarm.nextAt, at(7, 30, 27))
+  // 今天已过的一次性：拒绝并说明（旧版会存一个 nextAt=null 的死闹钟）
+  const dead = a.add({ time: '07:00', date: '', daily: false })
+  assert.equal(dead.ok, false)
+  assert.match(dead.error, /已经过了/)
+  assert.match(dead.error, /date/, '错误信息要教模型给 date')
+  // 过去的 date：拒绝
+  const past = a.add({ time: '07:00', date: '2026-10-20' })
+  assert.equal(past.ok, false)
+  assert.match(past.error, /已经过了/)
+  // 坏 date：拒绝
+  assert.equal(a.add({ time: '07:00', date: 'tomorrow' }).ok, false)
+  // list 带出 date
+  const l = a.list()
+  assert.equal(l[0].date, '2026-10-27')
 })

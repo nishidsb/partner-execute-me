@@ -87,6 +87,79 @@ function attachScreenText () {
 }
 attachScreenText()
 
+/* ---------------- 0.46.28 她自己的生活线 + 作息 + 关系仪式感 ----------------
+ * 用户 11-03「还有什么补充才能更像活着的」四件套：
+ * ① 生活线 goals（周~月尺度的叙事弧：她自己的目标会宣布/推进/卡住/完成）
+ * ② 她自己的作息（深夜会困、有自己的睡眠时段，主动开口全停；世界观的第 9 条）
+ * ③ 记忆模糊语气（低权重记忆用「我印象里…来着」提起，见 systemPrompt 记忆段）
+ * ④ 仪式感（相识第 N 天 + 周日晚的本周回顾）
+ * assistant 链路（桌宠聊天框走的就是它）经 setLifeBlocks 每轮现算注入。 */
+const dailyState = require('./daily-state')
+const goalsMod = require('./goals')
+const selfMod = require('./self')
+
+let goalsInst = null
+let goalsWs = ''
+function getGoals () {
+  let ws = ''
+  try { ws = require('../assistant').workspaceDirFor(character.get().id) || '' } catch { }
+  if (!ws) return null
+  if (!goalsInst || goalsWs !== ws) {
+    goalsInst = goalsMod.createGoals({ wsDir: ws, log: (m) => log(m) })
+    goalsWs = ws
+  }
+  return goalsInst
+}
+function goalAdd (a) { const g = getGoals(); return g ? g.add(a || {}) : { ok: false, error: '工作区还没就绪' } }
+function goalProgress (a) { const g = getGoals(); return g ? g.progress(a || {}) : { ok: false, error: '工作区还没就绪' } }
+function goalClose (a) { const g = getGoals(); return g ? g.close(a || {}) : { ok: false, error: '工作区还没就绪' } }
+function goalList () { const g = getGoals(); return g ? g.listRaw() : [] }
+
+/** 每轮现算的生活线段。周日晚额外带本周回顾（事件账本近 7 天挑有内容的） */
+function lifeBlocksNow () {
+  const now = Date.now()
+  const ch = character.get() || {}
+  const blocks = { bodily: dailyState.block(now) }
+  const days = dailyState.daysTogether(ch.createdAt, now)
+  if (days > 0) {
+    blocks.days = '【你们认识第 ' + days + ' 天】' +
+      (dailyState.isMilestone(days)
+        ? '今天是整日子（相识 ' + days + ' 天）——值得记一天，自然地提一句就行，别太隆重。'
+        : '')
+  }
+  try { const g = getGoals(); if (g) blocks.goals = g.promptBlock() } catch { }
+  const d = new Date(now)
+  if (d.getDay() === 0) {
+    try {
+      let ws = ''; try { ws = require('../assistant').workspaceDirFor(ch.id) || '' } catch { }
+      const out = []
+      if (ws) {
+        for (let i = 0; i < 7 && out.length < 10; i++) {
+          const dt = new Date(now - i * 86400000)
+          const ds = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0')
+          let evs = []
+          try { evs = selfMod.readEvents(ws, ds) } catch { }
+          for (const e of evs) {
+            if (!e || !e.text) continue
+            if (!['watch', 'memory', 'dream', 'study', 'nudge', 'welcome'].includes(String(e.kind))) continue
+            out.push(String(e.text).slice(0, 80))
+            if (out.length >= 10) break
+          }
+        }
+      }
+      if (out.length >= 3) {
+        blocks.week = '【本周回顾（周日，你和他一起过的一周）】\n' + out.join('\n') +
+          '\n今晚自然地聊起这一周，挑你印象最深的，别念清单。'
+      }
+    } catch { }
+  }
+  return blocks
+}
+function attachLifeBlocks () {
+  try { require('../assistant').setLifeBlocks(lifeBlocksNow) } catch (e) { log('[life] 挂生活线失败：' + (e && e.message)) }
+}
+attachLifeBlocks()
+
 /* ---------------- 0.18.0 M3 · 屏幕监控陪伴（可开关，默认关） ----------------
  * 周期截主屏 → 视觉模型按人设判断 → 限频 → pet_say 气泡+语音（复用桌宠发声链路）。
  * 纯逻辑在 watch.js，这里只做 Electron 注入（截屏/人设/全屏判定/模型配置）。 */
@@ -106,6 +179,7 @@ function getRhythm () {
   rhythmInst = rhythm.createRhythm({
     cfgGet: () => cfg(),
     log: (m) => log(m),
+    snubStreakOf: () => { try { return inner.snubStreakNow() } catch { return 0 } },   // 0.46.33 被晾→少主动凑
     persist: {
       load: () => { try { return JSON.parse(fsMod.readFileSync(rhythmFile, 'utf8')) } catch { return null } },
       save: (o) => { try { fsMod.writeFileSync(rhythmFile, JSON.stringify(o), 'utf8') } catch { } }
@@ -127,16 +201,19 @@ function getWatch () {
       try { return require('electron').powerMonitor.getSystemIdleTime() } catch { return 0 }
     },
     shoot: async () => {
-      const { screen } = require('electron')
-      const cua = require('../cua')
-      const b = screen.getPrimaryDisplay().bounds
-      return cua._shoot({ x: b.x, y: b.y, w: b.width, h: b.height, maxW: 1280, maxH: 1280, tag: 'watch' }, false)
+      // 0.46.38 多屏拼图：以前 cua._shoot 只截主屏——游戏开在副屏时她等于看不见。
+      // captureAll 全部显示器拼一张（比逐屏问省请求，兼容 watch 的 dataURL 形状）。
+      const cap = await require('./screens').captureAll({ maxWidth: 1280, quality: 75 })
+      return { image: 'data:image/jpeg;base64,' + cap.jpeg.toString('base64') }
     },
     chat: async ({ messages }) => {
       const c = cfg()
+      // 0.46.38 「看」切本地视觉：图先由本机 Ollama 转文字描述，云端只收文字做判断——
+      // 省图片 token、截图不出本机；本地视觉没接上时回退原图（deepseek-flash 2026-10 起有视觉，兜底不哑）。
+      const lv = await require('./watchVision').localizeImages(messages, require('./vision'), (m) => log(m))
       return llm.chatStream({
         baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
-        messages, temperature: c.temperature != null ? c.temperature : 0.8
+        messages: lv.messages, temperature: c.temperature != null ? c.temperature : 0.8
       })
     },
     // 语言跟设置走：getContext 带上 replyLang（watch 内做语言要求注入+守卫纠正）+ 用户资料
@@ -173,6 +250,94 @@ function getWatch () {
  * 到点：状态气泡（alarm）+ 台词气泡 + 朗读（复用 pet_say 链路，多屏只由宿主发声）+ 系统通知。
  * 语言跟随回复语言；错过 15 分钟内补发一次并说明原定时间。 */
 let alarmsModInst = null
+/**
+ * 0.46.22 闹钟台词现生成：用户不要每句一样的固定模板（11-03「这个闹钟的提醒是固定语句？我不需要固定语句的」）。
+ * 让 LLM 用她此刻的口吻说一句；失败/空回退旧模板——功能不能哑。
+ */
+async function alarmLine (label, a, rl) {
+  const c = cfg()
+  const late = Number(a.lateMin) || 0
+  const langName = rl === 'ja' ? '日语' : rl === 'en' ? 'English' : '中文'
+  const when = a.time + (late > 0 ? (rl === 'ja' ? `、${late}分遅れ` : rl === 'en' ? `, ${late} min late` : `，迟到了 ${late} 分钟`) : '')
+  const ask = rl === 'ja'
+    ? `アラーム「${label}」の時間（${when}）。あなた自身の口調で、彼に一言だけ伝えて。`
+    : rl === 'en'
+      ? `The alarm "${label}" is due now (${when}). Say one short line in your own voice to remind him.`
+      : `闹钟「${label}」到点了（${when}）。用你自己的口吻跟他说一句话提醒他。`
+  let persona = ''
+  try { persona = String((character.get() || {}).persona || '') } catch { }
+  const txt = await llm.chatOnce({
+    baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
+    messages: [
+      { role: 'system', content: String(persona).slice(0, 900) +
+        '\n\n【这次的任务】闹钟到点了，说一句话提醒他。只输出台词本身：一句话、口语、有你自己的性格和此刻的心情；' +
+        '不要引号、不要【】<>动作标记、不要解释；用' + langName + '说。' +
+        '不要用「ご主人様／主人」这类称呼开口——他明确说过不喜欢（这是最高优先级，压过人设里的旧称呼）。' },
+      { role: 'user', content: ask }
+    ],
+    temperature: 0.9, maxTokens: 120, timeoutMs: 20000
+  })
+  return String(txt || '')
+    .replace(/【[^】]*】|<[^>]*>/g, '')
+    // 0.46.24 称呼保险：他明确说过不要叫主人——生成侧万一还是带了，剥掉开头称呼
+    .replace(/^(?:ご主人様|御主人様|主人|マスター)\s*[、，,！!～~]?\s*/, '')
+    .replace(/^[\s"'「『]+|[\s"'」』]+$/g, '')
+    .split('\n')[0].trim()
+}
+
+/* ---------- 0.46.33 冷落感知：他人在电脑前却晾着她的话 ---------- */
+
+// 兜底台词池（LLM 挂了也要有反应）：按 streak 分档，越往后越泄气。语言跟 replyLang 走。
+const SNUB_FALLBACK = {
+  zh: ['……问了句什么，没人理。算了。', '咦，没听到吗……算了，他在忙吧。', '……又不理我。那我不说了。'],
+  ja: ['……返事、ないな。まあいいか。', 'え、聞こえてない……？もういいけど。', '……また無視。もういい。'],
+  en: ['...Asked something. No answer. Never mind.', '...Not even a glance. Okay then.', '...Ignored again. Fine, I\'ll stop.']
+}
+
+/** 被晾时的自言自语（LLM 现生成，同 alarmLine 模式；要求自然流露、不汇报状态、不演）。 */
+async function snubLine (saidText, streak, rl) {
+  const c = cfg()
+  const langName = rl === 'ja' ? '日语' : rl === 'en' ? 'English' : '中文'
+  const tone = streak >= 2
+    ? '而且这不是第一次了，今天已经好几句没被接住，你有点泄气，也攒了点小情绪'
+    : '这是刚才发生的事，你有点小失落，但还没到生气的程度'
+  let persona = ''
+  try { persona = String((character.get() || {}).persona || '') } catch { }
+  const txt = await llm.chatOnce({
+    baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
+    messages: [
+      { role: 'system', content: String(persona).slice(0, 900) +
+        '\n\n【这次的任务】你刚才主动跟他说话，他就坐在电脑前盯着屏幕，一直没接话，' + tone + '。' +
+        '用一句自言自语把这点情绪自然流露出来——像人在旁边小声嘟囔的那一种：' +
+        '不要直接汇报自己的状态（别出现「我有点失落」「我生气了」这种自我描述），不要质问他，不要宣布冷战，就是随口的一声嘀咕。' +
+        '只输出台词本身：一句、口语、有你自己的性格；不要引号、不要【】<>动作标记、不要解释；用' + langName + '说。' +
+        '不要用「ご主人様／主人」这类称呼开口——他明确说过不喜欢。' },
+      { role: 'user', content: '你刚才没被接住的那句话是：「' + String(saidText || '').slice(0, 40) + '」' }
+    ],
+    temperature: 0.9, maxTokens: 100, timeoutMs: 20000
+  })
+  return String(txt || '')
+    .replace(/【[^】]*】|<[^>]*>/g, '')
+    .replace(/^(?:ご主人様|御主人様|主人|マスター)\s*[、，,！!～~]?\s*/, '')
+    .replace(/^[\s"'「『]+|[\s"'」』]+$/g, '')
+    .split('\n')[0].trim()
+}
+
+/** 冷落成立（inner sweepSays 判定回调）：当场自言自语一句——走 narration 通道，
+ *  不期待回应、不再进负反馈（她自己嘟囔不算「跟他说话」，这是语义底线）。 */
+async function onSnubbed (saidText, streak) {
+  const c = cfg()
+  const rl = c.replyLang === 'auto' ? 'zh' : (c.replyLang || 'zh')
+  let line = ''
+  try { line = await snubLine(saidText, streak, rl) } catch { }
+  if (!line) {
+    const pool = SNUB_FALLBACK[rl] || SNUB_FALLBACK.zh
+    line = pool[Math.max(0, Math.min(streak - 1, pool.length - 1))]
+  }
+  if (!line) return
+  log('[snub] 被晾嘀咕（第 ' + streak + ' 次）：' + line.slice(0, 40))
+  try { await sayNarration(line, { speech: Math.random() < 0.5 }) } catch (e) { log('[snub] 嘀咕播放失败: ' + (e && e.message)) }
+}
 function getAlarms () {
   if (alarmsModInst) return alarmsModInst
   alarmsModInst = alarmsMod.createAlarms({
@@ -183,15 +348,18 @@ function getAlarms () {
       const c = cfg()
       const rl = c.replyLang === 'auto' ? 'zh' : (c.replyLang || 'zh')
       const label = a.label || (rl === 'ja' ? 'アラーム' : rl === 'en' ? 'the alarm' : '闹钟')
-      const text = rl === 'ja'
-        ? `ご主人様、${label}のお時間です`
+      const fallback = rl === 'ja'
+        ? `${label}、その時間だよ`
         : rl === 'en'
-          ? `Master, it's time for ${label}`
-          : `主人，${label}的时间到了`
+          ? `It's time for ${label}`
+          : `${label}的时间到了`
       // 状态气泡 + 音效（overlay 收到 pet:alarm 后画 ⏰ 并响一声）
       try { bcast('pet:alarm', { label: a.label || '', time: a.time, lateMin: a.lateMin || 0 }) } catch { }
-      // 台词：复用 pet_say（气泡 + TTS + 字幕 + 写进会话历史，多屏只有宿主发声）
-      sayProactive(text, { kind: 'alarm' }).catch((err) => log('[alarms] 播放失败: ' + (err && err.message)))
+      // 台词：0.46.22 起现场生成（失败退回模板），复用 pet_say（气泡 + TTS + 字幕 + 弹幕，多屏只有宿主发声）
+      alarmLine(label, a, rl)
+        .catch((e) => { log('[alarms] 台词生成失败，用模板: ' + (e && e.message)); return '' })
+        .then((line) => sayProactive(line || fallback, { kind: 'alarm' }))
+        .catch((err) => log('[alarms] 播放失败: ' + (err && err.message)))
       try {
         const { Notification } = require('electron')
         if (Notification && Notification.isSupported && Notification.isSupported()) {
@@ -319,13 +487,24 @@ function syncInner (char) {
   inner.setContext({
     wsDir,
     log,
-    llmCfg: { baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel },
+    llmCfg: { baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel, replyLang: c.replyLang || 'zh' },
     persona: String(char.persona || ''),
     personaName: String(char.name || ''),
     // 0.21.0：负反馈开关（测试期可关；关了只影响「会不会累加」，已有数值要归零用设置页的回滚/清零）
     feedback: c.feedbackMode === 'off' ? 'off' : 'on',
     // 0.36.0 语义判读开关（默认开；关掉就只按词表认，不再多发请求）
     judgeOn: () => cfg().judgeOn !== false,
+    // 0.46.33 冷落感知：窗口/开关走设置，场景判定和当场嘀咕由宿主提供
+    cfgGet: () => cfg(),
+    idleSec: () => {
+      try { return require('electron').powerMonitor.getSystemIdleTime() } catch { return -1 }
+    },
+    exempt: () => {
+      try { if (require('../gameMode').isActive()) return true } catch { }
+      try { if (study.active(studySess)) return true } catch { }
+      return false
+    },
+    onSnubbed: (text, streak) => { onSnubbed(text, streak) },
     // 第 1 期：归纳/做梦的产出一律进审查队列（唯一收口；没有这个 hook 时 inner 走旧直写兜底）
     enqueueReview: (entries) => reviewEnqueue(entries)
   })
@@ -448,7 +627,10 @@ function send (ch, data) {
  * 这里不做「工具说明书按需注入」——companion 链路的工具说明在工具 description 里，
  * 不在 system prompt，那部分是助手面板（core/session.js）的优化点。
  */
-const SYSTEM_BUDGET = 12000
+/* 0.46.26 12000 → 40000：世界观全文常驻（用户 11-03 拍板「全文常驻」）。
+ * 他的世界观 6 条共 2.6 万字 + 人设 4348 + 其余状态段 ≈ 3.5 万字，12000 根本装不下；
+ * 有前缀缓存托底（system 是稳定前缀，DeepSeek 缓存命中后输入价大幅降低）。 */
+const SYSTEM_BUDGET = 40000
 
 /* 0.45.66 模型有没有视觉能力：决定「她到底能不能看见画面」。
  *
@@ -491,7 +673,26 @@ function systemPrompt (char, userText) {
     }
   }
   const memText = memory.summaryText(char.id, userText)
-  if (memText) sections.push({ key: 'memory', text: memText, priority: 40 })
+  if (memText) sections.push({ key: 'memory', priority: 40, text: '【回忆使用】权重低/久远的回忆，提起来用不确定的语气（「我印象里……来着」）；记不清就承认，别当确定事实断言。\n' + memText })
+  // 0.46.28 她自己的作息 + 相识天数 + 生活线 + 周回顾（每轮现算）
+  try {
+    const now = Date.now()
+    sections.push({ key: 'bodily', priority: 58, text: dailyState.block(now) })
+    const days = dailyState.daysTogether(char.createdAt, now)
+    if (days > 0) {
+      sections.push({
+        key: 'days',
+        priority: 59,
+        text: '【你们认识第 ' + days + ' 天】' +
+          (dailyState.isMilestone(days) ? '今天是整日子（相识 ' + days + ' 天）——值得记一天，自然地提一句就行，别太隆重。' : '')
+      })
+    }
+    const g = getGoals()
+    const gb = g ? g.promptBlock() : ''
+    if (gb) sections.push({ key: 'goals', priority: 52, text: gb })
+    const life = lifeBlocksNow()
+    if (life.week) sections.push({ key: 'week', priority: 46, text: life.week })
+  } catch { }
   // 0.20.0 自我层：她自己写的日记 + 最近的状态（每人一份；还没有日记时不注入）
   try {
     const ws = require('../assistant').workspaceDirFor(char.id)
@@ -952,19 +1153,30 @@ async function sayProactive (text, opts) {
   const pb = require('../petBridge')
   let r = null
   try {
-    r = await pb.invoke('pet_say', { script: t, speech: true })
+    // 0.46.22 要翻译时扣住弹幕（同 sayNarration：原文先上弹幕几秒就飞走，事后追换看不见）
+    r = await pb.invoke('pet_say', {
+      script: t, speech: true,
+      dmHold: !!subtitleTarget(t, cfg().subLang || 'off')
+    })
   } catch (err) {
     log('[companion] 主动台词播放失败: ' + (err && err.message))
   }
   // 0.45.97 屏幕陪伴开过口 = 这一轮已经「说过话了」，QQ 那边不再补一句（用户 11-02）
   if (!(opts && opts.mark === false)) noteSpoke()
-  subtitleFor(t).then((display) => {
+  Promise.race([
+    subtitleFor(t),
+    new Promise((res) => setTimeout(() => res(''), 6000))
+  ]).then((display) => {
+    const dk = require('../danmaku')
+    if (r && r.dmHeld) { try { if (dk.isOn()) dk.say(display || t) } catch { } }
     if (display) {
       try { pb.subtitle({ text: display }) } catch { }
       log('[companion] 主动台词字幕：' + display.slice(0, 40))
     }
     try { require('../assistant').pushExternalReply(t, display) } catch { }
   }).catch(() => {
+    const dk = require('../danmaku')
+    if (r && r.dmHeld) { try { if (dk.isOn()) dk.say(t) } catch { } }
     try { require('../assistant').pushExternalReply(t, '') } catch { }
   })
   return r
@@ -990,10 +1202,38 @@ async function sayNarration (text, opts) {
     vol = Math.min(1, Math.max(0.05, Number(c2.chatterVoiceVol) || 0.35))
   }
   try {
-    const rr = await require('../petBridge').invoke('pet_say', { script: t, speech, vol })
+    const rr = await require('../petBridge').invoke('pet_say', {
+      script: t, speech, vol,
+      // 0.46.22 要翻译时扣住弹幕：原文几秒就飞出屏幕，事后 replaceLast 追不上
+      //（0.46.20 补丁真机实测「弹幕还是没有翻译」）。译文好了由这里推，失败/超时兜底推原文。
+      dmHold: !!subtitleTarget(t, cfg().subLang || 'off')
+    })
     statBump('said')
     noteSpoke()   // 0.45.97 碎碎念也算「屏幕陪伴说过话」，QQ 不重复开口
-    try { require('../assistant').ledgerNote({ via: 'chatter', assistant: t }) } catch { }
+    // 0.46.41 入账等译文回来一起写（≤6s，译文失败/超时/关翻译就只入原文）——
+    // 用户实锤「自言自语又不翻译了」：原文先入账的话，聊天记录里全是日语原句；
+    // ledgerNote 的 sub 字段渲染层（聊天框/时间线）会跟在原文后面显示译文。
+    let ledgerDone = false
+    const noteLedger = (display) => {
+      if (ledgerDone) return
+      ledgerDone = true
+      try {
+        require('../assistant').ledgerNote({ via: 'chatter', assistant: t, ...(display && display !== t ? { sub: display } : {}) })
+      } catch { }
+    }
+    // 0.46.20 嘀咕也补字幕；0.46.22 弹幕侧改为「等译文再上屏」而不是事后追换
+    Promise.race([
+      subtitleFor(t),
+      new Promise((r) => setTimeout(() => r(''), 6000))
+    ]).then((display) => {
+      noteLedger(display)
+      const dk = require('../danmaku')
+      if (rr && rr.dmHeld) { try { if (dk.isOn()) dk.say(display || t) } catch { } }
+      if (display) {
+        try { require('../petBridge').subtitle({ text: display }) } catch { }
+        log('[chatter] 嘀咕字幕：' + display.slice(0, 40))
+      }
+    }).catch(() => noteLedger(''))
     return rr
   } catch (err) {
     log('[chatter] 出气泡失败: ' + (err && err.message))
@@ -1031,7 +1271,7 @@ function getChatter () {
     presence: presenceState,
     sharedBlock: watchSharedBlock,
     // 0.45.44：把自己最近几句递回去防复读（「配合ノート」连说一晚的教训）
-    recentVoices: (n) => { try { return inner.recentVoices(n).join('\n') } catch { return '' } },
+    recentVoices: (n, sinceMs) => { try { return inner.recentVoices(n, sinceMs).join('\n') } catch { return '' } },
     displeasure: () => { try { return inner.displeasure() } catch { return 0 } },
     gapScale: rebuke.gapScale,
     rhythm: getRhythm(),
@@ -1195,7 +1435,8 @@ async function nudgeLineByHint (hint, avoid) {
   // 0.45.44 防复读：把最近几句主动说过的话递回去（没有这面镜子，
   // 模型每次都凑同一个道具——真机实锤「配合ノート」连说一晚）
   let voices = ''
-  try { voices = inner.recentVoices(6).join('\n') } catch { }
+  // 0.46.42 镜子同款时间窗：几小时前的台词不该再当「最近说过」误导生成
+  try { voices = inner.recentVoices(6, voicesim.REPEAT_WINDOW_MS).join('\n') } catch { }
   // 0.45.91 硬闸重生成：镜子没拦住时，这里把原句点名叫出来当禁语
   const banBlock = avoid
     ? [{ role: 'system', content: '【这句你刚说过，绝对不许再用同样的开头、同样的道具、同样的句式】\n' + String(avoid).slice(0, 80) + '\n换一个完全不同的场景/动作/话题来开口。' }]
@@ -1230,7 +1471,8 @@ async function nudgeLineByHint (hint, avoid) {
  * 还雷同就不开口（宁可安静，也不做复读机）。 */
 const proactiveGate = require('./proactiveGate').createGate({
   size: 12,
-  extraHistory: () => { try { return inner.recentVoices(6) } catch { return [] } }
+  // 0.46.42 黏人阶梯的撞车历史也走时间窗（跨小时的老台词不算复读）
+  extraHistory: () => { try { return inner.recentVoices(6, voicesim.REPEAT_WINDOW_MS) } catch { return [] } }
 })
 const noteProactiveSaid = (text) => proactiveGate.note(text)
 const proactiveRepeat = (text) => proactiveGate.check(text)
@@ -1919,7 +2161,7 @@ function startAutonomy () {
     // 0.45.19 跨天项目：她有「最近在弄的那个东西」
     projects: getProjects(),
     // 挡 2/3 的 LLM 循环用跟主聊天同一套配置（模型得是能读图/能调工具的）
-    llmCfg: () => ({ baseUrl: cfg().apiBaseUrl, apiKey: cfg().apiKey, model: cfg().apiModel }),
+    llmCfg: () => ({ baseUrl: cfg().apiBaseUrl, apiKey: cfg().apiKey, model: cfg().apiModel, replyLang: cfg().replyLang || 'zh' }),
     idleSec: () => {
       try { return require('electron').powerMonitor.getSystemIdleTime() } catch { return 0 }
     },
@@ -1982,7 +2224,9 @@ async function distillExperience (text, tag) {
         { role: 'user', content: ('【' + src + '】\n' + body).slice(0, 600) }
       ],
       maxTokens: 200,
-      timeoutMs: 15000
+      // 0.46.25 15000 → 30000：11-03 DeepSeek 拥堵时段两次 abort（17:46/18:25，均在 503 风暴窗口内），
+      // 沉淀是后台任务不吃用户等待，放宽到和 index.js 其他后台调用一致的 30000
+      timeoutMs: 30000
     })
     // 0.45.20 三个静默出口全部显形：之前「无」/0 条都无声返回，真机上沉淀从未生效却查无此人
     if (!res) { log('[' + src + '] 经历沉淀：模型空回复'); return }
@@ -2206,7 +2450,9 @@ async function dreamRun (reason) {
     // 睡前梦做过一场就把「说过晚安」清掉：sleepWantedAt 不清零时，
     // dream tick 每分钟都会再命中 sleep 分支（0.45.0 真机连环做梦的另一半根因）
     sleepWantedAt = 0
-    try { nudgeRec = idleNudge.onUserTalk(nudgeRec); saveNudgeRec() } catch { } // 她刚忙完自己的事，黏人计时重置
+    // 0.46.36 只记「她刚开过口」，绝不清睡前静默——原来调 onUserTalk 把 sleepUntil 一起清了：
+    // 00:05 道晚安静默到 07:05，01:13 做梦完成清静默，02:39 她 QQ「85 分钟没理我了？」（主人睡得好好的）
+    try { nudgeRec = idleNudge.noteSelfSpoke(nudgeRec); saveNudgeRec() } catch { }
     try { await sayProactive(dream.closingLine(c.replyLang === 'auto' ? 'zh' : (c.replyLang || 'zh'), parsed, { auto: c.dreamAutoApprove === true }), { kind: 'dream' }) } catch { }
     log('[dream] 做梦完成（' + (reason || 'manual') + '）：入队 ' + r.added + ' 条（重复 ' + r.dup + '）')
     return { ok: true, added: r.added, dup: r.dup, parsed }
@@ -2837,7 +3083,7 @@ function watchSulkMood () {
     const st = self.getState(ws)
     const mood = Math.max(0.05, (Number(st.mood) || 0.5) - 0.25)
     const cold = Math.min(1, (Number(st.cold) || 0) + 0.3)
-    self.patchState(ws, { mood: mood, cold: cold })
+    self.patchState(ws, { mood: mood, moodAt: Date.now(), cold: cold }) // moodAt：心情动了就重置回血计时（0.46.34）
     log('[studywatch] 彻底生气：情绪压下来了（mood ' + mood.toFixed(2) + ' cold ' + cold.toFixed(2) + '）')
   } catch (err) {
     log('[studywatch] 压情绪失败：' + (err && err.message))
@@ -3479,9 +3725,9 @@ function settingsView () {
     permAllowApps: String(c.permAllowApps || ''),
     gameMode: c.gameMode !== false,
     gameModeAuto: c.gameModeAuto !== false,
-    gameModeMute: c.gameModeMute !== false,
+    gameModeMute: c.gameModeMute === true,
     gameModeGreet: c.gameModeGreet !== false,
-    gameModeScale: c.gameModeScale != null ? c.gameModeScale : 0.7,
+    gameModeScale: c.gameModeScale != null ? c.gameModeScale : (c.petScale != null ? c.petScale : 1),
     gameModeCorner: c.gameModeCorner || 'bottom-right',
     // 0.38.0 游戏弹幕层：游戏模式里她的话改成弹幕横着飞 + 角落弹幕框
     danmakuOn: c.danmakuOn !== false,
@@ -4237,7 +4483,19 @@ function registerIpc () {
 }
 
 /** 用当前 TTS 配置合成一段语音：{ok,url,speed,lang} 或 {ok:false,fallback:true} */
+// 0.46.48 朗读代次：新朗读请求把旧的作废——被顶掉的合成不再继续跑
+//（Fish 11s、IndexTTS CPU 兜底几分钟），合成完也不下发播放（用户 22:47：
+// 聊天都到后面了还在读前面的话；被中断的就不该读）
+let speakRunSeq = 0
+let speakAbortCtl = null
+
 async function speakWithCurrentConfig (text) {
+  const my = ++speakRunSeq
+  try { if (speakAbortCtl) speakAbortCtl.abort() } catch { }
+  const ac = new AbortController()
+  speakAbortCtl = ac
+  // 本地兜底的排队/正在跑的任务一并作废（IndexTTS 一跑几分钟不取消=白烧 CPU）
+  try { require('./ttsLocal').cancelPending('朗读已被新的打断') } catch { }
   const c = cfg()
   // 2.5 繁→简：开关打开就把台词转成简体再合成（繁体 TTS 声线少、还常读错字）
   // spokenOnly 先剥【动作】括段（主人 2026-10-31：说话没必要连动作也念出来）；
@@ -4270,15 +4528,20 @@ async function speakWithCurrentConfig (text) {
       refAudio: c.ttsRefAudio, textLang: c.ttsTextLang, promptText: c.ttsPromptText, promptLang: c.ttsPromptLang,
       fishModel: c.fishModel, asmrVoiceId: c.fishAsmrVoiceId,
       format: c.fishFormat, latency: c.fishLatency, feeling: c.fishFeeling, tagDensity: c.fishTagDensity,
-      speed: c.ttsSpeed || 1, text: spoken
+      speed: c.ttsSpeed || 1, text: spoken,
+      signal: ac.signal
     })
+    if (my !== speakRunSeq) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
     return { ok: true, url: r.url, speed: r.speed, lang: c.replyLang || 'zh' }
   } catch (err) {
+    // 0.46.48 被新朗读顶掉的请求：不再走本地兜底（回退链只服务最新一轮）
+    if (my !== speakRunSeq || ac.signal.aborted) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
     // 0.22.0 本地回退链（主人 2026-10-26 定案）：Fish 失败/超时 → SoVITS（快，5~20s）
     //   → IndexTTS（慢兜底，30~100s）→ 系统语音。前两级都是角色参考音色。
     if (c.sovitsOn !== false) {
       try {
         const sv = await ttsLocal.synthesizeSovits(spoken, c.replyLang || 'zh', () => cfg())
+        if (my !== speakRunSeq) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
         return { ok: true, url: sv.url, lang: c.replyLang || 'zh', local: true }
       } catch (e2) {
         log('[tts-local] SoVITS 回退失败: ' + (e2 && e2.message))
@@ -4287,6 +4550,7 @@ async function speakWithCurrentConfig (text) {
     if (c.indexTtsOn !== false) {
       try {
         const loc = await ttsLocal.synthesize(spoken, c.replyLang || 'zh', () => cfg())
+        if (my !== speakRunSeq) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
         return { ok: true, url: loc.url, lang: c.replyLang || 'zh', local: true }
       } catch (e2) {
         log('[tts-local] IndexTTS 回退失败: ' + (e2 && e2.message))
@@ -4524,7 +4788,7 @@ function syncRemote () {
   } catch (err) { log('[remote] sync 失败: ' + (err && err.message)) }
 }
 
-module.exports = { createWindow, registerIpc, stop, bootPet, setOverlayBroadcast, setFullscreenSync, switchChar, getWindow: () => win, imSynthesize, userProfileText, alarmAdd, alarmList, alarmCancel, onUserSpoke, noteExchange, dreamRun, studyStart, studyStop, studyStatus, studyTool, studyActive: () => study.active(studySess), setStudyTrayRefresh: (fn) => { studyOnTrayRefresh = fn }, setObsPortGetter, setImApi, qqSendNow, qqPlanAdd, qqPlanList, qqPlanCancel, qqReachPrompt, startReachPlans, syncRemote, remoteStatus: () => remote.status(), ttsSpeak: speakWithCurrentConfig, qqNote, desktopHistoryTail, noteGameSession, listActionWords }
+module.exports = { createWindow, registerIpc, stop, bootPet, setOverlayBroadcast, setFullscreenSync, switchChar, getWindow: () => win, imSynthesize, userProfileText, alarmAdd, alarmList, alarmCancel, goalAdd, goalProgress, goalClose, goalList, onUserSpoke, noteExchange, dreamRun, studyStart, studyStop, studyStatus, studyTool, studyActive: () => study.active(studySess), setStudyTrayRefresh: (fn) => { studyOnTrayRefresh = fn }, setObsPortGetter, setImApi, qqSendNow, qqPlanAdd, qqPlanList, qqPlanCancel, qqReachPrompt, startReachPlans, syncRemote, ttsSpeak: speakWithCurrentConfig, qqNote, desktopHistoryTail, noteGameSession, listActionWords }
 
 /* ---------------- 0.18.0 M2 · IM 语音合成（QQ 发语音用） ----------------
  * 音色跟会话对应的角色卡走（主人 2026-10-25 定案：TTS 不是共用的）——

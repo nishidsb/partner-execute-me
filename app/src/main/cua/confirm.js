@@ -10,7 +10,7 @@
  */
 'use strict'
 const path = require('path')
-const { BrowserWindow, ipcMain, screen, app } = require('electron')
+const { BrowserWindow, ipcMain, screen } = require('electron')
 const { log } = require('../logger')
 
 const TIMEOUT_MS = 60000

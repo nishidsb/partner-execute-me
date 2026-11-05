@@ -170,14 +170,14 @@
         </div>
       </div>
       <div id="tabGame" hidden>
-        <label data-i18n="game.label">游戏模式（打游戏时角色缩小躲到角落，不挡画面、不说话、不溜达）
+        <label data-i18n="game.label">游戏模式（打游戏时停掉自主溜达、她的话改走弹幕，不挡画面；大小/静音/角落下面可配，默认保持你摆好的样子不动）
           <div class="mem-row">
             <button id="gmToggle" class="cd-btn" data-i18n="game.enter">进入游戏模式</button>
             <span class="hint" id="gmState"></span>
           </div>
         </label>
-        <label><span data-i18n="game.scale">进入后的大小 </span><span id="gmScaleV">0.7×</span>
-          <input id="gmScale" type="range" min="40" max="100" step="5" value="70">
+        <label><span data-i18n="game.scale">进入后的大小（默认跟随角色本身大小） </span><span id="gmScaleV">1.0×</span>
+          <input id="gmScale" type="range" min="40" max="130" step="5" value="100">
         </label>
         <label data-i18n="game.corner">躲在哪个角落
           <select id="gmCorner">
@@ -188,7 +188,7 @@
             <option value="top-left" data-i18n="game.tl">左上角</option>
           </select>
         </label>
-        <label class="cd-check"><input type="checkbox" id="gmMute" checked> <span data-i18n="game.mute">游戏中静音（不说话，气泡也不出声）</span></label>
+        <label class="cd-check"><input type="checkbox" id="gmMute"> <span data-i18n="game.mute">游戏中静音（不念台词，气泡/弹幕照常出；默认不勾——角色放副屏不挡视线就不必闭嘴）</span></label>
         <label class="cd-check"><input type="checkbox" id="gmAuto" checked> <span data-i18n="game.auto">帮她启动游戏时自动进入游戏模式</span></label>
         <label class="cd-check"><input type="checkbox" id="gmAutoDetect" checked> <span data-i18n="game.autoDetect">她自己发现你在打游戏（前台是全屏游戏或已知游戏持续几分钟，她自动缩到角落；游戏一结束自己回来。中途切出去回消息、刷视频 3 分钟内不算离开，计时和位置都保持；真的退出了，40 分钟内回到同一款游戏会接着上一场的时间算，不重头开始。窗口化玩的游戏认名单：FF14、星穹铁道、原神、绝区零，或配置里加 gameAutoProcesses；宽限分钟数改 gameAutoLeaveMin）</span></label>
         <label class="cd-check"><input type="checkbox" id="gmGreet" checked> <span data-i18n="game.greet">进出游戏模式时说一句</span></label>
@@ -637,6 +637,14 @@
         <div class="hint" data-i18n="inner.hint">她有自己的一天：会写日记、会记住你，也会被冷落影响。负反馈只改她说话的方式和长短，不会被拿来要挟你，也不会关掉任何功能。</div>
         <label class="cd-check"><input type="checkbox" id="cpFeedbackMode" checked> <span data-i18n="inner.feedback">启用负反馈（说话总没人理 / 被扔来扔去时，她会安静一点）</span></label>
         <div class="hint" data-i18n="inner.feedbackNote">测试期可以随时关掉；关掉后只是不再累加。已经记下的情绪在下面「负反馈」里清零或回滚。</div>
+        <label class="cd-check"><input type="checkbox" id="cpColdShoulder" checked> <span data-i18n="inner.coldShoulder">冷落感知（你在电脑前却不理她的搭话，她会小失落：当场嘟囔一句、接下来话变少变淡）</span></label>
+        <div class="hint" data-i18n="inner.coldShoulderNote">只算「你在电脑前却不接话」：你离开电脑、游戏模式、学习模式都不会触发；她的自言自语不算搭话、不影响情绪。</div>
+        <label data-i18n="inner.coldShoulderMin">等多久算被冷落
+          <div class="row">
+            <input id="cpColdShoulderMin" type="number" min="1" max="30" step="1" style="width:80px">
+            <span data-i18n="inner.coldShoulderUnit" style="white-space:nowrap">分钟（默认 3）</span>
+          </div>
+        </label>
         <label data-i18n="inner.historyChars">聊天带回多少历史
           <div class="row">
             <input id="cpHistoryChars" type="number" min="2000" max="60000" step="1000" style="width:100px">

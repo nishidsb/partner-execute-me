@@ -54,6 +54,12 @@
     },
     "unusedCfg:gameOrder": {
       "reason": "游戏库拖拽排序的遗留字段，顺序现在由 launcher 自己的数组决定；hydrate 里有类型校验，删要一起改。"
+    },
+    "testOnly:src/main/companion/ttsLocal.js:_setPostTts": {
+      "reason": "0.46.39 分片合成的测试注入点（假 HTTP 层验证逐片调用/PCM 拼接/截断/中途失败），产品侧固定走真 postTts；与 vision.js setFetch 同类惯例。"
+    },
+    "testOnly:src/main/companion/ttsLocal.js:_setEnsureServer": {
+      "reason": "0.46.39 分片合成的测试注入点（绕开真实 python 进程拉起），产品侧固定走真 ensureServer 懒启动。"
     }
   }
 }

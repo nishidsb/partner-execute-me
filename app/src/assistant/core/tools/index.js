@@ -10,6 +10,12 @@ import { setPetBridge } from './pet.js'
 // 0.18.0 第一批：闹钟三工具（alarm_set / alarm_list / alarm_cancel），走同一条宿主桥
 import './alarm.js'
 import { setAlarmBridge } from './alarm.js'
+// 0.46.28 生活线三工具（goal_set / goal_list / goal_update），走同一条宿主桥
+import './goal.js'
+import { setGoalBridge } from './goal.js'
+// 0.46.31 bili_watch：看视频（刷B站模块能力的工具接线），同一条宿主桥
+import './bili.js'
+import { setBiliBridge } from './bili.js'
 // 0.18.0 第二批：联网搜索 + 网页正文抓取（零依赖；结果一律按外部内容包裹）
 import './web.js'
 // 0.45.71 学习监督三工具（study_start / study_peek / study_stop）
@@ -47,11 +53,11 @@ export {
   exec, listDefs, list, get, needConfirm, setGate, isAllowed, register, unregister,
   setPetBridge, setSystemBridge, setCuaBridge, hasCua, cuaActive, setCuaVision, cuaVision, cuaPrompt,
   setProfileBridge, setHealthBridge, setUserToolsBridge, setReachBridge, syncUserTools, USER_TOOL_CHAT,
-  setAlarmBridge, setStudyBridge
+  setAlarmBridge, setStudyBridge, setGoalBridge, setBiliBridge
 }
 export default {
   exec, listDefs, list, get, needConfirm, setGate, isAllowed, register, unregister,
   setPetBridge, setSystemBridge, setCuaBridge, hasCua, cuaActive, setCuaVision, cuaVision, cuaPrompt,
   setProfileBridge, setHealthBridge, setUserToolsBridge, setReachBridge, syncUserTools, USER_TOOL_CHAT,
-  setAlarmBridge, setStudyBridge
+  setAlarmBridge, setStudyBridge, setGoalBridge, setBiliBridge
 }

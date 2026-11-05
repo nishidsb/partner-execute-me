@@ -83,7 +83,8 @@ test('④设置页与配置里都不再有「间隔 / 每天最多」', () => {
 test('⑤宿主接线：桌面出口与 QQ 出口各记一笔', () => {
   const comp = read('src/main/companion/index.js')
   assert.match(comp, /function noteSpoke/, '要有共用的记账函数')
-  assert.match(comp, /noteSpoke\(\)\s*\n\s*subtitleFor/, 'sayProactive（屏幕陪伴开口）必须记账')
+  // 0.46.22 dmHold 之后 noteSpoke() 与 subtitleFor 之间隔了 Promise.race，断言改成对现状的等价检查
+  assert.match(comp, /opts\.mark === false\)\) noteSpoke\(\)/, 'sayProactive（屏幕陪伴开口）必须记账')
   assert.match(comp, /noteSpoke\(\)\s*\/\/ 0\.45\.97 碎碎念/, '碎碎念（气泡）也算开口')
   assert.match(comp, /nudgeRec = Object\.assign\(\{\}, nudgeRec, \{ lastProactiveAt: Date\.now\(\) \}\)/, 'QQ 发完要回写黏人账')
   // 不在电脑前那条路必须走统一出口（否则又绕过翻译）

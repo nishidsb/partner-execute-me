@@ -37,6 +37,8 @@
  * 纯函数（nextGapMs / budgetOf / gauss）+ 一个极小的状态壳，node:test 直接可测。
  */
 
+const dailyState = require('./daily-state') // 0.46.28 她自己的作息：睡眠时段主动开口全停
+
 const DEFAULTS = {
   proactivePerHour: 3,     // 每小时大约主动开口几次（唯一的旋钮）
   minGapSec: 180,          // 两句之间至少隔多久（防连珠炮；成簇时也守这条）
@@ -181,10 +183,19 @@ function createRhythm (deps) {
     rollDay()
     prune()
     if (paused) return { ok: false, why: 'paused' }
+    // 0.46.28 她自己的作息：睡眠时段（凌晨 1:30~早上，周末赖床）不主动开口——她在睡觉。
+    // time 类放行：「夜深了该休息」这种时间事件本身就有信息量，且她睡前道晚安也靠它。
+    if (kind !== 'time' && dailyState.isAsleep(t)) return { ok: false, why: 'asleep', waitMs: 0 }
     const since = lastAt ? t - lastAt : Infinity
 
     // 最小间隔：所有类别都得守（连着说两句也要隔 3 分钟，不然是复读机）
-    if (since < c.minGapMs) return { ok: false, why: 'min-gap', waitMs: c.minGapMs - since, leftMs: 0 }
+    // 0.46.33 冷落感知：刚才被晾着的那阵子，她主动凑的间隔拉长——不是冷战，是「有点不想凑上去」
+    let gap = c.minGapMs
+    try {
+      const snub = Math.min(3, Number(d.snubStreakOf && d.snubStreakOf()) || 0)
+      if (snub > 0) gap = Math.round(gap * (1 + 0.4 * snub))
+    } catch { }
+    if (since < gap) return { ok: false, why: 'min-gap', waitMs: gap - since, leftMs: 0 }
 
     if (kind === 'time') {
       // 时间事件有真实信息量（该休息了/夜深了/你回来了）：不吃预算，但半小时内不重复

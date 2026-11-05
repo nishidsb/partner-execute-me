@@ -655,3 +655,64 @@ test('0.46.17 主动想起：命中升级为「刚刚想起」，同轮缓存 + 
   assert.match(b1, /【刚刚想起】/)
   assert.equal(arr2.length, 1)
 })
+
+test('0.46.29 pet_say 并流：「先 pet_say 一句 + 再正文」的惯性回复 → 台词并入正文，不再说了没显示', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ryza-app-test-saymerge-'))
+  const cfgMod = await import(IMP('config.js'))
+  cfgMod.initDataDir(tmp)
+  const cfg = cfgMod.loadConfig()
+  cfg.provider = { type: 'mock', baseUrl: '', apiKey: '', model: 'mock', temperature: 0.8 }
+  cfgMod.saveConfig()
+  const { roles } = await import(IMP('roles/roleManager.js'))
+  const { Session } = await import(IMP('core/session.js'))
+  roles.seedBuiltin()
+  roles.save({ id: 'say1', name: '并流测试', persona: '测试人格' })
+  const s = new Session(roles.get('say1'))
+  const r = await s.send('saysplit:', {})
+  // 台词进了回复正文（不再是一句「说了但聊天记录里没有」的话）
+  assert.match(r.content, /わかった、その線で/, 'pet_say 台词应并入正文: ' + r.content)
+  assert.match(r.content, /続きだよ/, '正文应保留: ' + r.content)
+  // 动作标记只演不念：【笑】 与 [excited] 都不进正文
+  assert.ok(!/【/.test(r.content) && !/\[excited\]/i.test(r.content), '动作标记应剥掉: ' + r.content)
+  // 聊天记录最后一条 assistant = 台词 + 正文（记录=她说的话）
+  const lastAsst = s.history.filter((m) => m.role === 'assistant').pop()
+  assert.match(lastAsst.content, /わかった、その線で[\s\S]*続きだよ/, '历史应含合并后全文: ' + lastAsst.content)
+})
+
+test('0.46.29 pet_say 并流查重：正文把开场白原样/近似再写一遍 → 合并后不出现两遍', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ryza-app-test-saydup-'))
+  const cfgMod = await import(IMP('config.js'))
+  cfgMod.initDataDir(tmp)
+  const cfg = cfgMod.loadConfig()
+  cfg.provider = { type: 'mock', baseUrl: '', apiKey: '', model: 'mock', temperature: 0.8 }
+  cfgMod.saveConfig()
+  const { roles } = await import(IMP('roles/roleManager.js'))
+  const { Session } = await import(IMP('core/session.js'))
+  roles.seedBuiltin()
+  roles.save({ id: 'say2', name: '查重测试', persona: '测试人格' })
+  const s = new Session(roles.get('say2'))
+  const r = await s.send('saysplitdup:', {})
+  // 台词只出现一次（正文那份；pet_say 暂存份因查重不再前置）
+  const count = (r.content.match(/試さないと分からない/g) || []).length
+  assert.equal(count, 1, '开场白不应在合并后出现两遍: ' + r.content)
+  assert.match(r.content, /私の目標に、ちゃんと書き留めておいたから/, '正文新内容应保留: ' + r.content)
+})
+
+test('0.46.43 pet_say 并流查重·短台词：归一化不足 6 字的开场白也要挡（11-04 15:36 用户「怎么第一句又重复了」——「う……当たり。」连说两遍），ASCII 动作标记不再进正文', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ryza-app-test-sayshort-'))
+  const cfgMod = await import(IMP('config.js'))
+  cfgMod.initDataDir(tmp)
+  const cfg = cfgMod.loadConfig()
+  cfg.provider = { type: 'mock', baseUrl: '', apiKey: '', model: 'mock', temperature: 0.8 }
+  cfgMod.saveConfig()
+  const { roles } = await import(IMP('roles/roleManager.js'))
+  const { Session } = await import(IMP('core/session.js'))
+  roles.seedBuiltin()
+  roles.save({ id: 'say3', name: '短台词查重测试', persona: '测试人格' })
+  const s = new Session(roles.get('say3'))
+  const r = await s.send('saysplitshort:', {})
+  const count = (r.content.match(/当たり/g) || []).length
+  assert.equal(count, 1, '短开场白不应在合并后出现两遍: ' + r.content)
+  assert.ok(!/\[shy\]/.test(r.content), 'ASCII 动作标记不该出现在正文里: ' + r.content)
+  assert.match(r.content, /じわじわ/, '正文新内容应保留: ' + r.content)
+})

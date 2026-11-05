@@ -22,6 +22,30 @@ export async function chat (opts) {
     return { content: '', toolCalls: [{ id: 'mock_tc_' + used, name: 'calc', arguments: '{"expression":"1+1"}' }], usage: null }
   }
 
+  // 0.46.29 回归：模型惯性「先 pet_say 一句开场 + 再写正文」两段式回复
+  //  → 台词必须并入正文（聊天记录=她说的话），动作标记只演不念
+  // saysplitdup: 正文开头把开场白原样再写一遍 → 合并时必须查重，不能出现两遍
+  if (tools && tools.length && (directive.startsWith('saysplit:') || directive.startsWith('saysplitdup:') || directive.startsWith('saysplitshort:'))) {
+    const used = messages.filter((m) => m.role === 'tool').length
+    if (used === 0) {
+      const script = directive.startsWith('saysplitdup:')
+        ? 'うん、試さないと分からないもんね。[excited] じゃあ手始めに、焼き入れの話でも見てみようかな。'
+        : directive.startsWith('saysplitshort:')
+          ? 'う……当たり。[shy]'
+          : '【笑】わかった、その線で。[excited]'
+      return { content: '', toolCalls: [{ id: 'mock_say_0', name: 'pet_say', arguments: JSON.stringify({ script }) }], usage: null }
+    }
+    if (directive.startsWith('saysplitdup:')) {
+      // 正文把开场白近似再写一遍（焼き入れ→焼入れ，一字之差）+ 新内容
+      return { content: 'うん、試さないと分からないもんね。 じゃあ手始めに、焼入れの話でも見てみようかな。 私の目標に、ちゃんと書き留めておいたから。', toolCalls: [], usage: null }
+    }
+    if (directive.startsWith('saysplitshort:')) {
+      // 0.46.43 短台词：归一化后不足 6 字（う当たり=5 字），旧查重直接放弃 → 开头连说两遍
+      return { content: 'う……当たり。[shy]\n\nなんか、言われたときは「はい」って返せたのに、あとからじわじわ来るんだよ。', toolCalls: [], usage: null }
+    }
+    return { content: '正文ここから。続きだよ。', toolCalls: [], usage: null }
+  }
+
   // 收到工具结果 → 模拟模型汇总（验证多轮工具循环的收尾路径）
   if (last && last.role === 'tool') {
     return { content: `[mock] 工具结果: ${last.content}`, toolCalls: [], usage: null }

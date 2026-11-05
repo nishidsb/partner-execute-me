@@ -108,7 +108,6 @@ test('关闭后端口释放，可以再次开启', async () => {
 
 /** 在纯 node 测试里给 obs.js 的懒加载 require('electron') 注入 nativeImage 桩 */
 function injectElectron (createFromDataURL) {
-  const Module = require('module')
   const p = require.resolve('electron', { paths: [__dirname] })
   require.cache[p] = { id: p, filename: p, loaded: true, exports: { nativeImage: { createFromDataURL } } }
   return () => { delete require.cache[p] }

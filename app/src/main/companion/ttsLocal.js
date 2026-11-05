@@ -18,6 +18,11 @@
  * IndexTTS 速度现实（本机 12 核 CPU，实测）：模型加载约 30-60 秒（只在首次
  * 回退时发生），每句合成 30~100 秒（扩散 12 步）。语音会迟到但不会不到——
  * 字幕总是先出来的。
+ *
+ * 0.46.39 长句分片：11-02 真机实锤 499 字长句在 CPU 上（RTF 15+）必然撞死
+ * 240s 超时、从未产出过音频。改为按标点拆成 ≤50 字的片、逐片合成（每片各自
+ * 受 SYNTH_TIMEOUT_MS 约束）、PCM 同格式顺序拼接。片数上限 8（约 400 字）——
+ * 更长的语音既没有意义也占着串行队列。
  */
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -52,6 +57,10 @@ const SYNTH_TIMEOUT_MS = 240 * 1000
 const SOVITS_SYNTH_TIMEOUT_MS = 180 * 1000
 /** 扩散步数：实测 8 步崩坏、10 步是安全下限、12 步保守 */
 const STEPS = 12
+/** 0.46.39 分片上限：≤50 字的片在本机实测约 100~150s（RTF 15），稳在 240s 内 */
+const INDEX_TTS_CHUNK_MAX = 50
+/** 0.46.39 片数上限：约 400 字。CPU 上 8 片要十几分钟，再长不如不念 */
+const INDEX_TTS_CHUNK_LIMIT = 8
 
 let state = {
   proc: null,        // 常驻 python 进程
@@ -59,7 +68,8 @@ let state = {
   logFile: '',       // python 输出日志
   starting: null,    // Promise：起服务中（防并发拉起）
   queue: [],         // 串行队列（模型端有锁，但排队更稳，避免请求堆一起全超时）
-  draining: false
+  draining: false,
+  current: null      // 0.46.48 正在跑的任务（cancelPending 打断它用）
 }
 
 /** SoVITS 后端独立状态（进程/端口/队列与 IndexTTS 互不干扰） */
@@ -69,7 +79,8 @@ const svState = {
   logFile: '',
   starting: null,
   queue: [],
-  draining: false
+  draining: false,
+  current: null   // 0.46.48
 }
 
 function logTo (file, msg) {
@@ -274,39 +285,123 @@ function postTts (port, text, lang, ref) {
   })
 }
 
+/** 测试注入点：默认走真 postTts / 真 ensureServer */
+let postTtsImpl = postTts
+let ensureServerImpl = ensureServer
+function _setPostTts (fn) { postTtsImpl = fn || postTts }
+function _setEnsureServer (fn) { ensureServerImpl = fn || ensureServer }
+
+/**
+ * 0.46.39 长句拆分：优先在句末标点（。！？…）后断句，一段超长再按逗号级
+ * （，、；：）断，仍超长才硬切。unit 贪心合并到 ≤ max，内容一字不丢。
+ */
+function splitForIndexTts (text, maxLen) {
+  const max = maxLen || INDEX_TTS_CHUNK_MAX
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return []
+  if (t.length <= max) return [t]
+  const units = []
+  for (const seg of t.split(/(?<=[。！？!?…])|(?<=\n)/)) {
+    if (!seg) continue
+    if (seg.length <= max) { units.push(seg); continue }
+    for (const seg2 of seg.split(/(?<=[，、,；;：:])/)) {
+      if (seg2.length <= max) { if (seg2) units.push(seg2); continue }
+      for (let i = 0; i < seg2.length; i += max) units.push(seg2.slice(i, i + max))
+    }
+  }
+  const out = []
+  let cur = ''
+  for (const u of units) {
+    if (!cur) cur = u
+    else if (cur.length + u.length <= max) cur += u
+    else { out.push(cur); cur = u }
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
 /** 串行执行队列（IndexTTS 与 SoVITS 各挂自己的 state，pump 通用） */
 async function drain (st) {
   if (st.draining) return
   st.draining = true
   while (st.queue.length) {
     const job = st.queue.shift()
-    try { job.resolve(await job.run()) } catch (err) { job.reject(err) }
+    st.current = job
+    try {
+      if (job.cancelled) { job.reject(new Error('朗读已被新的打断（未开始即取消）')); continue }
+      job.resolve(await job.run())
+    } catch (err) { job.reject(err) }
+    st.current = null
   }
   st.draining = false
+}
+
+/** 0.46.48 取消本地合成：排队中未开始的直接作废；正在跑的标记 cancelled
+ *  （分片合成每片之间检查，下一样本前停手——IndexTTS CPU 一跑几分钟，
+ *  聊天都到后面了它还在合成前面那句话就是白烧）。 */
+function cancelPending (reason) {
+  const msg = reason || '朗读已被新的打断'
+  for (const job of state.queue) {
+    job.cancelled = true
+    try { job.reject(new Error(msg)) } catch { }
+  }
+  state.queue = []
+  if (state.current) state.current.cancelled = true
+  // SoVITS 同样处理（独立队列）
+  for (const job of svState.queue) {
+    job.cancelled = true
+    try { job.reject(new Error(msg)) } catch { }
+  }
+  svState.queue = []
+  if (svState.current) svState.current.cancelled = true
 }
 
 /**
  * 合成一句。返回 { ok:true, url, local:true } 或 throw。
  * cfgGet 提供 indexTtsDir / indexTtsRef。
+ * 0.46.39：长句拆成 ≤INDEX_TTS_CHUNK_MAX 字的片逐片合成（每片各自受
+ * SYNTH_TIMEOUT_MS 约束），PCM 同格式顺序拼接；片数超 INDEX_TTS_CHUNK_LIMIT
+ * 截断并留痕——CPU 兜底场景下「迟到但不会不到」的上限就是 8 片。
  */
 async function synthesize (text, langHint, cfgGet) {
   const c = cfgGet() || {}
   const lang = guessLang(text, langHint)
   const ref = c.indexTtsRef || defaultRef()
+  let chunks = splitForIndexTts(text)
+  if (chunks.length > INDEX_TTS_CHUNK_LIMIT) {
+    log('超长截断：' + text.length + ' 字 -> 前 ' + INDEX_TTS_CHUNK_LIMIT + ' 片（约 ' + INDEX_TTS_CHUNK_LIMIT * INDEX_TTS_CHUNK_MAX + ' 字）')
+    chunks = chunks.slice(0, INDEX_TTS_CHUNK_LIMIT)
+  }
   return new Promise((resolve, reject) => {
-    state.queue.push({
+    const job = {
       run: async () => {
-        const port = await ensureServer(cfgGet)
+        const port = await ensureServerImpl(cfgGet)
         const t0 = Date.now()
-        log('合成中（' + lang + '，' + text.length + ' 字）…')
-        const pcm = await postTts(port, text, lang, ref)
-        if (!pcm || pcm.length < 2000) throw new Error('合成结果为空')
-        log('完成（' + Math.round((Date.now() - t0) / 1000) + 's，' + Math.round(pcm.length / 640) + 's 音频）')
-        return { ok: true, url: pcmToWavUrl(pcm), local: true }
+        if (chunks.length <= 1) {
+          log('合成中（' + lang + '，' + text.length + ' 字）…')
+          const pcm = await postTtsImpl(port, chunks[0] || text, lang, ref)
+          if (!pcm || pcm.length < 2000) throw new Error('合成结果为空')
+          log('完成（' + Math.round((Date.now() - t0) / 1000) + 's，' + Math.round(pcm.length / 64000) + 's 音频）')
+          return { ok: true, url: pcmToWavUrl(pcm), local: true }
+        }
+        log('长句分片合成（' + lang + '，' + text.length + ' 字 -> ' + chunks.length + ' 片）…')
+        const pcms = []
+        for (let i = 0; i < chunks.length; i++) {
+          if (job.cancelled) throw new Error('朗读已被新的打断（分片 ' + (i + 1) + ' 前取消）')
+          const ct0 = Date.now()
+          const pcm = await postTtsImpl(port, chunks[i], lang, ref)
+          if (!pcm || pcm.length < 2000) throw new Error('第 ' + (i + 1) + '/' + chunks.length + ' 片合成结果为空')
+          pcms.push(pcm)
+          log('  片 ' + (i + 1) + '/' + chunks.length + ' 完成（' + Math.round((Date.now() - ct0) / 1000) + 's，' + Math.round(pcm.length / 64000) + 's 音频）')
+        }
+        const all = Buffer.concat(pcms)
+        log('完成（共 ' + Math.round((Date.now() - t0) / 1000) + 's，' + Math.round(all.length / 64000) + 's 音频）')
+        return { ok: true, url: pcmToWavUrl(all), local: true }
       },
       resolve,
       reject
-    })
+    }
+    state.queue.push(job)
     drain(state).catch(() => { })
   })
 }
@@ -536,16 +631,22 @@ function stopServer () {
 module.exports = {
   synthesize,
   synthesizeSovits,
+  cancelPending,
   stopServer,
   available,
   sovitsAvailable,
   guessLang,
+  splitForIndexTts,
   DEFAULT_DIR,
   DEFAULT_SOVITS_DIR,
   DEFAULT_SOVITS_REF,
   DEFAULT_PROMPT_TEXT,
   STEPS,
+  INDEX_TTS_CHUNK_MAX,
+  INDEX_TTS_CHUNK_LIMIT,
   /** 测试注入用 */
   _state: state,
-  _sovitsState: svState
+  _sovitsState: svState,
+  _setPostTts,
+  _setEnsureServer
 }

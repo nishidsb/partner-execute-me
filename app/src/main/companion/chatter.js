@@ -27,6 +27,9 @@
  */
 const llm = require('./llm')
 const voicesim = require('./voicesim')
+// 0.46.18 自言自语的语言要求：主聊天链路的【语言要求】在 index.js buildSystem，
+// 这条链路不经过它——不注入模型就默认中文嘀咕，TTS 忠实念中文（用户实测）。
+const { monologueLangBlock } = require('../../shared/lang-req')
 
 const MAX_PER_DAY = 5
 const MIN_GAP = 1 * 60 * 1000      // 0.42.0：只作为「被节奏器挡下之后再等多久」的下限
@@ -128,6 +131,15 @@ function createChatter (deps) {
   let voiceCount = 0
   let stopped = true
   let lastSkip = ''
+  // 0.46.46 复读闸泄压阀：持续话题（盯同一块屏幕/同一件事）下，镜子把模型锚在
+  // 同几个话题词上 → 生成的每句都跟最近说过的话撞车 → 连续几十分钟全被咽回去
+  // （11-04 18:38~19:00 实锤：22 分钟 8 轮 24 句全吞、只漏 1 句；15/16/18 时
+  // 每小时吞 27~30 句只放行 6~8 句）。连续咽回去够多就泄压放行一轮，但仍拦
+  // 近似原句（score ≥ 0.5 的最像变体照吞），0.45.85「变着花样重复同一句」的
+  // 防护保住底线。
+  let swallowStreak = 0
+  const SWALLOW_ESCAPE = 5
+  const SWALLOW_ESC_SCORE = 0.5
 
   function todayKey () {
     const d = new Date()
@@ -176,9 +188,13 @@ function createChatter (deps) {
     let shared = ''
     try { shared = String(sharedBlock() || '') } catch { } // 0.45.42：sharedBlock 内部已按优先级排序+4000 截断
     let voices = ''
-    try { voices = String(recentVoices(8) || '') } catch { }
+    // 0.46.42 时间窗：镜子只放最近 90 分钟说过的话——旧台词挂「最近说过」
+    // 会误导模型围着几小时前的话题打转，生成的新句又全被硬闸咽回去
+    try { voices = String(recentVoices(8, voicesim.REPEAT_WINDOW_MS) || '') } catch { }
     let act = ''
     try { act = String(activity() || '') } catch { }
+    // 0.46.18 语言跟设置走：replyLang 固定语言时注入【语言要求】（auto=跟人设走，不注入）
+    const langBlock = monologueLangBlock(c.replyLang)
     // 独白状态：正在独白就让她接着说（或收尾）
     const mono = soliloquy ? soliloquy.current() : null
     const monoBlock = mono
@@ -201,6 +217,7 @@ function createChatter (deps) {
           ...(voices ? [{ role: 'system', content: '【你最近几次主动说过的话（别再重复这些话题、道具和句式，换点别的来说）】\n' + voices }] : []),
           // 0.46.0：她此刻在干什么（前台窗口/自主活动纪要）——嘀咕要有内容依据，不许凭空编正在看的东西
           ...(act ? [{ role: 'system', content: '【你此刻的处境（屏幕前正在发生的事；和你的嘀咕对不上就别硬扯）】\n' + act }] : []),
+          ...(langBlock ? [{ role: 'system', content: langBlock }] : []),
           { role: 'user', content: (monoBlock ? monoBlock + '\n' : '') + frame + '\n' + DECIDE_BODY + '\n\n【当前时间】' + new Date().toLocaleString('zh-CN', { hour12: false }) }
         ],
         temperature: 0.95
@@ -252,16 +269,22 @@ function createChatter (deps) {
           // 用户实锤：对屏幕上同一行残留文字，一个半小时里变着花样嘀咕了 6 遍。
           // 生成结果再跟最近说过的话比一次，撞车的句子丢掉。
           let mirror = ''
-          try { mirror = String(recentVoices(8) || '') } catch { }
+          // 0.46.42 硬闸同款时间窗：时间窗外说过的不算复读（隔几小时再说相似的话不是复读机）
+          try { mirror = String(recentVoices(8, voicesim.REPEAT_WINDOW_MS) || '') } catch { }
           const voiceList = mirror ? mirror.split('\n').map((s) => s.trim()).filter(Boolean) : []
+          const escape = swallowStreak >= SWALLOW_ESCAPE
+          if (escape) log('[chatter] 连续咽回去 ' + swallowStreak + ' 句，泄压放行一轮（近似原句照拦）')
           const keep = r.lines.filter((line) => {
             const rep = voiceList.length ? voicesim.isRepeat(line, voiceList) : null
-            if (rep && rep.repeat) {
+            // 泄压时只拦最像的变体（score ≥ SWALLOW_ESC_SCORE），话题相近但内容不同的放行
+            if (rep && rep.repeat && !(escape && rep.score < SWALLOW_ESC_SCORE)) {
+              swallowStreak++
               log('[chatter] 跟最近说过的话撞车（' + rep.against.slice(0, 20) + '），这句咽回去：' + line.slice(0, 30))
               return false
             }
             return true
           })
+          if (keep.length) swallowStreak = 0
           if (!keep.length) {
             count++   // 全撞车：照样占当日预算，防止下一个 tick 再撞
           } else {

@@ -74,3 +74,13 @@ test('他半夜起来说话 → 静默立刻解除（别把晚安变成永久免
   assert.equal(woke.sleepUntil, 0, '他说了话就说明人醒了')
   assert.equal(woke.baseAt, T0 + 3 * 3600 * 1000, '计时从他这句重新开始')
 })
+
+test('0.46.36 她自己开了口（做梦收尾）→ 只记刚说过话，绝不清睡前静默', () => {
+  const sleeping = idleNudge.onSleepDeclared({}, T0)   // 23:39 道晚安 → 静默到 06:39
+  const after = idleNudge.noteSelfSpoke(sleeping, T0 + 94 * 60 * 1000)   // 01:13 做梦完成
+  assert.equal(after.sleepUntil, sleeping.sleepUntil, '静默必须原样保留（11-04 实锤：01:13 做梦清了静默，02:39 她 QQ「85 分钟没理我？」）')
+  assert.equal(after.baseAt, sleeping.baseAt, '计时起点也不动（baseAt 仍=睡醒时刻）')
+  assert.ok(after.lastProactiveAt > T0, '但要记下她刚开过口，别紧接着又黏人')
+  // 静默期内 stageOf 依旧 0
+  assert.equal(idleNudge.stageOf(400 * 60 * 1000, after, T0 + 3 * 3600 * 1000), 0, '静默期不给任何阶段')
+})

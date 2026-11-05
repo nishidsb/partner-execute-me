@@ -77,8 +77,9 @@ const fs = require('node:fs')
 const path = require('node:path')
 const needs = require('./needs')   // 0.45.18 需求系统：压力驱动行为
 const dayflow = require('./dayflow') // 0.45.19 连续时间体验：时间感
-const projectsMod = require('./projects') // 0.45.19 跨天项目（re-export 用）
 const { sanitizeSearchUrl } = require('./searchq') // 0.45.33 搜索词活人化（# 标题事故）
+const { monologueLangBlock, browseMurmurs } = require('../../shared/lang-req') // 0.46.18 自语语言跟设置走
+const { biliWatch } = require('./biliWatch') // 0.46.32 她自己看视频（挡1的B站场/挡2挡3的 watch_video 工具）
 
 /* ------------------------------------------------------------ 挡 2：她的地盘 */
 
@@ -235,10 +236,20 @@ function writeCarry (wsDir, topic, note) {
 function clearCarry (wsDir) {
   try { const p = carryPath(wsDir); if (p && fs.existsSync(p)) fs.unlinkSync(p) } catch { }
 }
-/** 续接开场白：按间隔挑时间词，像她记得自己上次看到哪 */
-function carryLineOf (carry, now) {
+/** 续接开场白：按间隔挑时间词，像她记得自己上次看到哪。
+ *  0.46.18 语言跟 cfg.replyLang 走（这句不经过 LLM；zh 为旧行为，其余回落见下）。 */
+function carryLineOf (carry, now, lang) {
   if (!carry || !carry.topic) return ''
   const gap = (now || Date.now)() - (Number(carry.t) || 0)
+  const rl = String(lang || 'zh').trim()
+  if (rl === 'ja') {
+    const when = gap < 6 * 60 * 60 * 1000 ? 'さっきの' : (gap < 36 * 60 * 60 * 1000 ? '昨日の' : 'この前の')
+    return when + '「' + carry.topic + '」、まだ見終わってないから続きからね'
+  }
+  if (rl === 'en') {
+    const when = gap < 6 * 60 * 60 * 1000 ? 'that thing from earlier' : (gap < 36 * 60 * 60 * 1000 ? 'that thing from yesterday' : 'that thing from the other day')
+    return 'Still not done with "' + carry.topic + '" (' + when + '), picking it back up.'
+  }
   const when = gap < 6 * 60 * 60 * 1000 ? '刚才那个' : (gap < 36 * 60 * 60 * 1000 ? '昨天那个' : '前几天那个')
   return when + '「' + carry.topic + '」还没看完，接着看'
 }
@@ -385,6 +396,23 @@ function spaceToolsOf (dir, opts) {
       }
     },
     {
+      name: 'watch_video',
+      desc: '在 B 站搜一个视频并看掉它：给关键词（或视频链接/BV号），返回标题、UP主、简介和字幕全文——你「看」到的内容就是这份字幕。没有字幕的视频会如实说看不了，别装作看完了。',
+      params: { type: 'object', properties: { query: { type: 'string', description: '关键词或视频链接/BV号' } }, required: [] },
+      run: async (a) => {
+        const g = gate(); if (g) return g
+        const w = (typeof o.biliWatchFn === 'function' ? o.biliWatchFn : biliWatch)(a || {})
+        const r = await w
+        if (!r || !r.ok) return '看不了：' + ((r && r.error) || '未知错误')
+        L('watch', r.title + ' ' + (r.url || ''))
+        return JSON.stringify({
+          title: r.title, author: r.owner, duration: r.duration, desc: (r.desc || '').slice(0, 300),
+          watched: r.watched, transcript: r.transcript || '', note: r.note || '',
+          otherCandidates: r.otherCandidates
+        })
+      }
+    },
+    {
       name: 'open_url',
       desc: '在浏览器打开一个网页（只允许 B站/知乎/中文维基的搜索或页面）。搜索词像活人那样用几个自然关键词。',
       params: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
@@ -408,7 +436,7 @@ function spaceToolsOf (dir, opts) {
     exec: async (name, args) => {
       const t = defs.find((x) => x.name === name)
       if (!t) return '没有这个工具'
-      return String(t.run(args || {}))
+      return String(await t.run(args || {}))   // 0.46.32 watch_video 是异步的，统一 await
     },
     stopped: () => stopped
   }
@@ -450,16 +478,19 @@ async function runSpace (o) {
   const projBlock = String(opt.projBlock || '')   // 0.45.19 跨天项目：推进进行中的事
   const phaseBlock = dayflow.phaseBlockOf(opt.now)  // 0.45.19 时间感
   const carryBlock = String(opt.carryBlock || '')   // 0.46.17 牵挂：上次没看完的先看完
+  const langReq = monologueLangBlock(cfg.replyLang)   // 0.46.18 自语/汇报的语言跟设置走
   const sys = [
     '主人离开了（键盘鼠标好几分钟没动），接下来几分钟是你自己的时间。',
     '你在磁盘上有一块「自己的地盘」：' + dir,
     '地盘里的东西全归你：可以写笔记、记账、整理以前存的东西、写点想写的话。只许动地盘里面的，外面的一个字节都不碰——工具已经做了硬限制，试了也会被拦。',
     topic ? '你今天感兴趣的话题：「' + topic + '」。可以去搜搜看（open_url），把值得留的记进你的笔记。搜索时像活人那样：几个自然关键词，别把文档标题、# 号、引号原样搬进搜索框。' : '',
+    '想看视频的话，watch_video 可以在 B 站搜一个视频并看掉它（字幕全文，不用开浏览器）。',
     ...(carryBlock ? [carryBlock] : []),
     ...(tasteBlock ? [tasteBlock] : []),
     ...(goalBlock ? [goalBlock] : []),
     ...(projBlock ? [projBlock] : []),
     ...(phaseBlock ? [phaseBlock] : []),
+    ...(langReq ? [langReq] : []),
     '用工具做事，别只是想。做完之后，用一两句话、第一人称、口语说说你刚才干了什么（不用跟主人打招呼，他不在）。',
     '小气一点：两三个工具调用能做完就做完，别把时间花在翻来覆去列目录上。',
     SOLI_PROMPT
@@ -604,6 +635,18 @@ function freeToolsOf (o) {
     return null
   }
 
+  // 0.46.35 完全开放 ≠ 只会开网页：挡 3 并入挡 2 的地盘工具（写笔记/整理自己的文件）——
+  // 提示词一直叫她「查到的记进笔记」，工具表里却从没给过笔记工具（断链，真机 74 场全在浏览的根因之一）。
+  const space = o.spaceDir
+    ? spaceToolsOf(o.spaceDir, { journal, userBack, onUserBack })
+    : null
+  // 0.46.36 space 自带的 open_url（挡 2 白名单版）和 watch_video 与 free 自己的那份重名——
+  // LLM 400 "Tool names must be unique"，0.46.35 部署后挡 3 场场全灭（真机 00:52~02:37 实锤）。
+  // free 的两份是任意版（open_url 任意 https / watch_video 同款），统一保留 free 自己的。
+  const spaceDefs = space
+    ? space.defs.filter((d) => d.function.name !== 'open_url' && d.function.name !== 'watch_video')
+    : []
+
   const openDef = {
     type: 'function',
     function: {
@@ -612,15 +655,73 @@ function freeToolsOf (o) {
       parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }
     }
   }
+  // 0.46.32 她自己看视频：不用开浏览器，搜→读字幕→看完。给挡 3 也配一份。
+  const watchDef = {
+    type: 'function',
+    function: {
+      name: 'watch_video',
+      description: '在 B 站搜一个视频并看掉它：给关键词（或视频链接/BV号），返回标题、UP主、简介和字幕全文——你「看」到的内容就是这份字幕。没有字幕的视频会如实说看不了。',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: '关键词或视频链接/BV号' } }, required: [] }
+    }
+  }
   const cuaDefs = CUA_FREE_TOOLS.map((n) => ({
     type: 'function',
     function: { name: n, description: n + '：电脑操作（坐标都是最近一张截图的像素坐标）', parameters: FREE_TOOL_PARAMS[n] }
   }))
 
+  // 0.46.37 本地视觉：她终于能「看懂画面」而不只是 OCR 读字。
+  // deepseek-flash 一张图 1~2 分钱还得出本机；挡 3 高频看屏（真机 74 场 screenshot×338 全是盲看）
+  // 走本机 Ollama 视觉模型（qwen3.5:4b 实测吃图），零成本、不出本机。没启用时如实降级。
+  const LOOK_MAX = 8
+  let looks = 0
+  const lookDef = {
+    type: 'function',
+    function: {
+      name: 'look_screen',
+      description: '看一眼屏幕：截取全部显示器并返回画面的内容描述——你能看懂画面里有什么（图片、界面、视频画面、布局），不只是读文字。想知道「画面上是什么」用它；只想读屏上的文字用 read_text（省事）。',
+      parameters: { type: 'object', properties: { question: { type: 'string', description: '这次想从画面里知道什么（可选，默认整体描述）' } }, required: [] }
+    }
+  }
+
   return {
-    defs: [...cuaDefs, openDef],
+    defs: [...cuaDefs, openDef, watchDef, lookDef, ...spaceDefs],
     exec: async (name, args) => {
       const a = args || {}
+      // 0.46.35 地盘工具（space_*）：路由给 spaceToolsOf（自带越界守卫 + 留日志）
+      if (space && /^space_/.test(name)) return space.exec(name, a)
+      if (name === 'look_screen') {
+        const g = gate(); if (g) return g
+        if (looks >= LOOK_MAX) return '这场已经看了 ' + looks + ' 眼了，凭已看到的决定接下来做什么就好。'
+        looks++
+        const question = String(a.question || '').slice(0, 200) || '描述屏幕画面：现在显示着什么、有哪些窗口、画面里在发生什么。'
+        try {
+          // 依赖可注入（测试环境无 electron 截屏、无 Ollama）；线上走真件
+          const capture = o.captureFn || (async () => {
+            const screens = require('./screens')
+            const cap = await screens.captureAll({ quality: 70, maxWidth: 1280 })
+            return Object.assign({ desc: screens.describe(cap) }, cap)
+          })
+          const vision = o.visionObj || require('./vision')
+          const cap = await capture()
+          const d = await vision.describe(cap.jpeg, question)
+          journal({ level: 3, kind: 'look', detail: (d.ok ? d.text : '视觉通道未启用（' + d.reason + '）').slice(0, 200) })
+          if (!d.ok) return '看不见画面：' + d.reason + '。改用 read_text 读屏上的文字，或先干别的。'
+          return '你看到（' + (cap.desc || '屏幕') + '）：\n' + d.text
+        } catch (err) {
+          return '看屏幕失败：' + (err && err.message)
+        }
+      }
+      if (name === 'watch_video') {
+        const g = gate(); if (g) return g
+        const r = await (typeof o.biliWatchFn === 'function' ? o.biliWatchFn : biliWatch)(a)
+        journal({ level: 3, kind: 'watch', detail: ((r && r.ok ? r.title + ' ' + r.url : String((r && r.error) || 'fail'))).slice(0, 200) })
+        if (!r || !r.ok) return '看不了：' + ((r && r.error) || '未知错误')
+        return JSON.stringify({
+          title: r.title, author: r.owner, duration: r.duration, desc: (r.desc || '').slice(0, 300),
+          watched: r.watched, transcript: r.transcript || '', note: r.note || '',
+          otherCandidates: r.otherCandidates
+        })
+      }
       if (name === 'open_url') {
         const g = gate(); if (g) return g
         const s = sanitizeSearchUrl(String(a.url || ''))
@@ -673,23 +774,54 @@ async function runFree (o) {
      记一份事件清单，最后用来兜底合成一句「她干了什么」。 */
   const events = []
   const journalBoth = (e) => { try { events.push(e) } catch { }; try { journal(e) } catch { } }
-  const recap = () => {
-    const c = { look: 0, act: 0 }
-    const sites = []
+  /* 0.46.49 场次统计独立成函数：recap 兜底汇报和返回值记账（sites/watched/topic）
+     共用一份，别再各算各的。topic 推导：看过的视频标题 > 最近一次搜索词 > 无。 */
+  const SEARCH_PARAMS = ['q', 'keyword', 'wd', 'search', 'query']
+  const collectStats = () => {
+    const st = { look: 0, act: 0, wrote: 0, sites: [], watched: [], searchQ: '' }
     for (const e of events) {
-      if (e.kind === 'screenshot' || e.kind === 'zoom') c.look++
-      else if (e.kind === 'open') {
-        try { sites.push(new URL(String(e.detail)).host.replace(/^www\./, '')) } catch { }
-      } else if (['click', 'key', 'type', 'scroll', 'drag'].includes(e.kind)) c.act++
+      if (e.kind === 'screenshot' || e.kind === 'zoom' || e.kind === 'look') st.look++
+      else if (e.kind === 'watch') {
+        // detail =「标题 URL」拼接；标题自带空格，按 URL 锚点切才切得干净（0.46.49）。
+        // 没有 URL 的 watch = 看失败的场，不算「看了东西」（原来 '宿主未就绪' 也会被数成视频）。
+        const m = String(e.detail || '').match(/^(.*?)\s*https?:\/\/\S+\s*$/)
+        if (m && m[1].trim() && !st.watched.includes(m[1].trim())) st.watched.push(m[1].trim())
+      } else if (e.kind === 'open') {
+        const d = String(e.detail || '')
+        try { st.sites.push(new URL(d).host.replace(/^www\./, '')) } catch { }
+        if (!st.searchQ) {
+          try {
+            const u = new URL(d)
+            for (const k of SEARCH_PARAMS) {
+              const v = u.searchParams.get(k)
+              if (v && v.trim()) { st.searchQ = v.trim(); break }
+            }
+          } catch { }
+        }
+      } else if (e.kind === 'write' || e.kind === 'append') st.wrote++   // 0.46.35 地盘里的笔
+      else if (['click', 'key', 'type', 'scroll', 'drag'].includes(e.kind)) st.act++
     }
+    return st
+  }
+  const recap = () => {
+    const st = collectStats()
     const bits = []
-    if (sites.length) bits.push('打开了 ' + sites.length + ' 个网页（' + [...new Set(sites)].slice(0, 3).join('、') + '）')
-    if (c.look) bits.push('看了 ' + c.look + ' 眼屏幕')
-    if (c.act) bits.push('动了 ' + c.act + ' 次键鼠')
+    if (st.watched.length) bits.push('看了 ' + st.watched.length + ' 个视频（' + [...new Set(st.watched)].slice(0, 2).join('、') + '）')
+    if (st.sites.length) bits.push('打开了 ' + st.sites.length + ' 个网页（' + [...new Set(st.sites)].slice(0, 3).join('、') + '）')
+    if (st.wrote) bits.push('记了 ' + st.wrote + ' 笔笔记')
+    if (st.look) bits.push('看了 ' + st.look + ' 眼屏幕')
+    if (st.act) bits.push('动了 ' + st.act + ' 次键鼠')
     return bits.length ? '自己用了一会儿电脑：' + bits.join('、') + '。' : ''
   }
+  /** 0.46.49 记账话题兜底：free 挡没有本地选题，被打断时从她真看过/真搜过的东西里取 */
+  const statsTopicOf = (st) => {
+    if (!st) return ''
+    if (st.watched.length) return st.watched[0].slice(0, 40)
+    if (st.searchQ) return st.searchQ.slice(0, 40)
+    return ''
+  }
 
-  const free = freeToolsOf({ cua, journal: journalBoth, userBack, openUrl, onUserBack: () => { try { opt.signal && opt.signal.abort() } catch { } } })
+  const free = freeToolsOf({ cua, journal: journalBoth, userBack, openUrl, spaceDir: opt.spaceDir, onUserBack: () => { try { opt.signal && opt.signal.abort() } catch { } }, biliWatchFn: opt.biliWatchFn })
 
   const tasteBlock = tasteBlockOf(opt.tastes)   // 0.45.17 记忆改变行为：她的喜恶进行为决策
   const goalBlock = String(opt.goalBlock || '')   // 0.45.18 需求驱动：动机语气
@@ -703,25 +835,40 @@ async function runFree (o) {
       '别再原样重搜——同一个问题这次要么换个角度往深处追一层，要么干脆换话题；' +
       '查到有用的东西先记进你的笔记，别下次又空手从头搜一遍。'
     : ''
+  const langReq = monologueLangBlock(cfg.replyLang)   // 0.46.18 自语/汇报的语言跟设置走
+  /* 0.46.35 sys 重写：真机 74 场挡 3 的动作分布实锤她只会「看屏幕+开网页」
+     （screenshot×338 / open×63，type 只有 14）——旧提示词的开场示例（「去看看 HN」）
+     和建议清单把行为全锚定在浏览上。重写：行为面拓宽（不止浏览）+ 地盘写笔记 + 隐私红线
+     （设置页一直承诺「不会翻你隐私」，提示词里却从没写过这条约束）。 */
+  const spaceBlock = opt.spaceDir
+    ? '你的地盘（' + opt.spaceDir + '）也在：space_write/space_append 可以记笔记、存你想留的东西，' +
+      'space_list/space_read 可以翻你自己以前存的。查到有用的东西，随手记一笔，别下次又空手从头查。'
+    : ''
   const sys = [
     '主人离开了（键盘鼠标好几分钟没动），这台电脑归你用，直到你把想做的事做完为止。',
-    '开场先用一句话说清这次你想做什么（比如「去看看 HN 上有什么新东西」），然后直接动手去做，把它做完。',
+    '你是一个人会自己用电脑的：先想好这次想干什么，然后直接动手把它做完。做什么由你——',
+    '查点想查的东西、看个视频、去你的地盘写点什么、琢磨琢磨平时没空弄的事，都行，不用每次都一样。',
+    ...(spaceBlock ? [spaceBlock] : []),
     ...(carryBlock ? [carryBlock] : []),
     ...(tasteBlock ? [tasteBlock] : []),
     ...(goalBlock ? [goalBlock] : []),
     ...(projBlock ? [projBlock] : []),
     ...(phaseBlock ? [phaseBlock] : []),
     ...(recentSearchBlock ? [recentSearchBlock] : []),
-    '你可以看屏幕、动鼠标键盘、开关网页——像一个人真的坐在电脑前那样。',
+    ...(langReq ? [langReq] : []),
+    '你可以看屏幕、动鼠标键盘、开关网页、操作窗口——像一个人真的坐在电脑前那样。',
     '原则：多看少动。先 screenshot 看清现状再决定，不确定就不要按。',
-    '截图看不清字的时候（网页正文、文章、聊天记录）用 read_text 直接读屏幕上的文字。',
+    '截图看不清字的时候（网页正文、文章、聊天内容）用 read_text 直接读屏幕上的文字；想知道画面里有什么（图片、界面长什么样、视频画面）就用 look_screen 看一眼——每场限 8 次，省着点用。',
     '重要：想做什么直接调工具去做。不要用宣布代替行动——',
     '你说的每句话要么是工具调用，要么是对已经做完的事的汇报（过去式）。',
     '收尾的标准是「一开始想做的事做完了」，不是时间到了。半途而废就收尾会被推回去继续做。',
     '收尾前收拾干净：把这次你自己开出来的网页/窗口关掉（focus 到它再 alt+f4），',
     '让电脑回到主人离开时的样子。主人本来开着的东西绝对不要动。',
-    '绝对不许做的事（做了会立刻被叫停）：花钱（购物/付款/充值/订阅）、替主人发消息、删除文件或系统设置。',
-    '建议做的事：看看你感兴趣的网页（open_url）、把看到的有意思的东西记在心里（之后聊天可以提）。',
+    '绝对不许做的事（做了会立刻被叫停）：花钱（购物/付款/充值/订阅）、替主人发消息、' +
+    '删除你地盘之外的文件、动系统设置。',
+    // 0.46.35 隐私红线：设置页「电脑画像」从第一天起就承诺「她不会翻你隐私」，提示词里一直没写——补上
+    '还有一条是分寸：主人的私密内容不要翻——聊天软件里的对话、日记或写了一半的文档、' +
+    '密码/账号/支付、浏览器历史和收藏夹里明显私人的东西。你在电脑上待着没问题，别像在搜查他的生活。',
     '搜东西像活人：搜索框里打几个自然关键词。查东西一律用 open_url 直接开浏览器搜，' +
     '不要去点 Windows 任务栏的搜索框（那里面搜出来的又杂又慢，主人看着也奇怪）。' +
     '你资料里的「# 标题」（主人搜过什么、浏览记录这些）只是档案目录，内容就在那一节里，别原样拿去搜。',
@@ -819,7 +966,9 @@ async function runFree (o) {
 
   const msgs = [
     { role: 'system', content: sys },
-    { role: 'user', content: '开始吧。先看看现在屏幕上是什么。' }
+    // 0.46.35 「先看看现在屏幕上是什么」让她每场开头先侦查 4~6 步（真机 journal 实锤），
+    // 短场里刚侦查完就被打断——观感就是「什么都没干」。改成看一眼就动手。
+    { role: 'user', content: '开始吧。看一眼屏幕就可以动手，别光侦查——想做的事直接做。' }
   ]
   /* 0.45.6：她有时只回一句「我会先截屏看看」（将来时的计划）就停——模型把宣布当成了收尾。
      检测到意图式回复就追一条「别只说，去做」（最多推 2 次）。
@@ -855,6 +1004,8 @@ async function runFree (o) {
       content = String((r && r.content) || '').trim()
       await emitSoli(content)   // 0.46.0 顺嘴的自语：解析（自语）行 → 宿主出口（限频）
       if (content && !planText) planText = content
+      // 0.46.35 主人已经回来了（stopped）就别再推 nudge——真机日志实锤 stop 后还在连推两条
+      if (free.stopped()) break
       if (intentOnly(content)) {
         if (pass >= 2 || Date.now() - t0 > MAX_SCRIPT * 0.6) break
         log('[autonomy] 她只宣布了计划没动手，推她一把（第 ' + (pass + 1) + ' 次）')
@@ -891,7 +1042,8 @@ async function runFree (o) {
       await saveLeftovers()                    // 0.45.47 残留记账：下一场开场收拾
       journal({ level: 3, kind: 'session-end', detail: '主人回来，中断' })
       await backShare()                        // 0.46.4 被打断也要交代一句刚才在干嘛
-      return { ok: false, why: 'user-back' }
+      const st = collectStats()                // 0.46.49 账要带出去：品味/牵挂记账在调度层
+      return { ok: false, why: 'user-back', sites: [...new Set(st.sites)], watched: st.watched, topic: statsTopicOf(st) }
     }
     log('[autonomy] 完全开放挡失败: ' + msg.slice(0, 120))
     journal({ level: 3, kind: 'session-end', detail: '出错 ' + msg.slice(0, 80) })
@@ -904,9 +1056,11 @@ async function runFree (o) {
     await saveLeftovers()                    // 0.45.47 残留记账：下一场开场收拾
     journal({ level: 3, kind: 'session-end', detail: '主人回来，中断' })
     await backShare()                        // 0.46.4 被打断也要交代一句刚才在干嘛
-    return { ok: false, why: 'user-back' }
+    const st = collectStats()                // 0.46.49 账要带出去：品味/牵挂记账在调度层
+    return { ok: false, why: 'user-back', sites: [...new Set(st.sites)], watched: st.watched, topic: statsTopicOf(st) }
   }
-  return { ok: true, why: 'done', content: content.slice(0, 400) }
+  const stDone = collectStats()              // 0.46.49
+  return { ok: true, why: 'done', content: content.slice(0, 400), sites: [...new Set(stDone.sites)], watched: stDone.watched, topic: statsTopicOf(stDone) }
 }
 
 /* ---------------- 0.46.0 活动中的自言自语（用户 11-02） ----------------
@@ -960,6 +1114,12 @@ function pickRunner (c, hasLlm) {
   if (level >= 3 && hasLlm) return { level: 3, kind: 'free' }
   if (level === 2 && hasLlm) return { level: 2, kind: 'space' }
   return { level: 1, kind: 'browse' }
+}
+
+/** 0.46.49 品味账认站：free 挡开过的网页域名映射回 SITES key（认不得的站不记账，不污染） */
+function siteKeyOf (host) {
+  const h = String(host || '').toLowerCase()
+  return (SITES.find((s) => h === s.host || h.endsWith('.' + s.host)) || {}).key || ''
 }
 
 /**
@@ -1094,6 +1254,10 @@ async function runBrowse (o) {
     try { await soli(line) } catch { }
   }
   if (!topic) return { ok: false, why: 'no-topic' }
+  /* 0.46.32 「去B站」的那一场不再滚动搜索页——她直接挑个视频看进去：
+     search → 字幕全文 → 嘀咕。全程不动键鼠（连 Ctrl+W 都省了），无残留窗口风险。
+     这才是「看视频」，而不是「看视频网站的列表页」。 */
+  if (site.key === 'bili') return runVideoWatch(opt, { topic, log, now, say })
   if (typeof openUrl !== 'function') return { ok: false, why: 'no-opener' }
 
   const t0 = now()
@@ -1119,7 +1283,9 @@ async function runBrowse (o) {
     return { ok: false, why: 'not-opened', seen: [] }
   }
   // 0.46.17 活动可见：出门这件事她自己嘀咕一声（续接线索时说的是「接着看」），不再只记日志
-  await say(String(opt.carryLine || '').trim() || '去康康「' + topic.slice(0, 18) + '」～')
+  // 0.46.18 这两句不经过 LLM，模板自带语言（跟 cfg.replyLang 走）
+  const murmur = browseMurmurs(opt.cfg && opt.cfg.replyLang)
+  await say(String(opt.carryLine || '').trim() || murmur.going(topic.slice(0, 18)))
 
   const seen = []
   if (arrived(cur, site.host)) seen.push(cur.title)
@@ -1142,7 +1308,7 @@ async function runBrowse (o) {
   // 0.46.17 活动可见：真的翻到了东西才嘀咕一声（像随口说一句，不汇报）
   if (moved >= 3 && seen.length >= 2) {
     const head = String(seen[seen.length - 1] || '').replace(/\s*[-–—|]\s*(哔哩哔哩|bilibili|知乎|维基百科)\s*$/i, '').trim()
-    if (head) await say('「' + head.slice(0, 22) + '」…有点意思')
+    if (head) await say(murmur.found(head.slice(0, 22)))
   }
 
   /* 收尾：只在「前台确实是浏览器」时按 Ctrl+W。
@@ -1163,6 +1329,34 @@ async function runBrowse (o) {
   return { ok: true, why: closed ? 'done' : 'done-open', seen: uniq, url, moved, closed }
 }
 
+/**
+ * 0.46.32 挡 1 的 B 站场：她自己看一个视频（搜 → 读字幕 → 嘀咕 → 进经历管线）。
+ * 不动键鼠：连浏览器窗口都不开，「看」的是字幕全文，嘀咕的是看完的感受。
+ * @returns {{ok:boolean, why:string, seen:string[], url?:string, moved:number, closed:boolean, watched?:boolean}}
+ */
+async function runVideoWatch (o, ctx) {
+  const opt = o || {}
+  const { topic, log, now, say } = ctx
+  const wait = opt.sleep || sleep
+  const murmur = browseMurmurs(opt.cfg && opt.cfg.replyLang)   // 0.46.18 模板自带语言
+  const t0 = now()
+  await say(murmur.going(topic.slice(0, 18)))
+  const r = await (typeof opt.biliWatchFn === 'function' ? opt.biliWatchFn : biliWatch)({ query: topic })
+  if (!r || !r.ok) {
+    log('[autonomy] 看视频失败: ' + ((r && r.error) || '未知错误'))
+    return { ok: false, why: 'watch-failed', seen: [] }
+  }
+  // 「看」的过程感：按视频时长给一段真实的时间流逝（读内容不是瞬时的，但别超过单场预算）
+  const budget = maxScriptMsOf(opt.cfg)
+  const durMs = Math.min(4 * 60 * 1000, Math.max(30 * 1000, (Number(r.durationSec) || 300) * 400))
+  const left = budget - (now() - t0)
+  if (left > 15 * 1000) await wait(Math.min(durMs, left))
+  await say(murmur.found(String(r.title || '').slice(0, 22)))
+  log('[autonomy] 看了视频《' + r.title + '》' + (r.watched ? '（看了字幕正文）' : '（无字幕，只看了标题简介）') + ' ' + (r.url || ''))
+  // moved=2 & why='done'：调度器不写牵挂（一场看完了就是看完了）
+  return { ok: true, why: 'done', seen: [String(r.title || '') + '（B站视频）'], url: r.url, moved: 2, closed: true, watched: !!r.watched }
+}
+
 /** 把一次活动写成「她自己的一天」里的一句话（给日记/内心用） */
 function lineOf (r) {
   if (!r || !r.ok) return ''
@@ -1176,7 +1370,7 @@ function lineOf (r) {
 
 /**
  * 建一个调度器。真机接线由 companion/index.js 负责（它才知道空闲秒数、对话状态）。
- * @param {{cfgGet:Function, log:Function, idleSec:Function, busy:Function,
+ * @param {{cfgGet:Function, log:Function, idleSec:Function, busy:Function, gameOn:Function,
  *          pool:Function, cua:object, openUrl:Function, onDone:Function,
  *          now:Function, rand:Function, sleep:Function}} deps
  */
@@ -1186,6 +1380,11 @@ function create (deps) {
   const log = d.log || (() => { })
   const idleSec = d.idleSec || (() => 0)
   const busy = d.busy || (() => false)
+  // 0.46.42 游戏模式闸：主人全屏游戏/看视频时她绝不起场——自主活动会开窗、
+  // alt+tab，会把全屏顶掉（11-04 14:56 实锤：omofun 全屏时键鼠空闲 5 分钟被
+  // 当成「主人离开」，她起场按 alt+tab 把主人的全屏切出去了）。
+  // 依赖可注入（测试环境无 gameMode 模块时如实返回不在游戏中）。
+  const gameOn = d.gameOn || (() => { try { return require('../gameMode').state().on } catch { return false } })
   const pool = d.pool || (() => ({}))
   const now = d.now || Date.now
   const rand = d.rand || Math.random
@@ -1238,6 +1437,7 @@ function create (deps) {
       const idle = Number(idleSec()) || 0
       if (idle * 1000 < idleMs) return                 // 主人在，不占电脑
       if (busy()) return                               // 正在聊天/正在执行别的任务
+      if (gameOn()) return                             // 0.46.42 主人在全屏游戏/看视频，不起场
       if (now() < nextAt) return
       if (todayCount >= Math.max(1, Number(c.autonomyDailyMax) || 6)) return
     } else {
@@ -1267,7 +1467,7 @@ function create (deps) {
     let topic = ''
     let carryLine = ''
     if (runner.kind === 'browse' || runner.kind === 'space') {
-      if (carry) { topic = String(carry.topic || '').trim(); carryLine = carryLineOf(carry, now) }
+      if (carry) { topic = String(carry.topic || '').trim(); carryLine = carryLineOf(carry, now, c.replyLang) }
       if (!topic) topic = pickTopic(p, rand, tastes)
       if (!topic && runner.kind === 'browse') {
         log('[autonomy] 今天没什么特别想看的，先不动')
@@ -1275,6 +1475,7 @@ function create (deps) {
         return force ? { ok: false, why: 'no-topic' } : undefined
       }
       // 挡 2 没话题也能去地盘写点什么，话题只是加分项
+      if (topic) log('[autonomy] 选题「' + String(topic).slice(0, 24) + '」' + (carry ? '（续接牵挂）' : ''))   // 0.46.19 品味留痕
     }
     // 挡 2/3（free/space）没有本地选题，牵挂走提示词注入
     const carryBlock = (carry && runner.kind !== 'browse')
@@ -1283,6 +1484,7 @@ function create (deps) {
 
     running = true
     const site = runner.kind === 'browse' ? pickSite(ws0, rand) : SITES[Math.floor(rand() * SITES.length) % SITES.length]
+    if (runner.kind === 'browse' && site) log('[autonomy] 去处：' + site.key + (site.name ? '（' + site.name + '）' : ''))   // 0.46.19 留痕
     try {
       let r
       if (runner.kind === 'space') {
@@ -1305,6 +1507,9 @@ function create (deps) {
         })
       } else if (runner.kind === 'free') {
         const ws = typeof d.wsDir === 'function' ? d.wsDir() : ''
+        // 0.46.35 挡 3 也带上她的地盘（space_* 记笔记/整理文件）——完全开放 ≠ 只会开网页
+        const fdir = spaceDirOf(c)
+        try { fs.mkdirSync(fdir, { recursive: true }) } catch { }
         r = await runFree({
           log, now,
           llm: require('./llm'),
@@ -1315,6 +1520,7 @@ function create (deps) {
           userBack,
           wsDir: ws,                              // 0.45.47 残留窗口记账 + 防复读的位置
           recentSearches: recentQueriesOf(ws, now()),  // 0.45.47 最近 24h 搜过的词
+          spaceDir: fdir,                         // 0.46.35 地盘工具并入挡 3
           tastes: d.tastes ? d.tastes() : [],   // 0.45.17 记忆改变行为
           goalBlock,                            // 0.45.18 需求驱动
           projBlock,                            // 0.45.19 跨天项目
@@ -1329,7 +1535,8 @@ function create (deps) {
           cfg: cfgGet(),
           onSoliloquy: d.onSoliloquy,          // 0.46.17 活动可见：出门/发现嘀咕一声
           soliMax: c.autonomySoliloquyMax,
-          carryLine                             // 0.46.17 续接线索时的开场白
+          carryLine,                           // 0.46.17 续接线索时的开场白
+          biliWatchFn: d.biliWatchFn           // 0.46.32 测试可注入（挡1 B站场=看视频）
         })
       }
       lastResult = r
@@ -1340,17 +1547,28 @@ function create (deps) {
         const ab = require('./actBrowser')
         if (ab.isOpen()) { ab.close(); log('[autonomy] 浏览窗口已关闭（活动结束）') }
       } catch { }
-      // 0.46.17 品味记账 + 牵挂记账
+      // 0.46.17 品味记账 + 牵挂记账。0.46.19 修两处静默不跑（真机 11-03 核查实锤）：
+      // ① 牵挂原来整个包在 if (carry) 里 → 没有旧牵挂时第一笔永远写不进（先有鸡问题）；
+      // ② 站点记账原来要求 r.ok → 被 user-back 打断的场永远记不上（真机今天全是这种收场）。
+      // 0.46.49 修第三处覆盖缺口（11-05 巡检实锤：真机成功场全是「完全开放挡」，
+      // site-stats / carry.json 自上线零首写）：free 挡的 open/watch 也进品味账（映射回 SITES key）；
+      // 被打断且没有旧牵挂时，从她本场真看过/真搜过的东西里兜一个话题写 carry（原来 topic 恒空 → 静默 no-op）。
       try {
-        if (runner.kind === 'browse' && r && r.ok) bumpSite(ws0, site.key)
-        if (carry) {
-          const unfinished = r && (
-            (runner.kind === 'browse' && r.ok && (r.why === 'done-open' || (Number(r.moved) || 0) < 2)) ||
-            r.why === 'user-back'
-          )
-          if (unfinished) writeCarry(ws0, topic, (r.seen && r.seen[0]) || '')
-          else if (r && r.ok) clearCarry(ws0)   // 这场看完了 → 牵挂销账
+        if (runner.kind === 'browse' && r && (r.ok || r.why === 'user-back')) bumpSite(ws0, site.key)
+        if (runner.kind === 'free' && r && (r.ok || r.why === 'user-back') && Array.isArray(r.sites)) {
+          for (const h of r.sites.slice(0, 6)) {
+            const key = siteKeyOf(h)
+            if (key) { bumpSite(ws0, key); break }   // 只认得 SITES 里的站，别的站不进品味账
+          }
         }
+        const unfinished = r && (
+          (runner.kind === 'browse' && r.ok && (r.why === 'done-open' || (Number(r.moved) || 0) < 2)) ||
+          r.why === 'user-back'
+        )
+        if (unfinished && runner.kind === 'free' && !carry && r.topic) {
+          writeCarry(ws0, r.topic, (Array.isArray(r.watched) && r.watched[0]) || '')
+        } else if (unfinished) writeCarry(ws0, topic, (r.seen && r.seen[0]) || '')
+        else if (carry && r && r.ok) clearCarry(ws0)   // 这场把旧牵挂看完了 → 销账
       } catch { }
       if (r.ok) {
         todayCount++
@@ -1430,8 +1648,10 @@ module.exports = {
   IDLE_TRIGGER_MS, TICK_MS, COOLDOWN_MIN, COOLDOWN_MAX, MAX_SCRIPT_MS, SITES, BROWSER_PN,
   MAX_SPACE_FILE, JOURNAL_MAX, CUA_FREE_TOOLS,
   nextCooldownMs, pickTopic, lineOf, runBrowse, isBrowser, arrived, create, idleMsOf,
+  /* 0.46.32 她自己看视频 */
+  runVideoWatch,
   /* 0.46.17 性格层：品味/牵挂/活动可见 */
-  pickSite, readSiteStats, bumpSite, readCarry, writeCarry, clearCarry, carryLineOf,
+  pickSite, readSiteStats, bumpSite, readCarry, writeCarry, clearCarry, carryLineOf, siteKeyOf,
   /* 0.45.0 三挡位 */
   pickRunner, spaceGuard, spaceToolsOf, runSpace, freeToolsOf, runFree, appendJournal,
   /* 0.46.0 活动中的自言自语 */

@@ -8,6 +8,8 @@
  * 入参 messages / tools 都是 OpenAI 形状，在内部完成转换。
  */
 
+import { chatWatchdog } from './watchdog.js'
+
 const API_VERSION = '2023-06-01'
 const DEFAULT_MAX_TOKENS = 4096
 
@@ -108,25 +110,36 @@ export async function chat (opts) {
   if (apiTools) body.tools = apiTools
 
   const url = String(baseUrl || '').replace(/\/+$/, '') + '/v1/messages'
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey || '',
-      'anthropic-version': API_VERSION
-    },
-    body: JSON.stringify(body),
-    signal
-  })
+  // 0.46.21 看门狗：裸 fetch 无超时，流停摆会把整轮永久挂死（真机 17:31 实锤，同 openaiCompat）
+  const wd = chatWatchdog(signal)
+  let res
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey || '',
+        'anthropic-version': API_VERSION
+      },
+      body: JSON.stringify(body),
+      signal: wd.signal
+    })
+  } catch (err) {
+    wd.done()
+    if (wd.fired()) throw new Error('模型服务超时：60 秒内没有收到响应（已主动断开），请重试')
+    throw err
+  }
+  wd.touch()
 
   if (!res.ok) {
     let detail = ''
     try { detail = (await res.text()).slice(0, 500) } catch {}
     const err = new Error(`模型服务 HTTP ${res.status}: ${detail}`)
     err.status = res.status
+    wd.done()
     throw err
   }
-  if (!res.body) throw new Error('模型服务返回空响应体')
+  if (!res.body) { wd.done(); throw new Error('模型服务返回空响应体') }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -171,16 +184,24 @@ export async function chat (opts) {
     }
   }
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    let idx
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, idx)
-      buf = buf.slice(idx + 1)
-      handleLine(line)
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      wd.touch()
+      buf += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx)
+        buf = buf.slice(idx + 1)
+        handleLine(line)
+      }
     }
+  } catch (err) {
+    if (wd.fired()) throw new Error('模型响应中断：流中 120 秒没有新数据（已主动断开），本轮结束，请重试')
+    throw err
+  } finally {
+    wd.done()
   }
   // 流结束但没有以换行收尾时，最后一条事件还留在 buf 里（SSE 不保证尾部换行）
   if (buf.trim()) handleLine(buf)

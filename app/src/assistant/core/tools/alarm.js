@@ -21,14 +21,16 @@ function call (name, args) {
 register({
   name: 'alarm_set',
   description: '给自己设一个闹钟：到时间会主动开口提醒（气泡+朗读+系统通知）。' +
-    'time 用 24 小时制 HH:MM；daily 默认 true（每天），设 false 就只在今天/指定这一次响。' +
-    '用户说「明天七点叫我」「每天提醒我喝水」时用它。最多同时 20 个。',
+    'time 用 24 小时制 HH:MM。三种用法：① 每天重复：daily=true（默认）；② 今天稍后的一次性：daily=false、不填 date；' +
+    '③ 某一天的一次性（明天/后天/几号）：daily=false 且 date 填 YYYY-MM-DD——用户说「明天七点提醒我 X」时 date 必填，' +
+    '只给 time 会被当成今天，今天到了就会响。最多同时 20 个。',
   parameters: {
     type: 'object',
     properties: {
       time: { type: 'string', description: '时间，24 小时制 HH:MM，例如 07:30' },
+      date: { type: 'string', description: '提醒哪一天，YYYY-MM-DD（例如 2026-11-04）。明天/后天/某月某日的事必填；不填=今天或每天' },
       label: { type: 'string', description: '提醒什么，一句话，例如「喝水」「开会」' },
-      daily: { type: 'boolean', description: '是否每天重复，默认 true' }
+      daily: { type: 'boolean', description: '是否每天重复，默认 true；给了 date 时忽略（就是那一次）' }
     },
     required: ['time']
   },

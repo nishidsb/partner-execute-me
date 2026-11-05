@@ -14,7 +14,7 @@ const { segmentsToText, isAtMe, imageSegmentsOf } = require('./onebot')
 const pcTools = require('./pc-tools')
 // 0.45.98 回复清洗只留台词本身：模型会照抄账本里的格式（（QQ）前缀、括号译文），
 // 这里统一剥掉，QQ 对面不会看到标注，朗读也不会把译文念出来。
-const { stripChannelTag, plainText, readableText } = require('../../shared/reply-text')
+const { readableText } = require('../../shared/reply-text')
 
 /** FF14 专属角色模块（懒加载：数据包缺失时返回 null，退化为普通聊天） */
 let _ff14 = null
@@ -48,6 +48,8 @@ function coreToolsMod () {
 const CORE_TOOL_BRIDGE = new Set([
   'get_time', 'calc', 'system_info', 'open_url', 'open_app',
   'alarm_set', 'alarm_list', 'alarm_cancel',
+  'bili_watch',
+  'goal_set', 'goal_list', 'goal_update',
   'file_read', 'file_grep', 'file_glob',
   'remember', 'forget', 'recall_memory'
 ])

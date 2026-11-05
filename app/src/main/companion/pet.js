@@ -779,9 +779,36 @@ function push () {
   try { if (broadcast) broadcast('pet:state', state) } catch (e) { log('[pet] 广播失败:', e && e.message) }
 }
 
+/** 0.46.45 宿主屏提示：锚点可能纵向出屏——坐在贴屏底的卡片上时，坐姿锚点=舞台
+ * 底边会落到屏幕外（11-04 17:42/17:54 两次实锤：pos.y=1489 > 屏高 1440，渲染层
+ * 「只接管包含锚点的屏」两屏都不接管 → spine 整只消失，重启才回来）。
+ * 主进程知道全部显示器：随 pet:pos 下发离锚点最近的屏 bounds（同距时优先
+ * x 命中的那块），渲染层纵向出屏时按提示接管，stage 超出部分自然裁剪。 */
+function hostBoundsFor (x, y) {
+  try {
+    const { screen } = require('electron')
+    let best = null
+    let bestD = Infinity
+    let bestInX = false
+    for (const d of screen.getAllDisplays()) {
+      const b = d.bounds
+      const dx = x < b.x ? b.x - x : x > b.x + b.width ? x - (b.x + b.width) : 0
+      const dy = y < b.y ? b.y - y : y > b.y + b.height ? y - (b.y + b.height) : 0
+      const dist = dx + dy
+      const inX = dx === 0
+      if (dist < bestD || (dist === bestD && inX && !bestInX)) {
+        best = { x: b.x, y: b.y, width: b.width, height: b.height }
+        bestD = dist
+        bestInX = inX
+      }
+    }
+    return best
+  } catch { return null }
+}
+
 function pushPos () {
   try {
-    if (broadcast && state.pos) broadcast('pet:pos', Object.assign({}, state.pos, { dragging: !!drag }))
+    if (broadcast && state.pos) broadcast('pet:pos', Object.assign({}, state.pos, { dragging: !!drag, hostBounds: hostBoundsFor(state.pos.x, state.pos.y) }))
   } catch {}
 }
 
@@ -793,7 +820,7 @@ function pushTo (win) {
   if (!win || win.isDestroyed()) return
   try {
     win.webContents.send('pet:state', state)
-    if (state.pos) win.webContents.send('pet:pos', Object.assign({}, state.pos, { dragging: !!drag }))
+    if (state.pos) win.webContents.send('pet:pos', Object.assign({}, state.pos, { dragging: !!drag, hostBounds: hostBoundsFor(state.pos.x, state.pos.y) }))
     const c = petCfg()
     if (c.petScale != null || c.replyLang != null) {
       win.webContents.send('pet:config', { scale: c.petScale, replyLang: c.replyLang })

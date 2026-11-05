@@ -348,21 +348,29 @@ function cleanForSpeech (text) {
     .replace(/\s+/g, ' ')
     .trim()
 }
+/** 朗读代次（0.46.48）：新一轮朗读意图出现时——
+ *  ① 立刻打断正在播的旧语音（聊天都到后面了别再念前面的）；
+ *  ② 旧轮次的合成结果回来直接丢弃不播（防旧结果反杀新朗读）。 */
+let readSeq = 0
 /** 朗读一段回复；返回 Promise，在「真的念完」时 resolve（气泡靠它决定何时淡出）
  *  0.46.11 opts.vol：嘀咕音量（0.05~1，自言自语专用；缺省 = 正常音量） */
 async function speakReplyText (content, opts) {
   if (!petHosted) return false // 非宿主屏不朗读（多屏时会和宿主屏叠成双声道）
   if (isQuiet()) return false // pet_quiet 期间不出声（气泡照常显示，只是不念）
+  const my = ++readSeq
+  try { stopVoice() } catch { } // 被打断的旧语音立即停（主人 22:47：中断了就不用读了）
   const vol = opts ? opts.vol : undefined
   const text = cleanForSpeech(content)
   if (!text || !window.aura || !window.aura.speakReply) return false
   let r = null
   try { r = await window.aura.speakReply(text) } catch {}
+  if (my !== readSeq) return false // 合成期间来了新朗读 → 这份作废
   if (r && r.ok && r.url) { await playVoice(r.url, r.speed, vol); return true }
   // 未配置 API TTS → 系统语音念一遍（同样等它念完，气泡不会提前消失）
   if (window.speechSynthesis) {
     return await new Promise((resolve) => {
       try {
+        if (my !== readSeq) return resolve(false) // 合成/等待期间来了新朗读 → 作废
         speechSynthesis.cancel()
         const u = new SpeechSynthesisUtterance(text.slice(0, 600))
         u.lang = { zh: 'zh-CN', ja: 'ja-JP', en: 'en-US' }[touchLang] || 'zh-CN'
@@ -2535,6 +2543,7 @@ function setupMenu (chat) {
  * → 每个 overlay 把全局坐标换算成本窗 right/bottom；只有包含锚点的屏显示角色，
  * 拖过屏幕边界即无缝「搬家」。松手 pet:drag-end 落盘，重启后位置保留。 */
 let petGlobal = null // 全局锚点 { x, y }（DIP）
+let petHostHint = null // 0.46.45 主进程随 pet:pos 下发的宿主屏 bounds（锚点出屏时兜底接管用）
 /* 本窗口是否真正"住着"角色。每块屏都是一个 overlay 窗口、都收到同一条 assistant:done，
  * 旧代码每个窗口都去合成并播放语音 → 双声道/两重回声，气泡也是两块屏各画一个。
  * 只有包含锚点的那块屏算宿主，显示 + 朗读都只由宿主执行。 */
@@ -2560,8 +2569,14 @@ function applyGlobalPos () {
   const el = $('petStage')
   if (!el || !petGlobal) return
   const wx = window.screenX, wy = window.screenY
-  const inside = petGlobal.x >= wx - 2 && petGlobal.x <= wx + window.innerWidth + 2 &&
-                 petGlobal.y >= wy - 2 && petGlobal.y <= wy + window.innerHeight + 2
+  const inX = petGlobal.x >= wx - 2 && petGlobal.x <= wx + window.innerWidth + 2
+  const inY = petGlobal.y >= wy - 2 && petGlobal.y <= wy + window.innerHeight + 2
+  // 0.46.45 锚点纵向出屏（坐在贴屏底的卡片上，坐姿锚点=舞台底边会落到屏外，
+  // 11-04 17:42/17:54 两次实锤整只消失）：原判定 inX&&inY 两屏都不接管 → 隐身。
+  // 主进程随 pet:pos 下发最近屏提示 hostBounds；本窗就是提示屏时照常接管，
+  // stage 超出窗口的部分自然裁剪（与跨屏拖拽的裁剪语义一致）。无提示保持原判定。
+  const hostIsMe = !!petHostHint && Math.abs(petHostHint.x - wx) <= 2 && Math.abs(petHostHint.y - wy) <= 2
+  const inside = petHostHint ? (hostIsMe || (inX && inY)) : (inX && inY)
   // 「住在角色」与「显示角色」是两件事：
   //  · petHosted（音频/麦克风/气泡的所有者）永远只有锚点所在那块屏
   //  · 显示则分两种：平时只让宿主画（省一份渲染）；拖拽期间两块屏都画
@@ -2793,6 +2808,7 @@ function setupDrag () {
     window.__petDragActive = !!p.dragging
     if (!p.dragging) window.__petDragging = false
     petGlobal = { x: p.x, y: p.y }
+    petHostHint = p.hostBounds || null
     applyGlobalPos()
     if (!$('petChat').hidden) requestAnimationFrame(positionChat)
     // 自主走动/抛掷期间角色一直在动，气泡必须跟着走，否则说话时人走开了

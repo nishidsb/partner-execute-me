@@ -81,7 +81,7 @@ function parseWatchVerdict (text) {
 
 const DEFAULTS = {
   watchEnabled: false,
-  watchIntervalSec: 180,   // 看屏周期（秒）——现在只是「多久摸一次眼睛」，说多少话由节奏器管
+  watchIntervalSec: 60,    // 看屏周期（秒）——0.46.40 从 180 调到 60：本地视觉后「看」近乎免费（截屏+本地描述+一次小文字判断），180s 是云端收图时代的保守值，用户体感「跟没看一样」；说多少话仍由节奏器管
   proactivePerHour: 3,     // 0.42.0 唯一的旋钮：每小时大约主动开口几次
   watchCooldownMin: 10,    // 旧的冷却，只为兼容老配置保留（真正的间隔在 rhythm.minGapSec）
   watchQuiet: false,       // 静音时段开关

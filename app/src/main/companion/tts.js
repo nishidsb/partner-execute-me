@@ -42,10 +42,13 @@ function setTtsProxy (mode) {
  * 30s 后主动放弃 → 上层 catch → 返回 {ok:false} → 渲染层回退系统语音。 */
 const TTS_TIMEOUT_MS = 30 * 1000
 async function nfetch (url, opts = {}) {
+  // 0.46.48 外部取消信号与超时并存（AbortSignal.any）——不能因为接了取消就把 30s 超时丢了
+  const timeout = AbortSignal.timeout(TTS_TIMEOUT_MS)
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout
   return net.fetch(url, {
     ...opts,
     session: getTtsSession(),
-    signal: opts.signal || AbortSignal.timeout(TTS_TIMEOUT_MS)
+    signal
   })
 }
 
@@ -120,7 +123,7 @@ async function speakFish (opts) {
   const {
     baseUrl, apiKey, fishModel, voiceId = '', asmrVoiceId = '',
     format = 'wav', latency = 'normal', text, speed = 1,
-    feeling = 0, tagDensity = 0
+    feeling = 0, tagDensity = 0, signal
   } = opts
   // 只认 fishModel（设置页 Fish 区块填的 s2.1-pro-free 等）；
   // 绝不能读通用 model 字段——调用方会传 OpenAI 的 'tts-1'，Fish 不认识导致 401
@@ -156,7 +159,8 @@ async function speakFish (opts) {
   const res = await nfetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey, model: String(model || 's2.1-pro-free') },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   })
   if (!res.ok) {
     const t = await res.text().catch(() => '')

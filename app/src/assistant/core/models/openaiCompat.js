@@ -7,6 +7,8 @@
  * reasoning 只在 thinking 模型（DeepSeek reasoner/thinking）下非空，上层必须回填到
  * 带 tool_calls 的 assistant 消息里，否则下一轮 400。
  */
+import { chatWatchdog } from './watchdog.js'
+
 export async function chat (opts) {
   const {
     baseUrl, apiKey, model, messages, tools,
@@ -27,12 +29,22 @@ export async function chat (opts) {
   const headers = { 'Content-Type': 'application/json' }
   if (apiKey) headers.Authorization = 'Bearer ' + apiKey
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal
-  })
+  // 0.46.21 看门狗：裸 fetch 无超时，流停摆会把整轮永久挂死（真机 17:31 实锤）
+  const wd = chatWatchdog(signal)
+  let res
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: wd.signal
+    })
+  } catch (err) {
+    wd.done()
+    if (wd.fired()) throw new Error('模型服务超时：60 秒内没有收到响应（已主动断开），请重试')
+    throw err
+  }
+  wd.touch()
 
   if (!res.ok) {
     let detail = ''
@@ -52,9 +64,10 @@ export async function chat (opts) {
     }
     const err = new Error(`模型服务 HTTP ${res.status}: ${detail}`)
     err.status = res.status
+    wd.done()
     throw err
   }
-  if (!res.body) throw new Error('模型服务返回空响应体')
+  if (!res.body) { wd.done(); throw new Error('模型服务返回空响应体') }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -70,10 +83,12 @@ export async function chat (opts) {
   const tcMap = new Map() // index -> {id,name,arguments}
   let usage = null
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      wd.touch()
+      buf += decoder.decode(value, { stream: true })
     let idx
     while ((idx = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, idx).trim()
@@ -104,6 +119,13 @@ export async function chat (opts) {
         }
       }
     }
+  }
+
+  } catch (err) {
+    if (wd.fired()) throw new Error('模型响应中断：流中 120 秒没有新数据（已主动断开），本轮结束，请重试')
+    throw err
+  } finally {
+    wd.done()
   }
 
   const toolCalls = [...tcMap.values()].filter((t) => t.name)

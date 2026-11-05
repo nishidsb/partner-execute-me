@@ -99,3 +99,16 @@ test('0.45.31 启动时把头顶出屏的持久化位置托回，拖拽钳制不
   // 拖拽 clampPos 仍保留 140px 旧行为（用户拖拽时看得见，不夺权）
   assert.ok(/minY \+ 140/.test(src), 'clampPos 拖拽行为未变')
 })
+
+test('0.46.45 锚点纵向出屏不隐身：主进程随 pet:pos 下发宿主屏提示，渲染层按提示接管（11-04 坐贴屏底卡片 pos.y=1489>1440 两屏都不接管 → 整只消失实锤）', () => {
+  const main = read('src/main/companion/pet.js')
+  assert.ok(/function hostBoundsFor \(x, y\)/.test(main), 'hostBoundsFor 定义')
+  assert.ok(/getAllDisplays\(\)/.test(main), '遍历全部显示器取最近')
+  assert.ok(/dist === bestD && inX && !bestInX/.test(main), '同距优先 x 命中的屏（并排双屏消歧）')
+  assert.equal((main.match(/hostBounds: hostBoundsFor\(state\.pos\.x, state\.pos\.y\)/g) || []).length, 2, 'pushPos/pushTo 两个 pet:pos 发送点都带提示')
+  const pet = read('src/renderer/overlay/pet.js')
+  assert.ok(/let petHostHint = null/.test(pet), '渲染层存宿主提示')
+  assert.ok(/petHostHint = p\.hostBounds \|\| null/.test(pet), 'onPetPos 接住提示')
+  assert.ok(/const hostIsMe = !!petHostHint && Math\.abs\(petHostHint\.x - wx\) <= 2 && Math\.abs\(petHostHint\.y - wy\) <= 2/.test(pet), '本窗=提示屏判定（窗口原点比对）')
+  assert.ok(/const inside = petHostHint \? \(hostIsMe \|\| \(inX && inY\)\) : \(inX && inY\)/.test(pet), '有提示：提示屏接管（含出屏兜底）；无提示：保持原判定')
+})

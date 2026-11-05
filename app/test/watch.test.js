@@ -355,3 +355,11 @@ test('悄悄观察：模型没给 note / 给空 note → 不记也不炸', async
   assert.equal(r.interesting, false)
   assert.equal(notes.length, 0)
 })
+
+test('0.46.40 默认看屏周期 60s：本地视觉时代看是免费的，180s 是云端收图时代的保守值', () => {
+  assert.equal(DEFAULTS.watchIntervalSec, 60)
+  const c = clampWatchCfg({})
+  assert.equal(c.watchIntervalSec, 60, '缺省时落在 60')
+  assert.equal(clampWatchCfg({ watchIntervalSec: 5 }).watchIntervalSec, 60, '下限仍 60 防连珠炮')
+  assert.equal(clampWatchCfg({ watchIntervalSec: 3000 }).watchIntervalSec, 1800, '上限 1800 不变')
+})

@@ -11,6 +11,14 @@
  * （字母/尾巴/暗号/记号）在变体之间必然反复出现，句式再怎么换也会命中。
  */
 
+/** 0.46.42 复读闸时间窗：撞车只比最近 90 分钟内说过的话。
+ *  用户 11-04 实锤：inner.recentVoices 无时间界，她话说得少的下午，
+ *  「最近 8 句」能横跨两三个小时——12:33 的台词 14:49 还在拦新句，
+ *  生成出来的十几句几乎全被咽回去（一小时没开口）；同时旧台词挂着
+ *  「最近说过」的名头进提示词镜子，又误导模型围着旧话题打转。
+ *  90min 保留 0.45.85「一个半小时六变体」场景的防护。 */
+const REPEAT_WINDOW_MS = 90 * 60 * 1000
+
 /** 分词：连续 CJK 段切 bigram，ASCII 段切小写词。长度 1 的 CJK 段整段算一个 token。 */
 function tokenize (s) {
   const t = String(s || '')
@@ -98,4 +106,4 @@ function maxSimilarity (text, history) {
   return { max, against }
 }
 
-module.exports = { tokenize, tokenize1, similarity, overlapCoef, isRepeat, maxSimilarity, JACCARD_HIT, OVERLAP_HIT, MIN_INTER }
+module.exports = { tokenize, tokenize1, similarity, overlapCoef, isRepeat, maxSimilarity, JACCARD_HIT, OVERLAP_HIT, MIN_INTER, REPEAT_WINDOW_MS }

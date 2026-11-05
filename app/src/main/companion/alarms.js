@@ -33,11 +33,29 @@ function fmtTime (t) {
   return String(t.h).padStart(2, '0') + ':' + String(t.m).padStart(2, '0')
 }
 
+/** 0.46.23 'YYYY-MM-DD' 校验（严格日历：2 月 30 日这类要能挡掉）；非法返回 null */
+function parseDate (s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim())
+  if (!m) return null
+  const y = Number(m[1]); const mo = Number(m[2]); const d = Number(m[3])
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null
+  const dt = new Date(y, mo - 1, d)
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null
+  return `${m[1]}-${m[2]}-${m[3]}`
+}
+
 /** 从 now 往后的下一次触发时间（时间戳）；一次性且已过 → null */
 function nextFireAt (alarm, now = Date.now()) {
   const t = parseTime(alarm && alarm.time)
   if (!t) return null
   const d = new Date(now)
+  // 0.46.23 date（某天一次性）：就是那一天，过了就是过了（daily 对 date 闹钟无意义）
+  const dateS = alarm && alarm.date ? parseDate(alarm.date) : null
+  if (dateS) {
+    const [y, mo, dd] = dateS.split('-').map(Number)
+    const at = new Date(y, mo - 1, dd, t.h, t.m, 0, 0).getTime()
+    return at > now ? at : null
+  }
   const at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), t.h, t.m, 0, 0).getTime()
   if (at > now) return at
   if (alarm && alarm.daily) {
@@ -135,6 +153,7 @@ function createAlarms ({ home, now = () => Date.now(), onFire = () => { }, log =
       .map((a) => ({
         id: a.id,
         time: a.time,
+        date: a.date || '',
         label: a.label || '',
         daily: a.daily !== false,
         enabled: a.enabled !== false,
@@ -144,22 +163,41 @@ function createAlarms ({ home, now = () => Date.now(), onFire = () => { }, log =
       .sort((x, y) => String(x.time).localeCompare(String(y.time)))
   }
 
-  function add ({ time, label = '', daily = true } = {}) {
+  function add ({ time, label = '', daily = true, date = '' } = {}) {
     const t = parseTime(time)
     if (!t) return { ok: false, error: '时间格式要像 07:30' }
+    // 0.46.23 date（YYYY-MM-DD）：用户说「明天/几号」的事时用——此前模型表达不了某天，
+    // 只能设今天的一次性（今天到了就响，之后 nextAt=null 静默死掉，两头都是错的）
+    let dateS = ''
+    if (date) {
+      dateS = parseDate(date)
+      if (!dateS) return { ok: false, error: 'date 要是 YYYY-MM-DD（例如 2026-11-04）' }
+      daily = false   // 指定了日期就是那一次，不每天
+    }
+    const probe = { time: fmtTime(t), daily: daily !== false, date: dateS }
+    const nextAt = nextFireAt(probe, now())
+    if (!nextAt) {
+      return {
+        ok: false,
+        error: dateS
+          ? `${dateS} ${fmtTime(t)} 已经过了，设个未来的时间`
+          : '今天 ' + fmtTime(t) + ' 已经过了；如果是明天或以后的事，把 date 给成 YYYY-MM-DD'
+      }
+    }
     const cur = load()
     if (cur.length >= MAX_ALARMS) return { ok: false, error: `最多 ${MAX_ALARMS} 个闹钟` }
     const alarm = {
       id: makeId(),
       time: fmtTime(t),
+      date: dateS,
       label: String(label || '').trim().slice(0, 40),
       daily: daily !== false,
       enabled: true,
-      nextAt: nextFireAt({ time: fmtTime(t), daily: daily !== false }, now()),
+      nextAt,
       lastFiredAt: 0
     }
     save([...cur, alarm])
-    log('[alarms] 新增 ' + alarm.time + (alarm.daily ? ' 每天' : ' 一次') + (alarm.label ? ' · ' + alarm.label : ''))
+    log('[alarms] 新增 ' + (alarm.date ? alarm.date + ' ' : '') + alarm.time + (alarm.daily ? ' 每天' : ' 一次') + (alarm.label ? ' · ' + alarm.label : ''))
     return { ok: true, alarm }
   }
 
@@ -223,4 +261,4 @@ function createAlarms ({ home, now = () => Date.now(), onFire = () => { }, log =
   return { list, add, remove, setEnabled, tick, start, stop, file }
 }
 
-module.exports = { parseTime, fmtTime, nextFireAt, planDue, createAlarms, MAX_ALARMS, GRACE_MS }
+module.exports = { parseTime, parseDate, fmtTime, nextFireAt, planDue, createAlarms, MAX_ALARMS, GRACE_MS }

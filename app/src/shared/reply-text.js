@@ -100,9 +100,18 @@
     return t
   }
 
+  /** 0.46.43 畸变动作标签：模型偶尔把 [action:shy] 写丢前缀成 [shy]，正文里
+   *  原样漏进气泡/聊天记录（11-04 15:36 实锤「う……当たり。[shy]」）。
+   *  只认 11 个正牌语义标签的裸写（与 context.js petTools 提示词同一份词表），
+   *  其它方括号词（[mock]/markdown 链接/引用）一律不碰——防误伤。 */
+  const ACT_TAGS = 'acknowledge|disagree|think|explain|excited|wave|shy|surprised|comfort|playful|invite'
+  function stripActTags (text) {
+    return String(text || '').replace(new RegExp('\\s*\\[(?:action\\s*:\\s*)?(' + ACT_TAGS + ')\\]', 'gi'), ' ')
+  }
+
   /** 朗读/发送用：剥前缀 + 丢括号译文 */
   function plainText (text) {
-    return stripEchoTranslation(stripChannelTag(text))
+    return stripActTags(stripEchoTranslation(stripChannelTag(text)))
   }
 
   /**
@@ -129,11 +138,11 @@
    * 这样一条消息只有一种语言——她「说日语、显示中文」的规则在这条通道上同样成立。
    */
   function readableText (text) {
-    const t = stripChannelTag(text)
+    const t = stripActTags(stripChannelTag(text))
     return echoTranslation(t) || stripEchoTranslation(t)
   }
 
-  const api = { stripChannelTag, stripEchoTranslation, echoTranslation, plainText, readableText, langOf }
+  const api = { stripChannelTag, stripEchoTranslation, echoTranslation, stripActTags, plainText, readableText, langOf }
   root.replyText = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api
 })(typeof window !== 'undefined' ? window : globalThis)

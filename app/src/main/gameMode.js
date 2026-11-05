@@ -3,11 +3,14 @@
  * 游戏模式（S6.5）
  *
  * 打游戏时角色浮在游戏画面之上会挡视线，所以要有一套「陪我玩但不碍事」的模式：
- *  - 缩到屏幕角落（大小可配，默认 0.7×；0.45.83 起角落可选「不固定」= 原地只缩放不搬家，
+ *  - 缩到屏幕角落（大小可配；0.45.83 起角落可选「不固定」= 原地只缩放不搬家，
  *    角色本来就在副屏的用户不必被拽到主屏游戏右下角）
+ *  - 0.46.47 默认不接管摆放：gameModeScale 未配置 = 保持原大小不缩（角色放副屏
+ *    不挡视线的用户不该被强制缩小）；要缩的人显式配 gameModeScale（clamp 0.4~1.3）
  *  - 挪窝时走平滑滑动（pet.glideTo），不再一帧瞬移
  *  - 停掉自主走动（setQuiet），不来回溜达
- *  - 默认静音（不说话，气泡也不出声）
+ *  - 0.46.47 默认不静音：gameModeMute 默认 false（气泡/弹幕照常、TTS 照念），
+ *    安静令只在显式 gameModeMute=true 时下发；要静音的人在设置里勾
  *  - 记住进入前的位置/大小，退出时原样恢复（corner=none 时没动过就不恢复）
  *
  * 进入途径：角色自己调 game_mode 工具 / 帮她启动游戏（launch_game 自动进）/
@@ -116,7 +119,15 @@ function enter (reason, opt) {
   const oName = String((opt && opt.name) || '').trim()
   if (oName) sessionName = oName
   enteredBy = reason || 'manual'
-  const scale = Math.max(0.4, Math.min(1.2, Number(c.gameModeScale) != null ? Number(c.gameModeScale) : 0.7))
+  // 0.46.20 修：Number(undefined)=NaN 但 NaN != null 为 true → 配置缺省时 scale 直接变 NaN
+  //（真机 16:17 进入日志 `scale=NaN` 实锤）。Number.isFinite 才认。
+  // 0.46.47 默认不缩：未配置 gameModeScale = 保持进入前大小（副屏用户不被强制 0.7），
+  // 显式配置才 clamp（0.4~1.2）。
+  const scaleRaw = Number(c.gameModeScale)
+  const scale = Number.isFinite(scaleRaw)
+    ? Math.max(0.4, Math.min(1.3, scaleRaw))
+    : (saved && Number.isFinite(saved.scale) ? saved.scale : 1)
+  const mute = c.gameModeMute === true // 0.46.47 默认不静音（原默认 true 强加给副屏用户）
   if (corner !== 'none') {
     const target = cornerPoint(corner, prevPos)
     const glided = typeof pet.glideTo === 'function' ? pet.glideTo(target, { ms: 700 }) : false
@@ -124,7 +135,10 @@ function enter (reason, opt) {
   }
   try { pet.setQuiet(true) } catch {}
   bcast('pet:config', { scale, gameMode: true })
-  bcast('pet:cmd', { kind: 'quiet', on: true, sound: c.gameModeMute !== false })
+  if (mute) {
+    saved.muted = true
+    bcast('pet:cmd', { kind: 'quiet', on: true })
+  }
   // 0.38.0 游戏弹幕层：进游戏模式就把「飘的弹幕 + 弹幕框」拉起来，
   // 她的话改从弹幕走（气泡在工作娱乐里够用，打游戏时挡视线）
   if (c.danmakuOn !== false) {
@@ -135,19 +149,19 @@ function enter (reason, opt) {
     try {
       const r = require('./petBridge').invoke('pet_say', {
         script: String(c.gameModeGreetText || '那我到角落待着，玩得开心～'),
-        speech: c.gameModeMute === false
+        speech: !mute
       })
       if (r && typeof r.catch === 'function') r.catch((e) => log('[gameMode] 开场白失败:', e && e.message))
     } catch (e) { log('[gameMode] 开场白失败:', e && e.message) }
   }
   clearTimeout(autoTimer)
   autoTimer = setTimeout(() => { exit('timeout') }, Math.max(60 * 1000, MAX_MS - accMs))
-  log('[gameMode] 进入 reason=' + enteredBy + ' scale=' + scale + ' mute=' + (c.gameModeMute !== false) +
+  log('[gameMode] 进入 reason=' + enteredBy + ' scale=' + scale + ' mute=' + mute +
     (sessionName ? ' game=' + sessionName : '') +
     (resume ? ' · 续上一场（已 ' + Math.round(accMs / 60000) + ' 分钟）' : ''))
   if (!resume) notifyMem({ ev: 'enter', name: sessionName, by: enteredBy })
   notifyState()
-  return { on: true, scale, corner: c.gameModeCorner || 'bottom-right', mute: c.gameModeMute !== false, minutes: Math.round((accMs + (Date.now() - startedAt)) / 60000) }
+  return { on: true, scale, corner: c.gameModeCorner || 'bottom-right', mute, minutes: Math.round((accMs + (Date.now() - startedAt)) / 60000) }
 }
 
 function exit (reason, opt) {
@@ -168,7 +182,8 @@ function exit (reason, opt) {
   // 0.38.0：先收弹幕层，再让「玩了多久」那句回到气泡上（否则它会掉进已经关掉的弹幕框）
   try { require('./danmaku').stop('game-exit') } catch {}
   bcast('pet:config', { scale: saved && saved.scale != null ? saved.scale : (c.petScale != null ? c.petScale : 1), gameMode: false })
-  bcast('pet:cmd', { kind: 'quiet', on: false })
+  // 0.46.47 只在进入时真的下过安静令才解除（没静音进场时别把别处的安静状态顺手清了）
+  if (saved && saved.muted) bcast('pet:cmd', { kind: 'quiet', on: false })
   // 0.45.73 累计：切出去过一次再回来，这一场的总时长接着算，不是从 0 开始
   accMs += Math.max(0, Date.now() - startedAt)
   const minutes = Math.max(0, Math.round(accMs / 60000))
@@ -178,7 +193,7 @@ function exit (reason, opt) {
     bcast('pet:cmd', {
       kind: 'say',
       text: '玩了 ' + (minutes >= 60 ? Math.round(minutes / 60) + ' 个多小时' : minutes + ' 分钟') + '，起来伸个懒腰吧',
-      speak: c.gameModeMute === false
+      speak: c.gameModeMute !== true
     })
   }
   log('[gameMode] 退出 reason=' + (reason || 'manual') + ' 时长=' + minutes + ' 分钟')
@@ -200,9 +215,9 @@ function state () {
     minutes: active ? Math.round((accMs + (Date.now() - startedAt)) / 60000) : Math.round(accMs / 60000),
     by: enteredBy,
     name: sessionName,
-    scale: c.gameModeScale != null ? c.gameModeScale : 0.7,
+    scale: c.gameModeScale != null ? c.gameModeScale : (c.petScale != null ? c.petScale : 1),
     corner: c.gameModeCorner || 'bottom-right',
-    mute: c.gameModeMute !== false,
+    mute: c.gameModeMute === true,
     enabled: c.gameMode !== false,
     history: Array.isArray(c.gameHistory) ? c.gameHistory.slice(-10) : []
   }

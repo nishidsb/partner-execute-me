@@ -91,6 +91,13 @@ function onUserTalk (rec, now) {
   })
 }
 
+/** 0.46.36 她自己开了口（做梦收尾/自主活动收尾）：记「刚说过话」，之后按最小间隔忍住。
+ *  绝不能走 onUserTalk——那会把睡前静默一起清掉（11-04 实锤：00:05 道晚安静默到 07:05，
+ *  01:13 做梦完成清了静默，02:39 她 QQ 去「85 分钟没理我了？」——主人睡得好好的）。 */
+function noteSelfSpoke (rec, now) {
+  return Object.assign({}, rec, { lastProactiveAt: now || Date.now() })
+}
+
 /** 主人宣告睡觉 → 静默到睡醒，且计时起点挪到睡醒那一刻 */
 function onSleepDeclared (rec, now) {
   const t = now || Date.now()
@@ -138,5 +145,5 @@ module.exports = {
   MAX_IDLE_TRACK, MIN_STAGE_GAP, FAIL_BACKOFF,
   IDLE_LIGHT, LIGHT_STAGE, WELCOME_MIN, WELCOME_GAP,
   SLEEP_WORDS, QUESTION_WORDS,
-  declaresSleep, stageOf, onUserTalk, onSleepDeclared, onFail, onSent, welcomeWorthy, STAGE_PROMPTS
+  declaresSleep, stageOf, onUserTalk, onSleepDeclared, onFail, onSent, noteSelfSpoke, welcomeWorthy, STAGE_PROMPTS
 }
