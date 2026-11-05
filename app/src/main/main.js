@@ -784,6 +784,16 @@ app.whenReady().then(async () => {
     const psbId = powerSaveBlocker.start('prevent-app-suspension')
     log('[boot] powerSaveBlocker prevent-app-suspension started, id=' + psbId)
   } catch (e) { log('[boot] powerSaveBlocker 启动失败: ' + e.message) }
+  // 0.46.55 听觉系统声兜底：渲染层 getDisplayMedia 拿 Windows 音频回环（loopback），
+  // 自动批准不弹选择器。用途只有一个：hear 特征提取——主人戴耳机放歌/本机没麦时，
+  // 她的麦克风耳朵够不着，就听「电脑自己发出的声音」。只提特征，不录音不转写。
+  try {
+    const { session } = require('electron')
+    session.defaultSession.setDisplayMediaRequestHandler((_req, cb) => {
+      cb({ video: 'screen', audio: 'loopback' })
+    }, { useSystemPicker: false })
+    log('[boot] displayMedia 处理器已挂（audio=loopback，听觉系统声兜底用）')
+  } catch (e) { log('[boot] displayMedia 处理器挂载失败: ' + e.message) }
   protocol.handle('aura', async (request) => {
     const u = new URL(request.url)
     const abs = decodeURIComponent(u.pathname.replace(/^\//, ''))

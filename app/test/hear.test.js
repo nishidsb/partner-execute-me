@@ -136,3 +136,16 @@ test('block() 输出克制：quiet 有事件时才出声，且不超预算', () 
   assert.ok(/突然安静|刚才/.test(b), 'quiet+事件应出声：' + b)
   assert.ok(b.length < 300)
 })
+
+test('0.46.55 系统声兜底：src=sys 时听感明说「电脑自己发出的声音」', () => {
+  reset()
+  feedRun(10, { rms: 0.15, low: 0.5, mid: 0.25, high: 0.15, onsets: 2, src: 'sys' })
+  const d = hear.describe()
+  assert.equal(d.ok, true)
+  assert.ok(/电脑自己发出/.test(d.text), '应带来源标注：' + d.text)
+  assert.ok(d.tags.some((t) => /音乐|视频/.test(t)))
+  // 混合来源：最后一条是 mic → 不再标注 sys
+  feed({ t: now, rms: 0.15, low: 0.5, mid: 0.25, high: 0.15, onsets: 2, src: 'mic' })
+  const d2 = hear.describe()
+  assert.ok(!/电脑自己发出/.test(d2.text))
+})

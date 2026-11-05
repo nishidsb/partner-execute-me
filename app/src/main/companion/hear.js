@@ -55,7 +55,8 @@ function ingest (f) {
     low: clamp01(Number(f.low)),
     mid: clamp01(Number(f.mid)),
     high: clamp01(Number(f.high)),
-    on: Number(f.onsets) || 0
+    on: Number(f.onsets) || 0,
+    src: f.src === 'sys' ? 'sys' : 'mic' // mic=房间里的声音（空气声）；sys=电脑自己发出的（回环）
   }
   buf.push(s)
   const cutoff = nowFn() - 120 * 1000 // 留 2 分钟：够突变对比，也控制内存
@@ -128,6 +129,10 @@ function describe () {
   const parts = ['响度：' + level.text]
   if (tags.length) parts.push('听起来' + tags.join('；'))
   if (events.length) parts.push(events.join('；'))
+  // 来源标注：sys=回环（戴耳机放歌/没麦时她唯一的耳朵），明说这是电脑自己在响
+  if (buf.length && buf[buf.length - 1].src === 'sys') {
+    parts.push('（这是这台电脑自己发出的声音——他戴着耳机或者没开麦时，你只能听到这一路）')
+  }
   const text = parts.join('。') + '。'
   return { ok: true, level: level.key, tags, events, text, at: now }
 }

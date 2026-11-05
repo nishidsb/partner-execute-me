@@ -2444,7 +2444,7 @@ function setupChat () {
         window.aura.hearSample({
           t: Date.now(), rms: a.rms / a.n,
           low: a.low / fN, mid: a.mid / fN, high: a.high / fN,
-          onsets: a.onsets
+          onsets: a.onsets, src: hearSrcTag || 'mic'
         })
       } catch { }
       hearReset()
@@ -2453,24 +2453,25 @@ function setupChat () {
   // 语音麦的 VAD tick（120ms）路径
   function hearTick (rms) { if (analyser && audioCtx) hearSampleFrom(analyser, audioCtx, rms) }
 
-  /* 听觉轻量流：语音麦没开时她自己竖起耳朵（只提特征，不录音不转写不进识别）。 */
+  /* 听觉流管理：
+   * auto（默认）= 先麦（她听房间——外放的歌、键盘、说话都走空气声），麦失败自动退到
+   *   系统回环（她听电脑自己发出的声音——主人戴耳机放歌/本机没麦时这是唯一的耳朵）；
+   * mic=只听麦；sys=只听回环（hearSource 配置，改后重启生效）。
+   * 不录音、不转写；失败留痕 + 5 分钟退避，绝不静默装听。 */
   let hearStream = null
   let hearCtx = null
   let hearAn = null
   let hearTimer = null
   let hearFailAt = 0
-  async function hearMicEnsure () {
-    if (!petHosted || on || hearStream) return
-    if (Date.now() - hearFailAt < 5 * 60 * 1000) return // 刚失败过（没麦/没权限）别疯狂敲
-    let st = { on: false }
-    try { st = (window.aura && window.aura.hearState) ? await window.aura.hearState() : { on: false } } catch { }
-    if (!st || st.on !== true) return
+  let hearSrcTag = ''
+  async function hearOpenStream (get, srcTag) {
     try {
-      hearStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      hearStream = await get()
       hearCtx = new AudioContext()
       hearAn = hearCtx.createAnalyser()
       hearAn.fftSize = 1024
       hearCtx.createMediaStreamSource(hearStream).connect(hearAn)
+      hearSrcTag = srcTag
       const hb = new Uint8Array(hearAn.fftSize)
       hearTimer = setInterval(() => {
         if (!hearAn || !hearCtx) return
@@ -2479,13 +2480,39 @@ function setupChat () {
         for (let i = 0; i < hb.length; i++) { const v = (hb[i] - 128) / 128; sum += v * v }
         hearSampleFrom(hearAn, hearCtx, Math.sqrt(sum / hb.length))
       }, 1000)
-      // 留痕：真机日志能看见耳朵何时竖起来（失败也留痕，绝不静默）
-      try { window.aura.reportError('hear', '听觉轻量流已开（只提特征不录音，音频不出渲染层）', '') } catch { }
+      // 留痕：真机日志能看见耳朵何时竖起、竖的是哪只（失败也留痕）
+      try {
+        window.aura.reportError('hear', '听觉流已开（src=' + srcTag +
+          (srcTag === 'sys' ? '，系统声兜底：她听的是电脑自己发出的声音' : '，麦克风：她听的是房间里的声音') +
+          '；只提特征不录音）', '')
+      } catch { }
+      return true
     } catch (e) {
       hearFailAt = Date.now()
       hearStream = null
-      try { window.aura.reportError('hear', '听觉轻量流失败：' + (e.message || e.name) + '（5 分钟后重试）', '') } catch { }
+      try { window.aura.reportError('hear', '听觉流失败(src=' + srcTag + ')：' + (e.message || e.name) + '（5 分钟后重试）', '') } catch { }
+      return false
     }
+  }
+  async function hearMicEnsure () {
+    if (!petHosted || on || hearStream) return
+    if (Date.now() - hearFailAt < 5 * 60 * 1000) return // 刚失败过（没麦/没权限）别疯狂敲
+    let st = { on: false }
+    try { st = (window.aura && window.aura.hearState) ? await window.aura.hearState() : { on: false } } catch { }
+    if (!st || st.on !== true) return
+    const src = st.source || 'auto'
+    if (src !== 'sys') {
+      // 先试麦克风（空气声）
+      if (await hearOpenStream(() => navigator.mediaDevices.getUserMedia({ audio: true }), 'mic')) return
+      if (src === 'mic') return // 明确只要麦：失败就如实闭耳，不偷偷换耳朵
+    }
+    // 系统回环：戴耳机放歌/没麦时听「电脑自己在响什么」。
+    // 注意 video 轨别停——Windows 回环停掉视频轨可能连音频一起断，留着不渲染即可。
+    await hearOpenStream(async () => {
+      const ds = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      if (!ds.getAudioTracks().length) { ds.getTracks().forEach((t) => t.stop()); throw new Error('系统没给音频轨') }
+      return ds
+    }, 'sys')
   }
   function hearMicStop () {
     if (hearTimer) { clearInterval(hearTimer); hearTimer = null }
@@ -2494,6 +2521,7 @@ function setupChat () {
     if (hearCtx) { try { hearCtx.close() } catch {} }
     hearCtx = null
     hearAn = null
+    hearSrcTag = ''
     hearAcc = null
   }
 

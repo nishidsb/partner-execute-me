@@ -4388,15 +4388,18 @@ function registerIpc () {
   ipcMain.handle('study:status', () => studyStatus())
   ipcMain.handle('companion:clear-history', (_e, id) => { character.saveHistory(id || character.get().id, []); return true })
 
-  // 0.46.54 听觉：渲染层问「听觉开没开」（hearOn=false 时渲染层不开轻量流）
+  // 0.46.55 听觉：渲染层问「听觉开没开、用什么耳朵」。
+  // hearSource: auto=先麦（听房间）失败再回环（听电脑自己）／mic=只听麦／sys=只听回环（戴耳机放歌场景）
   ipcMain.handle('companion:hear-state', () => {
     const on = cfg().hearOn !== false
     hear.configure({ on })
-    return { on }
+    const hs = String(cfg().hearSource || 'auto')
+    return { on, source: hs === 'sys' || hs === 'mic' ? hs : 'auto' }
   })
 
   // 0.46.54 听觉：渲染层每秒一条声音特征摘要（不录音不转写，只有几十字节数字）。
   // hearOn 关着时收但不入库（渲染层侧的麦本来也由用户开关）。
+  let hearLastLogAt = 0
   ipcMain.on('overlay:hear-sample', (_e, f) => {
     try {
       const on = cfg().hearOn !== false
@@ -4405,6 +4408,13 @@ function registerIpc () {
       if (hear.ingest(f) && !hearFirstLogged) {
         hearFirstLogged = true
         log('[hear] 首条听觉样本进来了（耳朵已工作，特征=响度/频段/起伏）')
+      }
+      // 0.46.55 每分钟一条听感留痕：真机迭代「像什么」映射表就靠它（同类坑#8：反馈节奏慢，主动盯）
+      const nowT = Date.now()
+      if (nowT - hearLastLogAt > 60 * 1000) {
+        hearLastLogAt = nowT
+        const d = hear.describe()
+        if (d.ok) log('[hear] 此刻听感：' + d.text)
       }
     } catch (err) {
       log('[hear] 样本处理失败：' + (err && err.message))
