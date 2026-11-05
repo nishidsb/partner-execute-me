@@ -2404,26 +2404,27 @@ function setupChat () {
     }, 120)
   }
 
-  /* ---- 0.46.54 听觉：同一个麦、同一个 analyser，再提一层「听见」的特征 ----
+  /* ---- 0.46.54 听觉：她自己的耳朵 ----
    * 她要的不是听懂字（那是 whisper 的活），是听见声：响度、频段构成、动静节奏。
-   * 不录音、不转写：音频数据不出渲染层，每 8 个 VAD tick（≈1s）只把一条特征摘要
+   * 不录音、不转写：音频数据不出渲染层，每 8 拍（≈1s）只把一条特征摘要
    * （响度均值/低中高频段占比/起伏次数，几十字节数字）发给主进程 hear.js 聚合。
-   * 麦克风开关与语音捕捉共用（micOff 时耳朵自然闭着，主进程如实报「没数据」）。 */
+   * 两条流：语音捕捉开着 → 复用它的 analyser（一次采集两用）；语音麦没开 →
+   * 听觉自己开一条轻量流（hearOn 开着才有耳朵；关着不开流、Windows 不亮麦指示灯）。 */
   let hearAcc = null
   function hearReset () { hearAcc = { n: 0, fN: 0, rms: 0, low: 0, mid: 0, high: 0, onsets: 0, prevRms: 0 } }
-  function hearTick (rms) {
+  function hearSampleFrom (an, ctx, rms) {
     if (!hearAcc) hearReset()
     const a = hearAcc
     a.rms += rms
     // 起伏（onset）：比上一拍明显变响——音乐节拍、敲键盘、东西掉地上的「事件感」
     if (a.prevRms > 0.02 && rms > a.prevRms * 1.7 && rms > 0.04) a.onsets++
     a.prevRms = rms
-    // 频段每 4 拍（≈0.5s）算一次就够，省 CPU
-    if (a.n % 4 === 0 && analyser && audioCtx) {
+    // 频段每 4 拍算一次就够，省 CPU
+    if (a.n % 4 === 0 && an && ctx) {
       try {
-        const freq = new Uint8Array(analyser.frequencyBinCount)
-        analyser.getByteFrequencyData(freq)
-        const hz = audioCtx.sampleRate / analyser.fftSize
+        const freq = new Uint8Array(an.frequencyBinCount)
+        an.getByteFrequencyData(freq)
+        const hz = ctx.sampleRate / an.fftSize
         let low = 0; let lowN = 0; let mid = 0; let midN = 0; let high = 0; let highN = 0
         for (let i = 0; i < freq.length; i++) {
           const f = i * hz
@@ -2449,6 +2450,52 @@ function setupChat () {
       hearReset()
     }
   }
+  // 语音麦的 VAD tick（120ms）路径
+  function hearTick (rms) { if (analyser && audioCtx) hearSampleFrom(analyser, audioCtx, rms) }
+
+  /* 听觉轻量流：语音麦没开时她自己竖起耳朵（只提特征，不录音不转写不进识别）。 */
+  let hearStream = null
+  let hearCtx = null
+  let hearAn = null
+  let hearTimer = null
+  let hearFailAt = 0
+  async function hearMicEnsure () {
+    if (!petHosted || on || hearStream) return
+    if (Date.now() - hearFailAt < 5 * 60 * 1000) return // 刚失败过（没麦/没权限）别疯狂敲
+    let st = { on: false }
+    try { st = (window.aura && window.aura.hearState) ? await window.aura.hearState() : { on: false } } catch { }
+    if (!st || st.on !== true) return
+    try {
+      hearStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      hearCtx = new AudioContext()
+      hearAn = hearCtx.createAnalyser()
+      hearAn.fftSize = 1024
+      hearCtx.createMediaStreamSource(hearStream).connect(hearAn)
+      const hb = new Uint8Array(hearAn.fftSize)
+      hearTimer = setInterval(() => {
+        if (!hearAn || !hearCtx) return
+        hearAn.getByteTimeDomainData(hb)
+        let sum = 0
+        for (let i = 0; i < hb.length; i++) { const v = (hb[i] - 128) / 128; sum += v * v }
+        hearSampleFrom(hearAn, hearCtx, Math.sqrt(sum / hb.length))
+      }, 1000)
+      // 留痕：真机日志能看见耳朵何时竖起来（失败也留痕，绝不静默）
+      try { window.aura.reportError('hear', '听觉轻量流已开（只提特征不录音，音频不出渲染层）', '') } catch { }
+    } catch (e) {
+      hearFailAt = Date.now()
+      hearStream = null
+      try { window.aura.reportError('hear', '听觉轻量流失败：' + (e.message || e.name) + '（5 分钟后重试）', '') } catch { }
+    }
+  }
+  function hearMicStop () {
+    if (hearTimer) { clearInterval(hearTimer); hearTimer = null }
+    if (hearStream) hearStream.getTracks().forEach((t) => t.stop())
+    hearStream = null
+    if (hearCtx) { try { hearCtx.close() } catch {} }
+    hearCtx = null
+    hearAn = null
+    hearAcc = null
+  }
 
   async function micOn () {
     // 麦只能由角色所在屏持有：两块屏同时录 → 同一句话识别两次、发两遍、回两段
@@ -2464,6 +2511,7 @@ function setupChat () {
       show()
       startVad()
       hearReset()
+      hearMicStop() // 语音麦接管：听觉复用它的 analyser，轻量流让位（避免双流）
     } catch (e) {
       bubbleShow('⚠ 麦克风不可用: ' + (e.message || e.name))
       bubbleKeep()
@@ -2475,7 +2523,7 @@ function setupChat () {
     mic.classList.remove('on')
     clearInterval(vadTimer)
     vadTimer = null
-    hearAcc = null
+    hearMicEnsure() // 语音麦让位：听觉换回自己的轻量流（hearOn 开着才有）
     if (recorder && recorder.state === 'recording') { try { recorder.stop() } catch {} }
     recorder = null
     speaking = false
@@ -2513,6 +2561,9 @@ function setupChat () {
   })
   // 上次开着 → 默认继续捕捉（等宿主确定后再开，避免非宿主屏抢麦；仅常驻模式）
   if (micDesired && micMode === 'always') setTimeout(applyMic, 1500)
+  // 0.46.54 听觉轻量流：宿主定了就问主进程 hearOn，开着就竖耳朵（换屏时跟着走）
+  hostHooks.push(() => { if (!petHosted) hearMicStop(); else setTimeout(hearMicEnsure, 800) })
+  setTimeout(hearMicEnsure, 3000)
   // bubble/keep 必须一起交出去：菜单和悬浮条的提示要复用同一套气泡逻辑，
   // 以前那边直接调 bubbleShow()，那是 setupChat 的局部函数 → ReferenceError（点音效/暂停就炸）
   return { hide: () => { panel.hidden = true; holdPanel = false; syncRoamHold() }, show, bubble: bubbleShow, keep: bubbleKeep }

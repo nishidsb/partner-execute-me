@@ -4388,6 +4388,13 @@ function registerIpc () {
   ipcMain.handle('study:status', () => studyStatus())
   ipcMain.handle('companion:clear-history', (_e, id) => { character.saveHistory(id || character.get().id, []); return true })
 
+  // 0.46.54 听觉：渲染层问「听觉开没开」（hearOn=false 时渲染层不开轻量流）
+  ipcMain.handle('companion:hear-state', () => {
+    const on = cfg().hearOn !== false
+    hear.configure({ on })
+    return { on }
+  })
+
   // 0.46.54 听觉：渲染层每秒一条声音特征摘要（不录音不转写，只有几十字节数字）。
   // hearOn 关着时收但不入库（渲染层侧的麦本来也由用户开关）。
   ipcMain.on('overlay:hear-sample', (_e, f) => {
