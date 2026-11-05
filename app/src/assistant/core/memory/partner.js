@@ -114,8 +114,11 @@ function ignored (scope) {
 }
 
 /** 仓库就绪（按 scope 各一次）：init + .gitignore。没有 git 时静默跳过 */
+const repoDeniedSet = new Set() // 安全闸拒掉的 scope：git 快照停用、只写文件
+
 export function ensureRepo (scope) {
   const key = safeId(scope)
+  if (repoDeniedSet.has(key)) return false
   if (repoReadySet.has(key)) return gitAvailable()
   ensureDir(ws(scope))
   ensureDir(path.join(ws(scope), PARTNER_DIR))
@@ -123,9 +126,29 @@ export function ensureRepo (scope) {
   if (!gitAvailable()) return false
   try {
     ignored(scope)
-    try { gitRun(['rev-parse', '--is-inside-work-tree'], AUTHOR_APP, scope) } catch { gitRun(['init'], AUTHOR_APP, scope) }
-    repoReadySet.add(key)
-    return true
+    try {
+      gitRun(['rev-parse', '--is-inside-work-tree'], AUTHOR_APP, scope)
+    } catch { gitRun(['init'], AUTHOR_APP, scope) }
+    // 0.46.52 安全闸：rev-parse 是向上找 .git 的——如果 ws() 恰好落在**别人的仓库**里
+    // （数据目录没初始化时 dataDir 默认 = process.cwd()/data，跑测试/工具时的 cwd 在哪个
+    // 仓库，`git add -A` 就会把那个仓库的全部未提交改动一起提交掉，真机 11-05 实锤：
+    // 开源仓库连续两笔「记住：…」神秘提交），这里必须拒绝提交，只写文件。
+    try {
+      const top = gitRun(['rev-parse', '--show-toplevel'], AUTHOR_APP, scope).trim()
+      const here = fs.realpathSync(ws(scope))
+      const topReal = fs.realpathSync(top)
+      if (path.relative(topReal, here) === '') {
+        repoReadySet.add(key)
+        return true
+      }
+      logger.warn(`[partner] 工作区 ${here} 不是 git 仓库根（顶层是 ${topReal}），该角色 git 快照停用、只写文件`)
+      repoDeniedSet.add(key)
+      return false
+    } catch (e) {
+      logger.warn('[partner] 校验仓库根失败（git 快照停用）：' + e.message)
+      repoDeniedSet.add(key)
+      return false
+    }
   } catch (e) {
     logger.warn('[partner] git 初始化失败：' + e.message)
     return false
@@ -518,7 +541,7 @@ export function writeHandoff (text, { reason = '长会话', scope } = {}) {
 }
 
 /** 仅测试用：切换数据目录后重置模块级缓存 */
-export function resetCache () { gitOk = null; repoReadySet.clear(); migratedSet.clear(); legacyDirMigrated = false }
+export function resetCache () { gitOk = null; repoReadySet.clear(); repoDeniedSet.clear(); migratedSet.clear(); legacyDirMigrated = false }
 
 export const partner = {
   PARTNER_FILE, PARTNER_DIR, SNAPSHOT_TAG,

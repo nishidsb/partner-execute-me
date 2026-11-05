@@ -720,6 +720,15 @@ test('0.45.28 主人 QQ 会话挂核心工具安全子集，非主人不挂', as
 })
 
 test('0.45.28 主人私聊工具循环能真正调到核心工具（remember 记进当前角色记忆）', async () => {
+  // 0.46.52 安全闸配套：这条用例会真的调到 remember → partner.js 的 git。
+  // 数据目录不初始化的话 dataDir 默认 = process.cwd()/data，跑测试的 cwd 在哪个
+  // git 仓库里，`git add -A` 就会把那个仓库整个提交掉（11-05 实锤：partner-execute-me
+  // 收到两笔「记住：主人在 QQ 上让他记一条」）。这里把数据目录钉进系统临时目录。
+  const cfgMod = await import('file:///' + path.join(__dirname, '..', 'src', 'assistant', 'core', 'config.js').replace(/\\/g, '/'))
+  const partnerMod = await import('file:///' + path.join(__dirname, '..', 'src', 'assistant', 'core', 'memory', 'partner.js').replace(/\\/g, '/'))
+  const tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'im-data-'))
+  cfgMod.initDataDir(tmpData)
+  partnerMod.resetCache()
   const home = fakeHome()
   const calls = []
   const b = createBrain({
