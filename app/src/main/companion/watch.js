@@ -341,7 +341,7 @@ function createWatch ({ cfgGet, cfgPatch, shoot, chat, getContext, say, isFullsc
       const ev = sense.tick(Date.now())
       if (!ev) return { ok: true }
       // 0.35.0：不再追着说话——原来的行为是「60 分钟追问 / 每 3 小时再说一次」，
-      // 用户出门 6 小时被追问了三次，回来第一句是「是不是不该在我一个人待着的时候开着你」。
+      // 用户出门 6 小时被追问了三次，回来第一句是对她整体状态的不满。
       // 0.45.30 收紧：away/afk/gone 这些「人去哪儿了」的探问，只在人刚走（presence 还是 here）
       // 的窗口说一句；5 分钟一过 presence=away 就不再追——对着空椅子喊话正是要消掉的行为。
       // kind='back'（回来打招呼）不受此闸：回来时键鼠刚动，presence 已经回到 here。
