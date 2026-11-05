@@ -1,4 +1,4 @@
-/** 真实模型调用验证（非交互）：流式输出 + 工具调用 + 角色人格。用后即删或保留均可。 */
+/** 真实模型调用验证（非交互）：流式输出 + 工具调用 + 角色人格。手动跑：RYZA_LIVE=1 node scripts/live-test.js */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,11 +6,28 @@ import { fileURLToPath } from 'node:url'
 import { initDataDir } from '../src/config.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 隐私红线 + 防误触发：真实模型调用花钱且依赖真实凭据，必须 RYZA_LIVE=1 显式开启；
+// `node --test` 收集到本文件时直接跳过，绝不静默打真实 API
+if (!process.env.RYZA_LIVE) {
+  console.log('# SKIP: live 测试会调用真实模型，需 RYZA_LIVE=1 显式开启（node scripts/live-test.js 也要带）')
+  process.exit(0)
+}
 // 用真实数据目录（含刚导入的凭据），但历史/记忆测试写到临时目录避免污染
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ryza-live-'))
 initDataDir(tmp)
-// 把 provider 配置从真实 config 拷进临时目录
-const realCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'config.json'), 'utf8'))
+// 把 provider 配置从真实数据目录拷进临时目录（隐私红线：仓库内不放真实凭据，
+// 按候选顺序找：环境变量指定 → 宿主应用数据目录 → 本仓库 data/（仅本机有则用））
+const candidates = [
+  process.env.RYZA_LIVE_CONFIG,
+  process.env.APPDATA && path.join(process.env.APPDATA, 'ryza-assistant-app', 'assistant', 'config.json'),
+  path.join(ROOT, 'data', 'config.json')
+].filter(Boolean)
+const cfgPath = candidates.find(p => fs.existsSync(p))
+if (!cfgPath) {
+  console.log('# SKIP: 未找到真实 config.json（候选：' + candidates.join(' | ') + '）')
+  process.exit(0)
+}
+const realCfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'))
 fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify(realCfg))
 
 const { roles } = await import('../src/roles/roleManager.js')
