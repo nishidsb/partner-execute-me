@@ -44,6 +44,9 @@ const curiosity = require('./curiosity')
 const rhythm = require('./rhythm')
 const presence = require('./presence')
 const rebuke = require('./rebuke')
+// 0.46.54 听觉通道：她终于有耳朵（响度/频段/动静节奏特征聚合，不录音不转写不出本机）
+const hear = require('./hear')
+let hearFirstLogged = false
 
 /* ---------------- 0.35.0 在场判定（全程序唯一真相） ----------------
  * 三条主动通道（看屏 / 时间观念 / 黏人 / 废话）都必须过这道闸。
@@ -1282,6 +1285,8 @@ function getChatter () {
     swallowedRecent: (n) => { try { return inner.suppressRecent(n, 2 * 60 * 60 * 1000) } catch { return [] } },
     // 0.46.51 情绪残余：被打断自主活动的扫兴残量（needs.deflated → 语气基调）
     mood: () => { try { return getNeeds().moodBlock() } catch { return '' } },
+    // 0.46.54 听觉：耳朵里此刻的声音（安静且无事 → 空串，不浪费预算不装模作样）
+    hear: () => { try { return hear.block() } catch { return '' } },
     // 0.46.0 自言自语系统：独白状态 + 此刻的活动素材（嘀咕要有内容依据）
     soliloquy: getSoliloquy(),
     activity: () => {
@@ -1584,7 +1589,7 @@ async function deliverReach (text, tag) {
   if (!connected) return { ok: false, error: 'QQ 没连上（NapCat/OneBot 掉线），这条没发出去' }
   if (!uid) return { ok: false, error: '没配主人 QQ 号，不能发给别人' }
   /* 0.45.94 QQ 是纯文字通道，没有「气泡 + 字幕」两层：她按 replyLang 说日语时，
-   * 推过去就是一句主人读不懂的日语（真实使用反馈：发出去的是没有翻译的日语）。
+   * 推过去就是一句主人读不懂的日语（用户原话：「确实是日语发的没有翻译」）。
    * 0.45.98 改成**只发译文**：一条消息只有一种语言——桌面那套「说日语、显示中文」
    * 在文字通道上就等价于「只显示中文」。以前把原文和译文拼在同一条里，
    * 用户 11-02 看到的就是一段日语后面接一段括号中文，读起来像发了两遍。
@@ -1810,7 +1815,7 @@ async function makeReachLine (stage, mins) {
 
 /** 主人不在电脑前 + 黏人阶梯到点 → 试探 QQ（内部全部节流，失败静默）
  *  0.45.97：走 deliverReach 统一出口——以前这里直连 sendPrivate，绕过了翻译，
- *  于是她确实发了消息、但主人读不懂。 */
+ *  于是「她确实发了消息，但是你读不懂的日语」（用户 11-02 的原话）。 */
 async function tryQqReach (stage, idleMs) {
   try {
     const now = Date.now()
@@ -2108,8 +2113,8 @@ function stopNudge () {
 }
 
 /* ---------------- 她自己用电脑（0.43.0） ----------------
- * 设计动机（来自真实使用反馈）：空闲几分钟不动时，希望角色能自己控制电脑去持续看想看的、
- * 做想做的，而不是打开之后停在那里不继续也不关闭」。
+ * 用户 10-29 的原话：「5 分钟不动，角色可以自己控制电脑去持续性地看自己想看的，
+ * 而不是打开之后停在那里好像看了，但既不继续操作也不关闭网页」。
  * 剧本与安全边界写在 autonomy.js 里（只打开白名单站点、只滚动、不点击、不打字、
  * 收尾前必须确认前台是浏览器才按 Ctrl+W）。
  */
@@ -2209,7 +2214,9 @@ function startAutonomy () {
       if (!t) return
       log('[autonomy] 自语：' + t.slice(0, 40))
       try { await sayNarration(t, { speech: narrationVoiceOn() }) } catch { }
-    }
+    },
+    // 0.46.54 听觉：自主活动场里她可以「听一下」（listen 工具的弹药）
+    hearDescribe: () => { try { return hear.describe() } catch { return { ok: false, reason: '听觉模块异常' } } }
   })
   autonomyInst.start()
   return autonomyInst
@@ -2776,9 +2783,9 @@ function studyStatus () {
 
 /* ---------------- 0.45.68 学习监督：她真的会看屏幕，真的会生气 ----------------
  *
- * 设计动机（来自真实使用反馈）：学习模式要真的能帮主人学习，而不是只是一个开关——
- * 约好后不定时过来看一眼屏幕，在玩游戏或看
- * 其他视频就过来指责（阶梯式生气），所有行为都记录进长期记忆。
+ * 用户原话：「学习模式弄出来为的是能让我好好学习，而不是只是一个开关。
+ * 优化方式是如果跟角色说好要学习，会不定时过来看一眼屏幕，如果在玩游戏或者看
+ * 其他的视频就会过来指责小生气，持续这样就会彻底生气，所有行为都会记录在长期记忆中。」
  *
  * 0.22.0 那套只是每 15 分钟盲问一句「还在学吗」——她看不见屏幕，那根本不算监督，
  * 只是个人肉闹钟。0.45.12 的自动陪学又只负责安静陪着（他没跟你约定，凭什么指责他）。
@@ -2999,7 +3006,7 @@ async function makeWatchLine (kind, st, attempt) {
 }
 
 /** 说一句（0.45.69 起：生成不出来就**这次不说话**，绝不拿写死的句子顶。
- *  真实使用反馈：要的是角色真生气自己说出来的话，不是固定语句——固定台词一听就假，
+ *  用户原话「我要的是角色真生气自己说出来的，而不是固定的语句」——固定台词一听就假，
  *  这比沉默更伤。情绪与账本照常累积，下一句真话会更凶。 */
 async function watchSpeak (kind, st) {
   let text = await makeWatchLine(kind, st, 0)
@@ -3037,7 +3044,7 @@ function watchNote (kind, st, v) {
 
 /**
  * 每一次抽查都当场落到账本（0.45.69）。
- * 真实使用反馈：学习模式里发生过的事都要进记忆，退出后不能什么都不记得。
+ * 用户原话：「做过的这些都是需要进入记忆的，不要退出学习模式之后期间发生过什么都不记得」。
  * 账本负责**明细可查**（她随时能答「今天查了几次、看到什么、补了多少时间」），
  * 长期记忆只记关键节点（开始/被抓/收场）——一天几十条全塞进 400 条上限会把别的记忆挤掉。
  */
@@ -3255,7 +3262,7 @@ function watchEnd (silent, opts) {
 }
 
 /* ---------------- 0.45.12 自动学习模式：她发现他在学，就自己安静地陪 ----------------
- * 真实使用反馈：需要的是自动进入的学习模式，不是开关式的。
+ * 用户原话：需要自动进入的学习模式，不是开关式的。
  * 每分钟看一眼前台窗口（launcher.scan 自带 1.2s 缓存，成本可忽略）：
  * 连续 8 分钟都在学习类应用 → 自动进入静音陪学；场景消失 5 分钟 → 轻声收场。
  * 冷却 45 分钟防反复进出；只管自动会话，手动叫的陪学绝不插手。 */
@@ -3763,6 +3770,9 @@ function settingsView () {
     diagContext: c.diagContext === true,
     // 0.22.0 补丁⑧⑨：学习模式 / 做梦 / 风格学习（此前漏了这几项，重开面板总是回默认值）
     studyOn: c.studyOn !== false,
+    // 0.46.54 听觉通道开关（true=默认开；config.json global.companion.hearOn=false 关，
+    // 改后重启生效——关掉的只是「特征聚合」，麦克风开关仍归语音捕捉管）
+    hearOn: c.hearOn !== false,
     studyMinutes: c.studyMinutes != null ? c.studyMinutes : 45,
     studyBreak: c.studyBreak != null ? c.studyBreak : 10,
     studyRounds: c.studyRounds != null ? c.studyRounds : 3,
@@ -4377,6 +4387,22 @@ function registerIpc () {
   ipcMain.handle('study:stop', () => studyStop())
   ipcMain.handle('study:status', () => studyStatus())
   ipcMain.handle('companion:clear-history', (_e, id) => { character.saveHistory(id || character.get().id, []); return true })
+
+  // 0.46.54 听觉：渲染层每秒一条声音特征摘要（不录音不转写，只有几十字节数字）。
+  // hearOn 关着时收但不入库（渲染层侧的麦本来也由用户开关）。
+  ipcMain.on('overlay:hear-sample', (_e, f) => {
+    try {
+      const on = cfg().hearOn !== false
+      hear.configure({ on })
+      if (!on) return
+      if (hear.ingest(f) && !hearFirstLogged) {
+        hearFirstLogged = true
+        log('[hear] 首条听觉样本进来了（耳朵已工作，特征=响度/频段/起伏）')
+      }
+    } catch (err) {
+      log('[hear] 样本处理失败：' + (err && err.message))
+    }
+  })
 
   ipcMain.handle('companion:transcribe', async (_e, base64, mime) => {
     const t0 = Date.now()

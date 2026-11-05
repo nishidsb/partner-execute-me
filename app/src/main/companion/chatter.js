@@ -130,6 +130,8 @@ function createChatter (deps) {
   const swallowedRecent = deps.swallowedRecent || (() => [])
   // 0.46.51 情绪残余：被打断自主活动的扫兴残量（needs.deflated），影响语气
   const mood = deps.mood || null
+  // 0.46.54 听觉：耳朵里此刻的声音特征（安静无事 → 空串，这整段不进预算）
+  const hear = deps.hear || null
 
   let timer = null
   let dayKey = ''
@@ -210,6 +212,10 @@ function createChatter (deps) {
     // 0.46.51 情绪残余：有扫兴残量就带一句语气基调（自然消散，没有就不出声）
     let moodLine = ''
     try { moodLine = String((mood && mood()) || '') } catch { }
+    // 0.46.54 听觉：耳朵里此刻的声音（安静无事 → 空串）。嘀咕可以「听到」环境的动静，
+    // 但她听到的是声音特征不是对话内容——提示词里说清楚，别让她编「他说了什么」。
+    let hearLine = ''
+    try { hearLine = String((hear && hear()) || '') } catch { }
     // 0.46.18 语言跟设置走：replyLang 固定语言时注入【语言要求】（auto=跟人设走，不注入）
     const langBlock = monologueLangBlock(c.replyLang)
     // 独白状态：正在独白就让她接着说（或收尾）
@@ -227,7 +233,7 @@ function createChatter (deps) {
         messages: [
           { role: 'system', content: String(deps.persona ? deps.persona() : '').slice(0, 900) },
           // 0.35.0：以前这里只有人设 + 一句指令，所以她自言自语的内容跟你们刚聊的完全无关
-          // （真实使用反馈：自动说话和本体聊天记录看着没有关联）。
+          // （用户原话：「自动说话的这个跟本体的聊天记录看的就像没有关联一样」）。
           // 现在把记忆和最近几条对话一起给她，让碎碎念接得上现实。
           ...(shared ? [{ role: 'system', content: '【你现在知道的事（记忆与你们最近的对话，碎碎念要能接上这些，别当没发生过）】\n' + shared }] : []),
           // 0.45.44：把自己最近几句递回去，明说别复读——没有这面镜子模型每次都凑同一个道具
@@ -238,6 +244,8 @@ function createChatter (deps) {
           ...(swallowed ? [{ role: 'system', content: '【你刚才想过又咽回去的话（复读闸替你收着的）】\n' + swallowed + '\n这些都是你想说又收住的念头。想说的可以现在漏出来——必须换个说法：更短、更随口、换个角度或只漏半句，别原样照搬（原样会再被收回去一次）；多数时候放着不说也完全正常，别为漏而漏。' }] : []),
           // 0.46.51 情绪残余：被打断的扫兴还没散时，嘀咕带一点那个语气
           ...(moodLine ? [{ role: 'system', content: '【你此刻的心情底色】\n' + moodLine }] : []),
+          // 0.46.54 听觉：她有耳朵了——环境声音的响度/特征/突变（安静且无事时不注入）
+          ...(hearLine ? [{ role: 'system', content: '【你耳朵里的世界（此刻的环境声音；你听到的是声音特征，听不出谁在说什么内容，别编「他说了什么」）】\n' + hearLine }] : []),
           ...(langBlock ? [{ role: 'system', content: langBlock }] : []),
           { role: 'user', content: (monoBlock ? monoBlock + '\n' : '') + frame + '\n' + DECIDE_BODY + '\n\n【当前时间】' + new Date().toLocaleString('zh-CN', { hour12: false }) }
         ],

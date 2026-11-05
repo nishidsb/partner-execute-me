@@ -72,6 +72,8 @@ contextBridge.exposeInMainWorld('aura', {
   petChatFocus: (on) => ipcRenderer.invoke('pet:chat-focus', on),
   petChatStop: () => ipcRenderer.invoke('companion:stop'),
   petTranscribe: (b64, mime) => ipcRenderer.invoke('companion:transcribe', b64, mime),
+  // 0.46.54 听觉：每秒一条声音特征摘要（响度/频段/起伏，几十字节数字，不是音频）
+  hearSample: (f) => ipcRenderer.send('overlay:hear-sample', f),
   // 触摸反应语音：用当前 TTS 档位合成一句反应语（{ok,url,speed} 或 {fallback}）
   petSpeak: (text) => ipcRenderer.invoke('companion:tts', String(text || '').slice(0, 200)),
   // AI 回复朗读：整段回复合成（不做 200 字截断），未配 API TTS 时主进程回 {fallback:true} → 渲染层系统语音

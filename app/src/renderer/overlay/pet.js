@@ -2369,6 +2369,7 @@ function setupChat () {
       for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v }
       const rms = Math.sqrt(sum / buf.length)
       const now = Date.now()
+      hearTick(rms)
       // 2.4 打断：她正在出声、你也开口 → 停她的语音 + 停生成（用户优先）
       if (rms > 0.045 && interruptOn) {
         const sheIsTalking = (typeof nowPlaying !== 'undefined' && nowPlaying) ||
@@ -2403,6 +2404,52 @@ function setupChat () {
     }, 120)
   }
 
+  /* ---- 0.46.54 听觉：同一个麦、同一个 analyser，再提一层「听见」的特征 ----
+   * 她要的不是听懂字（那是 whisper 的活），是听见声：响度、频段构成、动静节奏。
+   * 不录音、不转写：音频数据不出渲染层，每 8 个 VAD tick（≈1s）只把一条特征摘要
+   * （响度均值/低中高频段占比/起伏次数，几十字节数字）发给主进程 hear.js 聚合。
+   * 麦克风开关与语音捕捉共用（micOff 时耳朵自然闭着，主进程如实报「没数据」）。 */
+  let hearAcc = null
+  function hearReset () { hearAcc = { n: 0, fN: 0, rms: 0, low: 0, mid: 0, high: 0, onsets: 0, prevRms: 0 } }
+  function hearTick (rms) {
+    if (!hearAcc) hearReset()
+    const a = hearAcc
+    a.rms += rms
+    // 起伏（onset）：比上一拍明显变响——音乐节拍、敲键盘、东西掉地上的「事件感」
+    if (a.prevRms > 0.02 && rms > a.prevRms * 1.7 && rms > 0.04) a.onsets++
+    a.prevRms = rms
+    // 频段每 4 拍（≈0.5s）算一次就够，省 CPU
+    if (a.n % 4 === 0 && analyser && audioCtx) {
+      try {
+        const freq = new Uint8Array(analyser.frequencyBinCount)
+        analyser.getByteFrequencyData(freq)
+        const hz = audioCtx.sampleRate / analyser.fftSize
+        let low = 0; let lowN = 0; let mid = 0; let midN = 0; let high = 0; let highN = 0
+        for (let i = 0; i < freq.length; i++) {
+          const f = i * hz
+          const v = freq[i] / 255
+          if (f < 300) { low += v; lowN++ } else if (f < 2000) { mid += v; midN++ } else if (f < 8000) { high += v; highN++ }
+        }
+        if (lowN) a.low += low / lowN
+        if (midN) a.mid += mid / midN
+        if (highN) a.high += high / highN
+        a.fN++
+      } catch { }
+    }
+    a.n++
+    if (a.n >= 8 && window.aura && window.aura.hearSample) {
+      const fN = a.fN || 1
+      try {
+        window.aura.hearSample({
+          t: Date.now(), rms: a.rms / a.n,
+          low: a.low / fN, mid: a.mid / fN, high: a.high / fN,
+          onsets: a.onsets
+        })
+      } catch { }
+      hearReset()
+    }
+  }
+
   async function micOn () {
     // 麦只能由角色所在屏持有：两块屏同时录 → 同一句话识别两次、发两遍、回两段
     if (!petHosted || on) return
@@ -2416,6 +2463,7 @@ function setupChat () {
       mic.classList.add('on')
       show()
       startVad()
+      hearReset()
     } catch (e) {
       bubbleShow('⚠ 麦克风不可用: ' + (e.message || e.name))
       bubbleKeep()
@@ -2427,6 +2475,7 @@ function setupChat () {
     mic.classList.remove('on')
     clearInterval(vadTimer)
     vadTimer = null
+    hearAcc = null
     if (recorder && recorder.state === 'recording') { try { recorder.stop() } catch {} }
     recorder = null
     speaking = false

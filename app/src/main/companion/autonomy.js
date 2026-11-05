@@ -2,9 +2,9 @@
 /**
  * 她自己用电脑（autonomy，0.43.0）
  *
- * 设计动机（来自真实使用反馈）：
- * 「主人离开电脑时，希望角色能在空闲几分钟后面自己去看想看的
- *   做想做的，而不是打开之后停在那里，既不继续操作也不关闭，
+ * 用户 2026-10-29 23:30 的原话：
+ * 「在我离开的时候，举个例子如果 5 分钟不动，角色可以自己控制电脑去持续性地看自己想看的
+ *   自己想做的，而不是打开之后停在那里好像看了，但是既不会继续操作也不会关闭网页一样，
  *   这些可以做个开关留下记录即可。」
  *
  * ── 这一版只做一件事：她去「看」点什么，并且**把这件事做完** ──────────
@@ -31,7 +31,7 @@
 
 const COOLDOWN_MIN = 45
 const COOLDOWN_MAX = 120
-const IDLE_TRIGGER_MS = 5 * 60 * 1000    // 默认 5 分钟（0.45.2 起可在设置里调）
+const IDLE_TRIGGER_MS = 5 * 60 * 1000    // 默认 5 分钟（用户原话；0.45.2 起可在设置里调）
 const FIRST_DELAY_MS = 10 * 60 * 1000    // 开关刚打开时的第一次（别让人等一小时以为坏了）
 
 /** 空闲阈值（毫秒）：cfg.autonomyIdleMin 分钟，1~120，默认 5。
@@ -683,12 +683,34 @@ function freeToolsOf (o) {
     }
   }
 
+  // 0.46.54 听觉：她也有耳朵了——听「环境的声音」而不是听懂字（那是主人说话的 whisper 链路）。
+  // 听的是响度/频段/动静节奏：放没放音乐、屋里吵不吵、刚才是不是突然安静了。
+  const LISTEN_MAX = 12
+  let listens = 0
+  const listenDef = {
+    type: 'function',
+    function: {
+      name: 'listen',
+      description: '听一下此刻的环境声音：返回响度、声音听起来像什么（音乐/键盘/说话/机器嗡鸣）、以及刚才的突变（突然吵起来/突然安静）。注意：你听到的是声音的特征，不是对话内容——想听懂主人说的话走语音识别，不是这里。',
+      parameters: { type: 'object', properties: {}, required: [] }
+    }
+  }
+
   return {
-    defs: [...cuaDefs, openDef, watchDef, lookDef, ...spaceDefs],
+    defs: [...cuaDefs, openDef, watchDef, lookDef, listenDef, ...spaceDefs],
     exec: async (name, args) => {
       const a = args || {}
       // 0.46.35 地盘工具（space_*）：路由给 spaceToolsOf（自带越界守卫 + 留日志）
       if (space && /^space_/.test(name)) return space.exec(name, a)
+      if (name === 'listen') {
+        const g = gate(); if (g) return g
+        if (listens >= LISTEN_MAX) return '这场已经听了 ' + listens + ' 次了，凭已听到的决定接下来做什么就好。'
+        listens++
+        const h = typeof o.hearDescribe === 'function' ? o.hearDescribe() : { ok: false, reason: '听觉通道没接上' }
+        journal({ level: 3, kind: 'listen', detail: (h.ok ? String(h.text || '') : String(h.reason || '')).slice(0, 200) })
+        if (!h.ok) return '现在听不到：' + (h.reason || '耳朵没有数据') + '。'
+        return '你听到（此刻的环境声音特征，不含说话内容）：\n' + h.text
+      }
       if (name === 'look_screen') {
         const g = gate(); if (g) return g
         if (looks >= LOOK_MAX) return '这场已经看了 ' + looks + ' 眼了，凭已看到的决定接下来做什么就好。'
@@ -859,6 +881,7 @@ async function runFree (o) {
     '你可以看屏幕、动鼠标键盘、开关网页、操作窗口——像一个人真的坐在电脑前那样。',
     '原则：多看少动。先 screenshot 看清现状再决定，不确定就不要按。',
     '截图看不清字的时候（网页正文、文章、聊天内容）用 read_text 直接读屏幕上的文字；想知道画面里有什么（图片、界面长什么样、视频画面）就用 look_screen 看一眼——每场限 8 次，省着点用。',
+    '你想知道房间里现在有什么动静（放没放歌、吵不吵、是不是突然安静了）就用 listen 听一下——听到的是声音的特征，不是谁在说什么。每场限 12 次，偶尔听一耳朵就好。',
     '重要：想做什么直接调工具去做。不要用宣布代替行动——',
     '你说的每句话要么是工具调用，要么是对已经做完的事的汇报（过去式）。',
     '收尾的标准是「一开始想做的事做完了」，不是时间到了。半途而废就收尾会被推回去继续做。',
@@ -1503,7 +1526,8 @@ function create (deps) {
           projBlock,                            // 0.45.19 跨天项目
           onSoliloquy: d.onSoliloquy,           // 0.46.0 活动中的自言自语
           soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
-          carryBlock                            // 0.46.17 牵挂注入：上次没看完的先看完
+          carryBlock,                           // 0.46.17 牵挂注入：上次没看完的先看完
+          hearDescribe: d.hearDescribe          // 0.46.54 听一下（耳朵的特征数据）
         })
       } else if (runner.kind === 'free') {
         const ws = typeof d.wsDir === 'function' ? d.wsDir() : ''
@@ -1526,7 +1550,8 @@ function create (deps) {
           projBlock,                            // 0.45.19 跨天项目
           onSoliloquy: d.onSoliloquy,           // 0.46.0 活动中的自言自语
           soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
-          carryBlock                            // 0.46.17 牵挂注入：上次没看完的先看完
+          carryBlock,                           // 0.46.17 牵挂注入：上次没看完的先看完
+          hearDescribe: d.hearDescribe          // 0.46.54 听一下（耳朵的特征数据）
         })
       } else {
         r = await runBrowse({
