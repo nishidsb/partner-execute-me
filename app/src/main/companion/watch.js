@@ -523,6 +523,12 @@ function createWatch ({ cfgGet, cfgPatch, shoot, chat, getContext, say, isFullsc
       if (!manual && rhythm) {
         const g = rhythm.ask('speech')
         if (!g.ok) {
+          // 0.46.51 事件驱动：她真的看到了想说的东西——这不是「到点了」，
+          // 是事件。申请把开口权提前（刹车全保留：最小间隔/预算硬顶/每日上限），
+          // 让 pending 那句「憋了一会儿还是说了」，而不是过期作废。
+          if (g.why === 'not-yet') {
+            try { rhythm.poke('watch: ' + String(v.comment || '').slice(0, 24)) } catch { }
+          }
           if (!pending) { pending = { text: v.comment, at: Date.now(), mood: v.mood }; state.deferred = 1 }
           state.skipped++
           state.lastSkip = 'rhythm:' + g.why

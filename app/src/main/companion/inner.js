@@ -263,6 +263,23 @@ function noteSelf (desc) { ev('self', desc) }
  */
 function noteSuppress (text) { ev('suppress', text) }
 
+/** 0.46.50 最近咽回去的念头（suppress 事件，最新的在最后）。
+ *  两个消费口：① 日记时间线（timelineOf 已带「我本来想说但没说」）；
+ *  ② 嘀咕素材（chatter.decide 注入，让她可以把憋着的念头换个说法漏出来）。
+ *  注意：不算「说过的话」——绝不进 recentVoices 镜子，否则她会跟自己的
+ *  念头撞车、漏出来的每一句又被吞回去。 */
+function suppressRecent (n, sinceMs) {
+  if (!ctx.wsDir) return []
+  try {
+    const since = Number(sinceMs) > 0 ? Date.now() - Number(sinceMs) : 0
+    const list = self.readEvents(ctx.wsDir)
+      .filter((e) => e && e.kind === 'suppress' && e.text)
+      .filter((e) => !since || (Number(e.t) || 0) >= since)
+    const k = Number(n)
+    return (k > 0 ? list.slice(-k) : list).map((e) => String(e.text).replace(/\s+/g, ' ').slice(0, 60))
+  } catch { return [] }
+}
+
 /**
  * 她主动说完一句话后调用：等 ANSWER_WINDOW 看有没有回应。
  * 没有 → 记一次「被无视」。定时器在 startDaily 里统一扫。
@@ -686,6 +703,7 @@ module.exports = {
   displeasure: () => (ctx.wsDir ? self.effDispleasure(self.getState(ctx.wsDir)) : 0),
   noteSelf,
   noteSuppress,
+  suppressRecent,
   noteObserve,
   observesToday,
   lastVoiceAt,

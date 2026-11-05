@@ -219,3 +219,40 @@ test('第一句封顶 10 分钟：掷出长间隔也不会让刚打开的人以�
   r.note('speech')
   assert.ok(r.status().nextInMs > 10 * 60_000, '第二句之后的间隔不封顶')
 })
+
+// ── 0.46.51 事件驱动 poke：她「看到什么忍不住要说」时，把开口权提前 ──
+// 之前的病：判读出值得说的话，但 nextAt 在一两个多小时外 → pending 6 分钟
+// 过期作废。poke 只提前时机，刹车（最小间隔/预算硬顶/每日上限/睡眠）全保留。
+test('0.46.51 poke：not-yet 时把 nextAt 提前到 ~2 分钟内，min-gap 内拒', () => {
+  let t = 1_000_000_000_000
+  const inst = createRhythm({ now: () => t, rand: () => 0.5, cfgGet: () => ({ proactivePerHour: 3 }), log: () => { } })
+  inst.note('speech')   // 刚说过 → nextAt 落在远处
+  assert.ok(inst._nextAt() - t > 60_000)
+  t += 60_000           // 1 分钟后：还在 min-gap 里
+  assert.strictEqual(inst.poke('测试').why, 'min-gap', '最小间隔是硬底线，poke 也不能破')
+  t += 3 * 60_000       // 过了 min-gap，但 nextAt 还远
+  const p = inst.poke('watch: 看到值得说的')
+  assert.strictEqual(p.ok, true, '事件触发应放行：' + JSON.stringify(p))
+  assert.ok(p.delayMs >= 75_000 && p.delayMs <= 150_000, '提前后 1~2.5 分钟内开口')
+  assert.ok(inst._nextAt() - t <= 150_000, 'nextAt 真被拽近了')
+  // 5 分钟冷却：期间再 poke 拒绝
+  t += 60_000
+  assert.strictEqual(inst.poke('again').why, 'poke-cooldown', 'poke 自身有冷却，防每分钟拽表')
+})
+
+test('0.46.51 poke：预算硬顶/每日上限耗尽时不开口子', () => {
+  let t = 2_000_000_000_000
+  const stamps = []
+  const inst = createRhythm({ now: () => t, rand: () => 0.5, cfgGet: () => ({ proactivePerHour: 1 }), log: () => { } })
+  // 模拟过去一小时已说了 hard(=2) 次
+  for (let i = 0; i < 2; i++) { stamps.push(t - i * 60_000); inst.note('speech') }
+  // note 会推进 lastAt；直接把 stamps 打回一小时窗口内再说两次
+  const r2 = createRhythm({
+    now: () => t, rand: () => 0.5, cfgGet: () => ({ proactivePerHour: 1 }),
+    log: () => { }, persist: { load: () => null, save: () => { } }
+  })
+  r2.start()
+  // 暴力说满 hard：直接 note 两次（note 不查闸）
+  r2.note('speech'); r2.note('speech')
+  assert.strictEqual(r2.poke('超预算').why, 'hourly-hard', '预算硬顶内 poke 不放行')
+})

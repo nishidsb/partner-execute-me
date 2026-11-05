@@ -150,3 +150,28 @@ test('autonomy.create + needs：散场泄压、冷却按压力缩放', async () 
   assert.ok(full < 1)
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+// ── 0.46.51 情绪残余（deflated）：被打断自主活动 → 扫兴挂一会儿 → 自然消散 ──
+// 不是压力（不驱动出门），是瞬时心情：影响接下来几句嘀咕的语气。
+test('0.46.51 interrupt 记上扫兴残量，session 不留残余，随时间消散', () => {
+  const t0 = 10 * H
+  const itp = needs.dischargeOf(needs.newState(t0), t0, 'interrupt')
+  assert.strictEqual(itp.deflated, needs.DEFLATED_ON_INTERRUPT, '被打断记上扫兴')
+  // 消散：每分钟 -3 → 55 约撑 18 分钟
+  const t10 = needs.gainOf(itp, t0 + 10 * 60_000, {})
+  assert.ok(t10.deflated > 20 && t10.deflated < 30, '10 分钟后还剩一点：' + t10.deflated)
+  const t40 = needs.gainOf(itp, t0 + 40 * 60_000, {})
+  assert.strictEqual(t40.deflated, 0, '40 分钟后散尽')
+  // 语气块：残量足时出声（强），淡了留影子（弱），散尽闭嘴
+  assert.ok(needs.moodBlockOf(itp).includes('扫兴'), '强残量有完整语气块')
+  assert.ok(needs.moodBlockOf(t10).includes('快散了'), '弱残量只留影子')
+  assert.strictEqual(needs.moodBlockOf(t40), '', '散尽不出声——不装模作样')
+  // 正常收场不留残余
+  const ses = needs.dischargeOf(needs.newState(t0), t0, 'session')
+  assert.strictEqual(ses.deflated, 0, 'session 是她自己的收场，不扫兴')
+  // 状态落盘往返带 deflated
+  const ws = tmp()
+  needs.saveState(ws, itp)
+  const back = needs.loadState(ws, t0)
+  assert.strictEqual(back.deflated, needs.DEFLATED_ON_INTERRUPT, 'deflated 落盘不丢')
+})

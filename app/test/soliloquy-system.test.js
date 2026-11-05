@@ -294,16 +294,34 @@ test('0.46.42 复读闸/提示词镜子走 90 分钟时间窗（无界「最近 
   assert.match(aut, /if \(gameOn\(\)\) return/, '游戏模式中不起场')
 })
 
-test('0.46.46 复读闸泄压阀：连续咽回去 ≥5 句放行一轮，但 score≥0.5 的近似原句照拦（11-04 18:38~19:00 持续话题风暴 24 句全吞实锤）', () => {
+test('0.46.46 复读闸泄压阀（0.46.50 放宽：真机 210 句/天被吞，用户「负反馈还是有些保守了」）：连续咽回去 ≥3 句放行一轮，score≥0.65 的近似原句照拦', () => {
   const chatter = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/chatter.js'), 'utf8')
   assert.match(chatter, /let swallowStreak = 0/, '泄压计数声明')
-  assert.match(chatter, /const SWALLOW_ESCAPE = 5/, '泄压阈值=5 句')
-  assert.match(chatter, /const SWALLOW_ESC_SCORE = 0\.5/, '泄压时仍拦近似原句的分数线')
+  assert.match(chatter, /const SWALLOW_ESCAPE = 3/, '泄压阈值放宽=3 句（原 5）')
+  assert.match(chatter, /const SWALLOW_ESC_SCORE = 0\.65/, '泄压分数线放宽=0.65（原 0.5，「话题相近内容不同」更容易活）')
   assert.match(chatter, /const escape = swallowStreak >= SWALLOW_ESCAPE/, '达到阈值才泄压')
-  assert.match(chatter, /!\(escape && rep\.score < SWALLOW_ESC_SCORE\)/, '泄压只放 score<0.5 的话题句，最像的变体照吞')
+  assert.match(chatter, /!\(escape && rep\.score < SWALLOW_ESC_SCORE\)/, '泄压只放 score<0.65 的话题句，最像的变体照吞')
   assert.match(chatter, /swallowStreak\+\+/, '每吞一句计数+1')
   assert.match(chatter, /if \(keep\.length\) swallowStreak = 0/, '放行即归零')
   assert.match(chatter, /连续咽回去 ' \+ swallowStreak \+ ' 句，泄压放行一轮/, '泄压留痕')
+})
+
+test('0.46.50 被吞句变资产：咽回去的话落 suppress 事件（日记「想说说没说」+ 念头池低频漏出），不再无痕消失', () => {
+  const chatter = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/chatter.js'), 'utf8')
+  assert.match(chatter, /const noteSwallowed = deps\.noteSwallowed \|\| null/, '宿主注入吞句入账回调')
+  assert.match(chatter, /const swallowedRecent = deps\.swallowedRecent \|\| \(\(\) => \[\]\)/, '宿主注入念头池读取')
+  assert.match(chatter, /if \(noteSwallowed\) noteSwallowed\(line\)/, '复读闸吞掉的每一句都入账（原来只进日志）')
+  assert.match(chatter, /【你刚才想过又咽回去的话/, 'decide 注入念头池素材块')
+  assert.match(chatter, /别原样照搬（原样会再被收回去一次）/, '注入块明确要求变形（防漏出即撞车死循环）')
+  const inner = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/inner.js'), 'utf8')
+  assert.match(inner, /function suppressRecent \(n, sinceMs\)/, 'inner 提供念头池读取（suppress 事件）')
+  assert.match(inner, /e\.kind === 'suppress'/, '只取 suppress 类型——绝不进 recentVoices 镜子')
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/index.js'), 'utf8')
+  assert.match(idx, /noteSwallowed: \(text\) => \{ try \{ inner\.noteSuppress\(text\) \} catch \{ \} \}/, '宿主接线：吞句 → noteSuppress')
+  assert.match(idx, /inner\.suppressRecent\(n, 2 \* 60 \* 60 \* 1000\)/, '宿主接线：念头池取近 2 小时')
+  // goals 驱动自主选题
+  assert.match(idx, /0\.46\.50 她自己立的目标进选题池/, 'autonomyPool 读 active goals')
+  assert.match(idx, /if \(gt\.length\) out\.thoughts = gt/, 'goals 进 thoughts（pickTopic 最高优先来源）')
 })
 
 test('0.46.48 朗读中断即作废：新朗读顶掉旧合成（Fish signal 取消 + 本地队列 cancelPending + 渲染层代次丢弃）——聊天到后面了别再念前面的（用户 22:47 实锤）', () => {

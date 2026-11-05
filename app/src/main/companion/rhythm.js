@@ -213,6 +213,45 @@ function createRhythm (deps) {
     return { ok: true, why: kind }
   }
 
+  // ── 0.46.51 事件驱动：poke ─────────────────────────────────────────
+  // 「到点可以说」是计时器，不是活人。活人是「看到什么忍不住要说」。
+  // poke = 通道撞上了真实事件（她判读出值得说的画面/冒出一个念头），申请把
+  // 下一次开口权提前。刹车全保留：最小间隔、预算硬顶、每日上限、睡眠闸一个
+  // 都不少——只是不再傻等 nextAt。5 分钟一次的 poke 上限防「每 60 秒看一眼
+  // 屏就每 60 秒拽一次表」。
+  const POKE_COOLDOWN = 5 * 60_000
+  const POKE_DELAY_MIN = 75_000    // 提前后等多久：1~2.5 分钟，像「憋了一下还是说了」
+  const POKE_DELAY_VAR = 75_000
+  let lastPokeAt = 0
+
+  /**
+   * 事件触发：把下一次开口权提前（不改预算记账）。
+   * @param {string} reason 留痕用
+   * @returns {{ok:boolean, why:string, delayMs?:number}}
+   */
+  function poke (reason) {
+    const t = now()
+    if (paused) return { ok: false, why: 'paused' }
+    if (dailyState.isAsleep(new Date(t))) return { ok: false, why: 'asleep' }
+    if (t - lastPokeAt < POKE_COOLDOWN) return { ok: false, why: 'poke-cooldown' }
+    const c = cfg()
+    const b = budgetOf(c.perHour)
+    rollDay()
+    prune()
+    if (dayCount >= c.dailyMax) return { ok: false, why: 'daily-cap' }
+    if (usedIn(3_600_000) >= b.hard) return { ok: false, why: 'hourly-hard' }
+    const since = lastAt ? t - lastAt : Infinity
+    if (since < c.minGapMs) return { ok: false, why: 'min-gap' }
+    const delay = POKE_DELAY_MIN + Math.round(rand() * POKE_DELAY_VAR)
+    const target = t + delay
+    if (nextAt && nextAt <= target) return { ok: false, why: 'already-soon' }
+    nextAt = target
+    lastPokeAt = t
+    saveState()
+    log('[rhythm] 事件触发提前开口（' + String(reason || 'event').slice(0, 40) + '）：约 ' + Math.round(delay / 1000) + ' 秒后')
+    return { ok: true, why: 'poked', delayMs: delay }
+  }
+
   /** 记一次真的开口了（由宿主在 say 成功之后调） */
   function note (kind) {
     const c = cfg()
@@ -255,7 +294,7 @@ function createRhythm (deps) {
   }
 
   return {
-    ask, note, start, status,
+    ask, note, start, status, poke,
     /** 全部暂停（静音时段等场景由宿主决定） */
     setPaused (v) { paused = !!v },
     _stamps: () => stamps,

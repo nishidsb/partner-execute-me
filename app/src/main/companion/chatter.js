@@ -123,6 +123,13 @@ function createChatter (deps) {
   // 0.46.0：连续独白状态机 + 此刻的活动素材（宿主注入，可为空）
   const soliloquy = deps.soliloquy || null
   const activity = deps.activity || (() => '')
+  // 0.46.50 被吞句变资产：咽回去的话不再无痕消失——① 落事件流（日记里就是
+  // 「我本来想说但没说」）；② decide 时把最近的念头池递回去，她可以把憋着的
+  // 念头换个说法漏出来。都不算「说过的话」（不进 recentVoices 镜子）。
+  const noteSwallowed = deps.noteSwallowed || null
+  const swallowedRecent = deps.swallowedRecent || (() => [])
+  // 0.46.51 情绪残余：被打断自主活动的扫兴残量（needs.deflated），影响语气
+  const mood = deps.mood || null
 
   let timer = null
   let dayKey = ''
@@ -138,8 +145,11 @@ function createChatter (deps) {
   // 近似原句（score ≥ 0.5 的最像变体照吞），0.45.85「变着花样重复同一句」的
   // 防护保住底线。
   let swallowStreak = 0
-  const SWALLOW_ESCAPE = 5
-  const SWALLOW_ESC_SCORE = 0.5
+  // 0.46.50 泄压放宽（用户 11-05「得到的负反馈还是有些保守了」）：真机 210 句/天被吞，
+  // 5 句才泄压 + 0.5 分数线压得太死。阈值 5→3（持续话题下 ~2 分钟就能漏一轮），
+  // 分数线 0.5→0.65（「话题相近但内容不同」的句子更容易活下来，最像的变体照吞）。
+  const SWALLOW_ESCAPE = 3
+  const SWALLOW_ESC_SCORE = 0.65
 
   function todayKey () {
     const d = new Date()
@@ -193,6 +203,13 @@ function createChatter (deps) {
     try { voices = String(recentVoices(8, voicesim.REPEAT_WINDOW_MS) || '') } catch { }
     let act = ''
     try { act = String(activity() || '') } catch { }
+    // 0.46.50 念头池：最近咽回去的话递回去——她每天有一多半的生成被复读闸吃掉，
+    // 这些念头是「想说没说的话」，攒着可以漏。只取近 2 小时的（更早的进日记就好）。
+    let swallowed = ''
+    try { swallowed = (swallowedRecent(3) || []).join('\n') } catch { }
+    // 0.46.51 情绪残余：有扫兴残量就带一句语气基调（自然消散，没有就不出声）
+    let moodLine = ''
+    try { moodLine = String((mood && mood()) || '') } catch { }
     // 0.46.18 语言跟设置走：replyLang 固定语言时注入【语言要求】（auto=跟人设走，不注入）
     const langBlock = monologueLangBlock(c.replyLang)
     // 独白状态：正在独白就让她接着说（或收尾）
@@ -217,6 +234,10 @@ function createChatter (deps) {
           ...(voices ? [{ role: 'system', content: '【你最近几次主动说过的话（别再重复这些话题、道具和句式，换点别的来说）】\n' + voices }] : []),
           // 0.46.0：她此刻在干什么（前台窗口/自主活动纪要）——嘀咕要有内容依据，不许凭空编正在看的东西
           ...(act ? [{ role: 'system', content: '【你此刻的处境（屏幕前正在发生的事；和你的嘀咕对不上就别硬扯）】\n' + act }] : []),
+          // 0.46.50 她憋着的念头：可以换个说法漏出来，多数时候放着也好
+          ...(swallowed ? [{ role: 'system', content: '【你刚才想过又咽回去的话（复读闸替你收着的）】\n' + swallowed + '\n这些都是你想说又收住的念头。想说的可以现在漏出来——必须换个说法：更短、更随口、换个角度或只漏半句，别原样照搬（原样会再被收回去一次）；多数时候放着不说也完全正常，别为漏而漏。' }] : []),
+          // 0.46.51 情绪残余：被打断的扫兴还没散时，嘀咕带一点那个语气
+          ...(moodLine ? [{ role: 'system', content: '【你此刻的心情底色】\n' + moodLine }] : []),
           ...(langBlock ? [{ role: 'system', content: langBlock }] : []),
           { role: 'user', content: (monoBlock ? monoBlock + '\n' : '') + frame + '\n' + DECIDE_BODY + '\n\n【当前时间】' + new Date().toLocaleString('zh-CN', { hour12: false }) }
         ],
@@ -279,6 +300,10 @@ function createChatter (deps) {
             // 泄压时只拦最像的变体（score ≥ SWALLOW_ESC_SCORE），话题相近但内容不同的放行
             if (rep && rep.repeat && !(escape && rep.score < SWALLOW_ESC_SCORE)) {
               swallowStreak++
+              // 0.46.50 被吞句入账：进事件流 suppress 类型——日记里成为
+              // 「我本来想说但没说」，decide 时还能从念头池里换个说法漏出来。
+              // 原来只进日志，每天 200+ 句生成无痕消失。
+              try { if (noteSwallowed) noteSwallowed(line) } catch { }
               log('[chatter] 跟最近说过的话撞车（' + rep.against.slice(0, 20) + '），这句咽回去：' + line.slice(0, 30))
               return false
             }

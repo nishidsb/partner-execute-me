@@ -1277,6 +1277,11 @@ function getChatter () {
     rhythm: getRhythm(),
     say: sayNarration,
     note: (text) => { try { inner.noteNarration(text) } catch { } },
+    // 0.46.50 被吞句变资产：咽回去的话落 suppress 事件（日记「想说说没说」+ 念头池）
+    noteSwallowed: (text) => { try { inner.noteSuppress(text) } catch { } },
+    swallowedRecent: (n) => { try { return inner.suppressRecent(n, 2 * 60 * 60 * 1000) } catch { return [] } },
+    // 0.46.51 情绪残余：被打断自主活动的扫兴残量（needs.deflated → 语气基调）
+    mood: () => { try { return getNeeds().moodBlock() } catch { return '' } },
     // 0.46.0 自言自语系统：独白状态 + 此刻的活动素材（嘀咕要有内容依据）
     soliloquy: getSoliloquy(),
     activity: () => {
@@ -2144,6 +2149,17 @@ function autonomyPool () {
       .map((l) => l.replace(/^-\s*\[[^\]]*\]\s*/, '').replace(/（[^）]*）\s*$/, '').trim())
       .filter((t) => t.length >= 2 && t.length <= 20)
       .slice(0, 40)
+    // 0.46.50 她自己立的目标进选题池（thoughts = 「她最近在想的」，pickTopic 最高优先）——
+    // goals.json 11-05 实锤她在真用（「自分から誘ってみる」「動画で調べてみる」），
+    // 但自主活动选题从来没读过它：她立的「想试试用视频查资料」不会变成下一场的行动。
+    try {
+      const g = getGoals()
+      const gt = (g ? g.listRaw() : [])
+        .filter((x) => x && x.status === 'active')
+        .map((x) => String(x.title || '').trim())
+        .filter((t) => t.length >= 2 && t.length <= 40)
+      if (gt.length) out.thoughts = gt
+    } catch { }
   } catch { }
   return out
 }

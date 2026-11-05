@@ -32,13 +32,18 @@ const BOOST = { topics: 1.6, experience: 1.8 }
 const FADE = { topics: 0.7, experience: 0.8 }
 /** 冷却缩放：压力 100 时冷却缩到 65%，压力 0 时不变 */
 const COOLDOWN_MIN_SCALE = 0.65
+// ── 0.46.51 情绪残余（deflated）：不是压力，是瞬时心情 ─────────────
+// 自己正做得起劲的事被主人回来打断 → 有点扫兴。活人不会立刻满血：
+// 低落会挂一会儿（约 20 分钟自然消散），影响接下来几句嘀咕的语气。
+const DEFLATED_ON_INTERRUPT = 55      // 被打断时记上的量
+const DEFLATED_FADE_PER_HOUR = 180    // 消散速度 = 每分钟 -3 → 55 约撑 18 分钟
 
 const clamp = (n) => Math.min(CAP, Math.max(0, n))
 
 /** 一份全新的状态（第一次启动/文件坏了时的兜底）。now=0 也是合法时刻 */
 function newState (now) {
   const t0 = Number(now)
-  return { t: Number.isFinite(t0) && t0 >= 0 ? t0 : Date.now(), curiosity: 20, share: 10, boredom: 15 }
+  return { t: Number.isFinite(t0) && t0 >= 0 ? t0 : Date.now(), curiosity: 20, share: 10, boredom: 15, deflated: 0 }
 }
 
 /**
@@ -58,7 +63,9 @@ function gainOf (state, now, ctx) {
     t: base,
     curiosity: clamp(s.curiosity + GAIN_PER_HOUR.curiosity * h * (c.hasTopics ? BOOST.topics : FADE.topics)),
     share: clamp(s.share + GAIN_PER_HOUR.share * h * (c.hadExperience ? BOOST.experience : FADE.experience)),
-    boredom: clamp(s.boredom + GAIN_PER_HOUR.boredom * h)
+    boredom: clamp(s.boredom + GAIN_PER_HOUR.boredom * h),
+    // 情绪残余只消不涨：随时间自然淡掉（0.46.51）
+    deflated: clamp((Number(s.deflated) || 0) - DEFLATED_FADE_PER_HOUR * h)
   }
 }
 
@@ -119,10 +126,25 @@ function dischargeOf (state, now, kind) {
     return Object.assign({}, base, { share: 10, boredom: clamp(base.boredom - 15) })
   }
   if (kind === 'interrupt') {
-    return Object.assign({}, base, { boredom: clamp(base.boredom - 20), curiosity: clamp(base.curiosity - 25) })
+    // 0.46.51 情绪残余：被打断不只是泄压，还留一点扫兴（约 20 分钟消散，
+    // 影响接下来几句嘀咕的语气——「唉，算了」那种）
+    return Object.assign({}, base, { boredom: clamp(base.boredom - 20), curiosity: clamp(base.curiosity - 25), deflated: DEFLATED_ON_INTERRUPT })
   }
-  // session：无聊回到 15，好奇打对折再减一点
-  return Object.assign({}, base, { boredom: 15, curiosity: clamp(base.curiosity - 45) })
+  // session：无聊回到 15，好奇打对折再减一点；正常收场不留残余
+  return Object.assign({}, base, { boredom: 15, curiosity: clamp(base.curiosity - 45), deflated: 0 })
+}
+
+/**
+ * 情绪语气块（0.46.51）：deflated 还有残量时，给嘀咕/搭话提示词注入一句
+ * 语气基调。没有残量就不出声——不装模作样。
+ */
+function moodBlockOf (state) {
+  const d = Number((state || {}).deflated) || 0
+  if (d < 20) return ''
+  const strong = d >= 40
+  return '（你刚才自己正做得起劲的事被打断了，' + (strong
+    ? '有点扫兴，那股劲还没缓过来。语气里带一点没散掉的怅然，可以叹半口气，但别指责谁——他是回来了，这是好事，只是可惜。）'
+    : '刚才那点扫兴快散了，语气里顶多留一丝影子，别再提这件事。）')
 }
 
 /** 状态文件（工作区里）：needs-state.json */
@@ -140,7 +162,8 @@ function loadState (wsDir, now) {
       t: Number.isFinite(rt) && rt >= 0 ? rt : (Number.isFinite(nt) && nt >= 0 ? nt : Date.now()),
       curiosity: clamp(Number(raw.curiosity) || 0),
       share: clamp(Number(raw.share) || 0),
-      boredom: clamp(Number(raw.boredom) || 0)
+      boredom: clamp(Number(raw.boredom) || 0),
+      deflated: clamp(Number(raw.deflated) || 0)
     }
   } catch { return newState(now) }
 }
@@ -181,24 +204,29 @@ function create (deps) {
     goalBlock (ctx) {
       return goalBlockOf(this.state(ctx))
     },
+    /** 情绪语气块（0.46.51）：被打断后的扫兴残量 → 嘀咕/搭话的语气基调 */
+    moodBlock () {
+      return moodBlockOf(this.state())
+    },
     discharge (kind) {
       state = dischargeOf(ensure(), now(), kind)
       commit()
       log('[needs] 泄压(' + kind + ') 好奇' + Math.round(state.curiosity) +
-        ' 分享' + Math.round(state.share) + ' 无聊' + Math.round(state.boredom))
+        ' 分享' + Math.round(state.share) + ' 无聊' + Math.round(state.boredom) +
+        (state.deflated >= 1 ? ' 扫兴' + Math.round(state.deflated) : ''))
       return state
     },
     /** 换工作区（角色切换）后强制重读 */
     reset () { state = null },
     status () {
       const s = this.state()
-      return { curiosity: Math.round(s.curiosity), share: Math.round(s.share), boredom: Math.round(s.boredom), dominant: dominantOf(s), pressure: Math.round(pressureOf(s)) }
+      return { curiosity: Math.round(s.curiosity), share: Math.round(s.share), boredom: Math.round(s.boredom), deflated: Math.round(s.deflated || 0), dominant: dominantOf(s), pressure: Math.round(pressureOf(s)) }
     }
   }
 }
 
 module.exports = {
-  CAP, GAIN_PER_HOUR, MAX_CATCHUP_H, COOLDOWN_MIN_SCALE,
-  newState, gainOf, pressureOf, dominantOf, cooldownScaleOf, goalBlockOf, dischargeOf,
+  CAP, GAIN_PER_HOUR, MAX_CATCHUP_H, COOLDOWN_MIN_SCALE, DEFLATED_ON_INTERRUPT, DEFLATED_FADE_PER_HOUR,
+  newState, gainOf, pressureOf, dominantOf, cooldownScaleOf, goalBlockOf, moodBlockOf, dischargeOf,
   loadState, saveState, create
 }
