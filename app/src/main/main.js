@@ -787,10 +787,15 @@ app.whenReady().then(async () => {
   // 0.46.55 听觉系统声兜底：渲染层 getDisplayMedia 拿 Windows 音频回环（loopback），
   // 自动批准不弹选择器。用途只有一个：hear 特征提取——主人戴耳机放歌/本机没麦时，
   // 她的麦克风耳朵够不着，就听「电脑自己发出的声音」。只提特征，不录音不转写。
+  // 注意：video 必须给 desktopCapturer 的真实 source（'screen' 字符串简写实测 32 报
+  // 「Error starting capture」，23:20 真机实锤），audio 才能用 'loopback'。
   try {
-    const { session } = require('electron')
+    const { session, desktopCapturer } = require('electron')
     session.defaultSession.setDisplayMediaRequestHandler((_req, cb) => {
-      cb({ video: 'screen', audio: 'loopback' })
+      desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
+        if (sources.length) cb({ video: sources[0], audio: 'loopback' })
+        else cb({})
+      }).catch(() => cb({}))
     }, { useSystemPicker: false })
     log('[boot] displayMedia 处理器已挂（audio=loopback，听觉系统声兜底用）')
   } catch (e) { log('[boot] displayMedia 处理器挂载失败: ' + e.message) }
