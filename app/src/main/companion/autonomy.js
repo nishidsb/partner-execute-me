@@ -903,10 +903,15 @@ async function runFree (o) {
   /* 0.46.4 被打断的收尾分享：以前主人回来 = 纯静默中止，用户只看到她开的一堆网页，
      从来听不到她在干嘛（11-02 投诉「开莫名其妙的网页又不分享」）。这里本地拼一句
      交代（不调 LLM：被打断时要说得快，也躲开 reasoning 模型空回复的坑），
-     走自语通道（气泡+低频朗读）。内容取最近一次 open 的站点，没有就给通用句。 */
+     走自语通道（气泡+低频朗读）。内容取最近一次 open 的站点，没有就给通用句。
+     0.46.56 两处收敛：① 晚安静默期内直接跳过（深夜不该「おかえり」）；② 模板
+     轮换（11-06 投诉：每次回来都是同一句「あ、おかえり。いまね、URL を覗いてた
+     とこ」——复读机观感。4 个变体轮着来，裸域名也只偶尔提）。 */
+  let backShareSeq = -1
   const backShare = async () => {
     try {
       if (typeof opt.onSoliloquy !== 'function') return
+      if (typeof opt.sleepQuiet === 'function' && opt.sleepQuiet()) return
       let site = ''
       for (let i = events.length - 1; i >= 0; i--) {
         const e = events[i]
@@ -914,9 +919,19 @@ async function runFree (o) {
           try { site = new URL(String(e.detail)).host.replace(/^www\./, ''); break } catch { }
         }
       }
-      const line = site
-        ? 'あ、おかえり。いまね、' + site + ' をちょっと覗いてたとこ。'
-        : 'あ、おかえり。いまちょっといろいろ見てたとこ。'
+      const withSite = [
+        (s) => 'あ、おかえり。いまね、' + s + ' をちょっと覗いてたとこ。',
+        (s) => 'あ、戻ったんだ。' + s + ' ばっか見てて、手が止まってた。',
+        (s) => 'おかえり。' + s + ' でちょっと調べものしてたとこ。'
+      ]
+      const noSite = [
+        () => 'あ、おかえり。いまちょっといろいろ見てたとこ。',
+        () => 'あ、おかえり。ん、大したことしてないよ。',
+        () => 'おかえり。ちょっと画面のほうに夢中だった。'
+      ]
+      const pool2 = site ? withSite : noSite
+      backShareSeq = (backShareSeq + 1) % pool2.length
+      const line = pool2[backShareSeq](site)
       await opt.onSoliloquy(line)
     } catch { }
   }
@@ -1408,6 +1423,10 @@ function create (deps) {
   // 当成「主人离开」，她起场按 alt+tab 把主人的全屏切出去了）。
   // 依赖可注入（测试环境无 gameMode 模块时如实返回不在游戏中）。
   const gameOn = d.gameOn || (() => { try { return require('../gameMode').state().on } catch { return false } })
+  // 0.46.56 晚安静默闸：他说过晚安、静默还没到期 → 她「睡了」，不起场也不发收场自语。
+  // （11-05 夜实锤：23:18 晚安，01:06/02:38/03:27/04:53/05:39 五条「あ、おかえり」气泡——
+  //   黏人/欢迎回来都有 sleepUntil 闸，唯独自主活动这条线没有。）
+  const sleepQuietNow = () => { try { return typeof d.sleepQuiet === 'function' && !!d.sleepQuiet() } catch { return false } }
   const pool = d.pool || (() => ({}))
   const now = d.now || Date.now
   const rand = d.rand || Math.random
@@ -1461,6 +1480,7 @@ function create (deps) {
       if (idle * 1000 < idleMs) return                 // 主人在，不占电脑
       if (busy()) return                               // 正在聊天/正在执行别的任务
       if (gameOn()) return                             // 0.46.42 主人在全屏游戏/看视频，不起场
+      if (sleepQuietNow()) return                      // 0.46.56 晚安静默期内不起场（她说过她去睡了）
       if (now() < nextAt) return
       if (todayCount >= Math.max(1, Number(c.autonomyDailyMax) || 6)) return
     } else {
@@ -1551,7 +1571,8 @@ function create (deps) {
           onSoliloquy: d.onSoliloquy,           // 0.46.0 活动中的自言自语
           soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
           carryBlock,                           // 0.46.17 牵挂注入：上次没看完的先看完
-          hearDescribe: d.hearDescribe          // 0.46.54 听一下（耳朵的特征数据）
+          hearDescribe: d.hearDescribe,         // 0.46.54 听一下（耳朵的特征数据）
+          sleepQuiet: sleepQuietNow             // 0.46.56 收场自语的晚安静默闸
         })
       } else {
         r = await runBrowse({

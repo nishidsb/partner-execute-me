@@ -807,7 +807,12 @@ function systemPrompt (char, userText) {
         '3. 你的回复会被合成为语音朗读，任何混入的外语都会被读得很怪，务必检查输出。'
     })
   }
-  sections.push({ key: 'time', text: '【当前时间】' + new Date().toLocaleString('zh-CN', { hour12: false }), priority: 20 })
+  sections.push({
+    key: 'time',
+    text: '【当前时间】' + new Date().toLocaleString('zh-CN', { hour12: false }) +
+      '\n【相对日期换算（硬规则）】历史与记忆里的「今天/明天/昨天/今晚」一律以**那句话记录的日期**为基准换算成绝对日期，再对照当前时间行事——他 11-05 说「明天开始学习」，到了 11-06 那个「明天」就是今天，绝不能照抄原词（11-06 实锤：学习定在当天，她还嘴「明日から」）。',
+    priority: 20
+  })
   /* 0.45.72：历史每条前面带 [月-日 时:分]，主动说的还带来源括注。
    * 不解释一句，模型会把整段历史当「刚才」——用户 11-01 就是这么把凌晨的空椅子陪学
    * 记成「昨晚 10 点多我们一起学习」的。 */
@@ -975,8 +980,8 @@ function togetherBlock () {
     '。这些只是让你心里有数，不必刻意提起，也别每句都提。'
 }
 
-/* 0.45.72 聊天史带时间与来源（真实使用反馈：一大早就出现记忆错乱——深夜说完的话，
- * 第二天早上被她当成「刚才」发生的事）。
+/* 0.45.72 聊天史带时间与来源（设计动机：来自真实使用反馈——一大早的记忆错乱，
+ * 原因是夜里和清晨的独白在史里看起来像刚发生的对话）。
  *
  * 根因不在记忆库，在喂给模型的历史：以前 map 成 {role, content}，at 和 via 全丢。
  * 于是她读到夜里 00:26~02:26 一串「45分間よく頑張ったね」（那是自动陪学对着空椅子说的），
@@ -1408,11 +1413,12 @@ function saveNudgeRec () {
       lastProactiveAt: Number(nudgeRec.lastProactiveAt) || 0,
       nextTryAt: Number(nudgeRec.nextTryAt) || 0,
       baseAt: Number(nudgeRec.baseAt) || 0,
-      sleepUntil: Number(nudgeRec.sleepUntil) || 0
+      sleepUntil: Number(nudgeRec.sleepUntil) || 0,
+      sleepArmed: Number(nudgeRec.sleepArmed) || 0
     }), 'utf8')
   } catch { }
 }
-let nudgeRec = Object.assign({ stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0, baseAt: 0, sleepUntil: 0 }, loadNudgeRec() || {})
+let nudgeRec = Object.assign({ stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0, baseAt: 0, sleepUntil: 0, sleepArmed: 0 }, loadNudgeRec() || {})
 // 0.45.12 欢迎回来的计时（在黏人定时器里顺手维护，省一条独立定时器）
 // 0.45.20 跨重启恢复：只存内存的话，重启后 lastActiveAt=0 → absence 恒 0 → 欢迎回来永不触发
 //（真机实锤：15:18 重启、15:19 走的是普通阶梯而不是欢迎）。状态落 userData/welcome-state.json
@@ -1836,14 +1842,12 @@ async function tryQqReach (stage, idleMs) {
   }
 }
 
-/* 0.45.72 睡前的那句 QQ（真实使用反馈：睡前她也没有主动来 QQ）。
- *
- * 之前有过「寂寞了可以在 QQ 上找他」的约定——
- * 然后整夜一条也没发。
+/* 0.45.72 睡前的那句 QQ（设计动机：来自真实使用反馈——约定了睡前可以去 QQ 找他，
+ * 然后整夜一条也没发，用户觉得「说好的事没发生」。
  * 根因在 nudge tick：`if (sleepUntil) return` 挡在 tryQqReach 前面，而 onSleepDeclared
  * 又把 baseAt 推到他该醒的时刻，于是「去睡了」之后 QQ 通道等于物理断开。
  * 这里不等阶梯：他一道晚安，她就真去 QQ 说一句（reach 的全套红线照旧生效）。 */
-const SLEEP_REACH_HINT = '主人刚刚说他要去睡了。你们之前说好了「想说话的话可以在 QQ 上找他」。' +
+const SLEEP_REACH_HINT = '主人刚刚说他要去睡了。你们今晚说好了「寂寞了可以在 QQ 上找他」。' +
   '现在去 QQ 给他发一句——像手机上的短消息，一两句就够，道个晚安，或者留一句你今晚还想说的话。' +
   '不要问他几点睡、不要要求他回、不要长篇大论。'
 
@@ -1992,7 +1996,8 @@ function startNudge () {
           lastProactiveAt: Number(saved.lastProactiveAt) || 0,
           nextTryAt: Number(saved.nextTryAt) || 0,
           baseAt: Number(saved.baseAt) || 0,
-          sleepUntil: Number(saved.sleepUntil) || 0
+          sleepUntil: Number(saved.sleepUntil) || 0,
+          sleepArmed: Number(saved.sleepArmed) || 0
         })
         log('[nudge] 已恢复上次的黏人状态（静默到 ' + (nudgeRec.sleepUntil ? new Date(nudgeRec.sleepUntil).toLocaleString('zh-CN', { hour12: false }) : '无') + '）')
       }
@@ -2015,6 +2020,20 @@ function startNudge () {
       const now = Date.now()
       if (genAbort) return                                  // 正在聊天不打扰
       const st = presenceState()
+
+      /* 0.46.56 睡醒等待：静默到期 ≠ 他醒了。他没回到电脑前（还在被窝里/手机上）
+         就不开黏人阶梯——否则她按 baseAt=睡醒时刻算出「闲置 15 分钟」，
+         大清早跑去 QQ 催（11-06 06:34/07:42 实锤）。他真的出现在电脑前的那一刻
+         才算「早上好」：计时清零从头起，欢迎回来那条线自然接住。 */
+      if (nudgeRec.sleepArmed && now >= (Number(nudgeRec.sleepUntil) || 0)) {
+        if (st !== 'here') return
+        nudgeRec = Object.assign(nudgeRec, {
+          sleepArmed: 0, sleepUntil: 0, stage: 0, light: false,
+          lastProactiveAt: 0, nextTryAt: 0, baseAt: now
+        })
+        saveNudgeRec()
+        log('[nudge] 早上好：他回到电脑前了，黏人计时重新开始')
+      }
 
       /* 0.45.12 黏人加强版·欢迎回来：离开一阵子刚坐回电脑前，迎一句。
          计时法：here 时不断刷新 lastActiveAt；从 away/gone 回到 here 的那一刻，
@@ -2187,6 +2206,8 @@ function startAutonomy () {
       try { return require('electron').powerMonitor.getSystemIdleTime() } catch { return 0 }
     },
     busy: () => !!genAbort, // 正在对话/生成中不抢电脑
+    // 0.46.56 晚安静默闸：说过晚安还没到睡醒时刻 → 不起场、不发收场自语
+    sleepQuiet: () => !!(nudgeRec.sleepUntil && Date.now() < Number(nudgeRec.sleepUntil)),
     pool: autonomyPool,
     cua: require('../cua'),
     // 0.46.16 她的网页开在自建浏览窗口里（活动结束整窗关掉恢复原状），不再丢进主人默认浏览器
@@ -4617,6 +4638,15 @@ async function speakWithCurrentConfig (text) {
     }
     const cur = character.get() || null
     const voiceName = (cur && cur.voice && cur.voice.sysVoiceName) || c.sysVoiceName || ''
+    /* 0.46.56 系统语音兜底收敛（11-06 投诉「自定义 TTS 正常用着，系统自带的 TTS
+       还是会自动说话」）：选了 API 语音（ttsMode=api）但整条链失败/超时 → 保持
+       安静，不再突然冒出 Windows 系统嗓（而且本地兜底超时最长 180s+240s，
+       系统语音会在气泡都消失了七分钟后才冒出来念一句，非常吓人）。
+       fallback=true 只留给「用户主动选系统语音」的模式（ttsMode!=='api'）。 */
+    if (c.ttsMode === 'api') {
+      log('[tts] 全链失败，按 0.46.56 规则保持安静（不落系统语音）：' + err.message)
+      return { ok: false, fallback: false, message: '语音合成失败：' + err.message, lang: c.replyLang || 'zh', voiceName }
+    }
     return { ok: false, fallback: true, message: err.message, lang: c.replyLang || 'zh', voiceName }
   }
 }

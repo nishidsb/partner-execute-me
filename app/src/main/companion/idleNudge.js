@@ -67,6 +67,9 @@ function stageOf (idleMs, rec, now) {
   // 0.45.91 睡前静默期内一律不给阶段（唯一真源：调用点散在四处，漏一处她就会半夜开口）。
   // 11-02 实锤：23:39 说了「静默到 06:39」，23:56 还是出了「第 5 阶」。
   if (r.sleepUntil && t < Number(r.sleepUntil)) return 0
+  // 0.46.56 睡醒等待：静默到期 ≠ 他醒了。armed 挂着时阶段一律不出——
+  // 宿主 tick 见到他真回到电脑前才解除武装并重置计时（否则大清早 QQ 催起床）。
+  if (r.sleepArmed && t >= (Number(r.sleepUntil) || 0)) return 0
   if (idle > MAX_IDLE_TRACK) return 0                       // 超过一天不理就不再追了
   if (t < (Number(r.nextTryAt) || 0)) return 0              // 生成失败退避中
   // 距上一条主动消息太近就先忍着（重启回来不许连发）
@@ -87,7 +90,7 @@ function stageOf (idleMs, rec, now) {
 function onUserTalk (rec, now) {
   const t = now || Date.now()
   return Object.assign({ stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: t, sleepUntil: 0 }, rec, {
-    stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: t, sleepUntil: 0
+    stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: t, sleepUntil: 0, sleepArmed: 0
   })
 }
 
@@ -98,12 +101,17 @@ function noteSelfSpoke (rec, now) {
   return Object.assign({}, rec, { lastProactiveAt: now || Date.now() })
 }
 
-/** 主人宣告睡觉 → 静默到睡醒，且计时起点挪到睡醒那一刻 */
+/** 主人宣告睡觉 → 静默到睡醒，且计时起点挪到睡醒那一刻。
+ *  0.46.56 再补一刀（11-06 投诉「晚安后还一直发消息」）：静默到期 ≠ 他醒了。
+ *  sleepArmed 挂着的时候，黏人阶梯（尤其 QQ reach）一律不开——他真的回到
+ *  电脑前（宿主 tick 判定）才算「早上好」，计时从头起。否则他还在被窝里，
+ *  她按 baseAt=睡醒时刻算出「闲置 15 分钟」就去 QQ 催起床（11-06 06:34/07:42
+ *  两条实锤）。 */
 function onSleepDeclared (rec, now) {
   const t = now || Date.now()
   const until = t + SLEEP_HOURS * 3600 * 1000
   return Object.assign({ stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: t, sleepUntil: 0 }, rec, {
-    stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: until, sleepUntil: until
+    stage: 0, lastProactiveAt: 0, nextTryAt: 0, baseAt: until, sleepUntil: until, sleepArmed: 1
   })
 }
 

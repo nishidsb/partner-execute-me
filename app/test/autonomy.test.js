@@ -347,10 +347,11 @@ test('autonomy: 挡 2 主人中途回来——循环中止，日志记 stop', as
 test('autonomy: 挡 3 工具表——cua 全套 + open_url + watch_video + look_screen，绝不含 wechat_send', () => {
   const ft = a.freeToolsOf({ cua: { invoke: async () => ({}) } })
   const names = ft.defs.map((d) => d.function.name)
-  assert.equal(names.length, a.CUA_FREE_TOOLS.length + 3, '0.46.32 加了 watch_video、0.46.37 加了 look_screen')   // cua + open_url + watch_video + look_screen
+  assert.equal(names.length, a.CUA_FREE_TOOLS.length + 4, '0.46.32 加了 watch_video、0.46.37 加了 look_screen、0.46.54 加了 listen')   // cua + open_url + watch_video + look_screen + listen
   assert.ok(!names.includes('wechat_send'), '她永远不该替主人发消息')
   assert.ok(names.includes('screenshot') && names.includes('open_url') && names.includes('watch_video'))
   assert.ok(names.includes('look_screen'), '0.46.37 本地视觉看屏工具在场')
+  assert.ok(names.includes('listen'), '0.46.54 听一下工具在场')
 })
 
 test('0.46.35 挡 3 并入地盘工具：space_* 在场、无重复 open_url、exec 真写文件且留日志', async () => {

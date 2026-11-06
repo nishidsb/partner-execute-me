@@ -366,8 +366,12 @@ async function speakReplyText (content, opts) {
   try { r = await window.aura.speakReply(text) } catch {}
   if (my !== readSeq) return false // 合成期间来了新朗读 → 这份作废
   if (r && r.ok && r.url) { await playVoice(r.url, r.speed, vol); return true }
-  // 未配置 API TTS → 系统语音念一遍（同样等它念完，气泡不会提前消失）
-  if (window.speechSynthesis) {
+  /* 0.46.56 系统语音兜底只在「用户主动选了系统语音模式」（r.fallback）时用。
+     旧代码无条件念——真机实锤（11-06 投诉「fish 正常，系统 TTS 也在说，
+     还比 fish 快，说的全是台词」）：两块屏的窗口都会跑到这里，合成竞速输掉的
+     那块收到 stale（fish 正在另一块屏正常播），照样把全文用 Windows 嗓抢念
+     一遍——它不用等合成所以总是更快。stale/失败一律闭嘴。 */
+  if (r && !r.stale && r.fallback && window.speechSynthesis) {
     return await new Promise((resolve) => {
       try {
         if (my !== readSeq) return resolve(false) // 合成/等待期间来了新朗读 → 作废
@@ -2050,7 +2054,9 @@ function setupChat () {
       const txt = display || line || '（空回复）'
       bubbleShow(txt)
       // 会说话的伙伴：回复朗读 + 气泡跟着语音走（念完才淡出）
-      bubbleHoldVoice(line || txt)
+      // 0.46.56 朗读只由角色所在屏发起：两块屏都跑这段 = 合成双跑 + 竞速输家抢念系统嗓
+      //（真机实锤：10:44/10:46/10:47/10:50 每条回复 fish key 连打两次，一次被 abort）
+      if (petHosted) bubbleHoldVoice(line || txt)
     })
     window.aura.onAssistantError(({ message }) => {
       generating = false

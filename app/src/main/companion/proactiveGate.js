@@ -15,6 +15,15 @@
  */
 const voicesim = require('./voicesim')
 
+/** 0.46.56 比对前把网址抹平：她收场自语带域名（chromium.googlesource.com /
+ *  raw.githubusercontent.com），同款句子换个域名就从复读闸溜走了。比对和记账
+ *  都用归一化文本，模板复读（「あ、おかえり。いまね、◯◯ を覗いてたとこ」）
+ *  不管域名是什么都抓得到。 */
+const URL_RE = /(?:https?:\/\/)?(?:[\w-]+\.)+(?:com|org|net|dev|io|jp|cc|cn|me|app|ai|gg)(?:\/[^\s，。、！？]*)?/g
+function normUrl (t) {
+  return String(t || '').replace(URL_RE, 'あるサイト')
+}
+
 /**
  * @param {object} o { size } 记住多少句（默认 12）
  * @param {function} o.extraHistory 取外部历史（比如 inner.recentVoices），可为空
@@ -22,9 +31,9 @@ const voicesim = require('./voicesim')
 function createGate ({ size = 12, extraHistory } = {}) {
   const recent = []
 
-  /** 记一句已经出口的台词 */
+  /** 记一句已经出口的台词（归一化后入账，见 normUrl） */
   function note (text) {
-    const t = String(text || '').trim()
+    const t = normUrl(String(text || '').trim())
     if (!t) return
     recent.push(t)
     while (recent.length > size) recent.shift()
@@ -41,9 +50,9 @@ function createGate ({ size = 12, extraHistory } = {}) {
 
   /** @returns {null|{repeat:boolean, score:number, against:string}} 雷同返回命中详情 */
   function check (text) {
-    const t = String(text || '').trim()
+    const t = normUrl(String(text || '').trim())
     if (!t) return null
-    const hist = history()
+    const hist = history().map(normUrl)
     if (!hist.length) return null
     const r = voicesim.isRepeat(t, hist)
     return r && r.repeat ? r : null
