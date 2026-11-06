@@ -91,11 +91,59 @@ function settleVoice () {
   try { fn() } catch {}
 }
 /** 说话口型：3D 角色在语音播放期间张嘴（VRM expressionManager 的 aa 预设）。
- *  普通 GLB / 立绘 / Spine 没有这个能力，setTalk 内部会自己跳过。 */
+ *  普通 GLB / 立绘没这个能力，内部会自己跳过。
+ *  0.46.61：Spine 也有口型了——模型自带 facial_mouth_XXX_active 70 个嘴形动画
+ *  （参考项目 AgentAtelierR 同款能力），语音播放期间在 6 号轨（最高轨）循环换嘴形。 */
 function setTalking (on) {
   if (vrmRuntime && vrmRuntime.setTalk) { try { vrmRuntime.setTalk(on) } catch {} }
   // 0.41.0：形象包也有口型了（包里画了 part:'mouth' 的层才看得见）
   if (figureLoop && figureLoop.setTalk) { try { figureLoop.setTalk(on) } catch {} }
+  spineTalk(on)
+}
+
+/* ---- Spine 说话口型（0.46.61）：轨 6 = 嘴形专用最高轨，其他轨从不播 facial_mouth，无骨骼冲突 ---- */
+let spineTalkTimer = null
+let spineTalkGestureTimer = null
+const SPINE_MOUTH_TRACK = 6
+/* 说话时的自动小动作（用户 11-06：参考项目说话时会自然做动作）。保守版：
+   只挑「轻声/倾听/轻快」类轻量手势（权威词表解析，站/坐骨架自适应），~9-15s
+   随机一档、35% 概率才动——说话时手上有小动作，不是抽风。 */
+const TALK_GESTURE_WORDS = ['轻声回应', '安静回应', '轻快回应', '轻幅问候']
+function spineTalkGestureTick () {
+  if (Math.random() > 0.35) return
+  const w = TALK_GESTURE_WORDS[Math.floor(Math.random() * TALK_GESTURE_WORDS.length)]
+  const hit = resolveSpineWord(w)
+  if (hit && hit.combo && hit.combo.length) playSpineAction(hit.combo)
+}
+function spineTalk (on) {
+  const ctx = spineAnimCtx
+  if (!ctx || !ctx.state) { spineTalkStop(); return }
+  if (on) {
+    if (spineTalkTimer) return
+    const mouths = (ctx.anims || []).filter((a) => /^facial_mouth_\d+_active$/i.test(a.name))
+    if (!mouths.length) return   // 换了没嘴形动画的模型：静默跳过，跟立绘一样
+    const step = () => {
+      try {
+        const a = mouths[Math.floor(Math.random() * mouths.length)]
+        ctx.state.setAnimation(SPINE_MOUTH_TRACK, a.name, false)
+      } catch {}
+    }
+    step()
+    spineTalkTimer = setInterval(step, 160)   // ~6 次/秒换嘴形，近似说话开合节奏
+    if (!spineTalkGestureTimer) {
+      spineTalkGestureTimer = setInterval(spineTalkGestureTick, 9000 + Math.floor(Math.random() * 6000))
+    }
+  } else {
+    spineTalkStop()
+  }
+}
+function spineTalkStop () {
+  if (spineTalkGestureTimer) { clearInterval(spineTalkGestureTimer); spineTalkGestureTimer = null }
+  if (!spineTalkTimer) return
+  clearInterval(spineTalkTimer)
+  spineTalkTimer = null
+  const ctx = spineAnimCtx
+  if (ctx && ctx.state) { try { ctx.state.setEmptyAnimation(SPINE_MOUTH_TRACK, 0.12) } catch {} }
 }
 /** 播放一段语音；返回 Promise，在播放结束/失败/被打断时 resolve（气泡靠它跟语音对齐） */
 function playVoice (url, speed, vol) {
@@ -679,7 +727,14 @@ const ACTION_SEMANTICS = {
   sleep: /motion_A_00[3-7]_idle|sleep|困/i,
   idle: /motion_[A-Z]_\d+_idle|idle|待机/i,
   blush: /facial_add_blush_on/i,
-  sweat: /facial_add_sweat_on/i
+  sweat: /facial_add_sweat_on/i,
+  /* 0.46.61 模型爱蹦的英文词补齐（11-06 19:04 实锤：excited/acknowledge 双双
+     「未识别动作词」——LLM 不 always 按中文词表出牌，英文情绪词直接兜住） */
+  excited: /motion_add_G_001|motion_add_E_00[12]|excited|兴奋/i,
+  acknowledge: /motion_add_G_00[12]|acknowledge|认可|收到/i,
+  surprised: /motion_oneshot_D_00[12]|surprised|惊讶/i,
+  greet: /motion_add_F_00[14]|greet|welcome|问候/i,
+  cheer: /motion_add_G_00[56]|cheer|鼓励|打气/i
 }
 
 function findAnim (word) {
@@ -1031,6 +1086,7 @@ async function assetUrl (p) { return p ? window.aura.assetUrl(p) : '' }
 
 function disposeSpine () {
   if (spineRuntime) { spineRuntime.render = false; spineRuntime = null }
+  spineTalkStop()   // 0.46.61 口型定时器跟着骨架一起失效（旧 state 引用不能再摸）
   // 动作词表跟着渲染器一起失效（否则换角色后还往旧 AnimationState 上 setAnimation）
   if (spineAnimCtx) {
     clearTimeout(spineAnimCtx.faceTimer)

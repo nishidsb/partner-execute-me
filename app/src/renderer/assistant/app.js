@@ -164,7 +164,13 @@ api.onDelta(({ text, reset }) => {
   typer.push(text)
 })
 
+/* 0.46.61 化妆性工具不进聊天窗：pet_act/pet_say 这些是「她在做动作」，不是信息。
+   用户 11-06 反馈「pet_act 这些不需要显示」——工具条和已调用标注都跳过。 */
+const COSMETIC_TOOL = /^pet_/i
+const isCosmeticTool = (n) => COSMETIC_TOOL.test(String(n || ''))
+
 api.onTool(({ name }) => {
+  if (isCosmeticTool(name)) return
   const chip = $('toolchip')
   chip.hidden = false
   chip.textContent = '⚙ ' + roleName() + ' 正在调用工具 ' + name + ' …'
@@ -182,10 +188,13 @@ api.onDone(({ content, toolResults }) => {
     pendingAi.classList.remove('typing')
     pendingAi.childNodes[1].textContent = finalText
     if (toolResults && toolResults.length) {
-      const note = document.createElement('span')
-      note.className = 'toolnote'
-      note.textContent = '⚙ 已调用工具: ' + toolResults.map((t) => t.name).join(', ')
-      pendingAi.appendChild(note)
+      const visible = toolResults.filter((t) => !isCosmeticTool(t.name))
+      if (visible.length) {
+        const note = document.createElement('span')
+        note.className = 'toolnote'
+        note.textContent = '⚙ 已调用工具: ' + visible.map((t) => t.name).join(', ')
+        pendingAi.appendChild(note)
+      }
     }
   } else if (finalText) {
     addMsg('ai', finalText, { who: roleName() })
