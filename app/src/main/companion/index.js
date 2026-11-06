@@ -809,8 +809,9 @@ function systemPrompt (char, userText) {
   }
   sections.push({
     key: 'time',
-    text: '【当前时间】' + new Date().toLocaleString('zh-CN', { hour12: false }) +
-      '\n【相对日期换算（硬规则）】历史与记忆里的「今天/明天/昨天/今晚」一律以**那句话记录的日期**为基准换算成绝对日期，再对照当前时间行事——他 11-05 说「明天开始学习」，到了 11-06 那个「明天」就是今天，绝不能照抄原词（11-06 实锤：学习定在当天，她还嘴「明日から」）。',
+    // 0.46.59 时间单源：换 dayflow.nowBlockOf()，与嘀咕/自主活动/黏人阶梯共用一块
+    // （新增：不主动报日期钟点的措辞红线 + 过期约定判定），别再各写一份
+    text: dayflow.nowBlockOf(),
     priority: 20
   })
   /* 0.45.72：历史每条前面带 [月-日 时:分]，主动说的还带来源括注。
@@ -980,8 +981,8 @@ function togetherBlock () {
     '。这些只是让你心里有数，不必刻意提起，也别每句都提。'
 }
 
-/* 0.45.72 聊天史带时间与来源（设计动机：来自真实使用反馈——一大早的记忆错乱，
- * 原因是夜里和清晨的独白在史里看起来像刚发生的对话）。
+/* 0.45.72 聊天史带时间与来源（用户反馈「一大早就记忆错乱：他说完就睡了，
+ * 她说的是更早开始」（具体时刻匿名化））。
  *
  * 根因不在记忆库，在喂给模型的历史：以前 map 成 {role, content}，at 和 via 全丢。
  * 于是她读到夜里 00:26~02:26 一串「45分間よく頑張ったね」（那是自动陪学对着空椅子说的），
@@ -1465,6 +1466,9 @@ async function nudgeLineByHint (hint, avoid) {
         // 0.35.0：不带上下文她就会说出跟你们最近聊的毫无关系的话（用户 10-29 反馈）
         // 0.45.42：watchSharedBlock 自身已按优先级排好并在 4000 截断，这里不再二次砍半
         ...(watchSharedBlock() ? [{ role: 'system', content: '【你知道的事（记忆与最近对话，主动开口要接得上）】\n' + watchSharedBlock() }] : []),
+        // 0.46.59 主动开口也要知道现在几点：11-06 18:25 她把记忆里「学到 0:20」的旧约定
+        // 当成快到的截止，说出「もうすぐ0時20分だね」（实际 18:25）。单源块见 dayflow.nowBlockOf。
+        { role: 'system', content: dayflow.nowBlockOf() },
         ...(voices ? [{ role: 'system', content: '【你最近几次主动说过的话（别再重复这些话题、道具和句式，换点别的来说）】\n' + voices }] : []),
         ...banBlock,
         { role: 'user', content: '【当前情境】\n' + hint +
@@ -1842,8 +1846,9 @@ async function tryQqReach (stage, idleMs) {
   }
 }
 
-/* 0.45.72 睡前的那句 QQ（设计动机：来自真实使用反馈——约定了睡前可以去 QQ 找他，
- * 然后整夜一条也没发，用户觉得「说好的事没发生」。
+/* 0.45.72 睡前的那句 QQ（用户 11-01：「qq 上也没有主动找我」）。
+ *
+ * 她提过「寂寞的话会去 QQ 找他」，主人也回欢迎她随时来 QQ 找他—— 然后整夜一条也没发。
  * 根因在 nudge tick：`if (sleepUntil) return` 挡在 tryQqReach 前面，而 onSleepDeclared
  * 又把 baseAt 推到他该醒的时刻，于是「去睡了」之后 QQ 通道等于物理断开。
  * 这里不等阶梯：他一道晚安，她就真去 QQ 说一句（reach 的全套红线照旧生效）。 */

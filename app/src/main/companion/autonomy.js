@@ -477,6 +477,10 @@ async function runSpace (o) {
   const goalBlock = String(opt.goalBlock || '')   // 0.45.18 需求驱动：动机语气
   const projBlock = String(opt.projBlock || '')   // 0.45.19 跨天项目：推进进行中的事
   const phaseBlock = dayflow.phaseBlockOf(opt.now)  // 0.45.19 时间感
+  // 0.46.59 精确时间块：模糊时段不够——11-06 18:25 她自主收场时把记忆里 11-04 的
+  // 「学到 0:20」旧约定当成快到的截止（「もうすぐ0時20分だね」，实际 18:25）。
+  // phaseBlock 管语气，nowBlock 管事实：现在几点、旧约定过没过期。
+  const nowBlock = dayflow.nowBlockOf(opt.now)
   const carryBlock = String(opt.carryBlock || '')   // 0.46.17 牵挂：上次没看完的先看完
   const langReq = monologueLangBlock(cfg.replyLang)   // 0.46.18 自语/汇报的语言跟设置走
   const sys = [
@@ -490,6 +494,7 @@ async function runSpace (o) {
     ...(goalBlock ? [goalBlock] : []),
     ...(projBlock ? [projBlock] : []),
     ...(phaseBlock ? [phaseBlock] : []),
+    ...(nowBlock ? [nowBlock] : []),
     ...(langReq ? [langReq] : []),
     '用工具做事，别只是想。做完之后，用一两句话、第一人称、口语说说你刚才干了什么（不用跟主人打招呼，他不在）。',
     '小气一点：两三个工具调用能做完就做完，别把时间花在翻来覆去列目录上。',
@@ -854,6 +859,10 @@ async function runFree (o) {
   const goalBlock = String(opt.goalBlock || '')   // 0.45.18 需求驱动：动机语气
   const projBlock = String(opt.projBlock || '')   // 0.45.19 跨天项目：推进进行中的事
   const phaseBlock = dayflow.phaseBlockOf(opt.now)  // 0.45.19 时间感
+  // 0.46.59 精确时间块：模糊时段不够——11-06 18:25 她自主收场时把记忆里 11-04 的
+  // 「学到 0:20」旧约定当成快到的截止（「もうすぐ0時20分だね」，实际 18:25）。
+  // phaseBlock 管语气，nowBlock 管事实：现在几点、旧约定过没过期。
+  const nowBlock = dayflow.nowBlockOf(opt.now)
   const carryBlock = String(opt.carryBlock || '')   // 0.46.17 牵挂：上次没看完的先看完
   // 0.45.47 防复读：journal 实锤同一话题一天连搜 7 场——她从没记下「查过了、查到什么」
   const recentSearches = (Array.isArray(opt.recentSearches) ? opt.recentSearches : []).filter(Boolean).slice(0, 8)
@@ -881,6 +890,7 @@ async function runFree (o) {
     ...(goalBlock ? [goalBlock] : []),
     ...(projBlock ? [projBlock] : []),
     ...(phaseBlock ? [phaseBlock] : []),
+    ...(nowBlock ? [nowBlock] : []),
     ...(recentSearchBlock ? [recentSearchBlock] : []),
     ...(langReq ? [langReq] : []),
     '你可以看屏幕、动鼠标键盘、开关网页、操作窗口——像一个人真的坐在电脑前那样。',

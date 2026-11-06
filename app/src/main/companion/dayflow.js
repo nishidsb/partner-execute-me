@@ -49,6 +49,29 @@ function phaseBlockOf (now) {
   return PHASE_MOOD[p.key] ? ('【时间感】' + PHASE_MOOD[p.key] + '（现在是' + p.label + '）') : ''
 }
 
+/* ── 0.46.59 精确时间块（单一真源） ─────────────────────────────
+ * 11-06 18:25 实锤：自主活动收场时她说「もうすぐ0時20分だね」——实际 18:25，
+ * 差了整整 12 小时+。根因有两层：
+ *   ① 全 companion 只有对话回复（index.js）和嘀咕（chatter.js）两条链注入【当前时间】，
+ *      自主活动（autonomy）/黏人阶梯（nudgeLineByHint）等主动开口链路只有 phaseBlockOf
+ *      的模糊时段（「现在是晚上」），模型拿不到精确钟点；
+ *   ② 做梦回顾入账的约定条目（「说好 11:20 开始学、学到 0:20」）不带日期，模型把
+ *      11-04 定下的当日计划当成了现行约定，脑补成「快到 0:20 截止」。
+ * 修法：所有会开口的链路统一注入这一块（单一真源，别再各写一份——链路×2 修一处≠修完）。
+ * 措辞红线：时间是给她自己判断用的，不是让她报时——显式写明「不主动报日期钟点」，
+ * 否则会修出机器人味（用户 11-06 担心的正是这个）。 */
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
+function nowBlockOf (now) {
+  const d = new Date(Number(now) || Date.now())
+  const p2 = (n) => String(n).padStart(2, '0')
+  const stamp = d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate() +
+    ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + '（周' + WEEKDAYS[d.getDay()] + '）'
+  return '【当前时间】' + stamp +
+    '\n【时间的用法·硬规则】这个时间只给你自己判断用：说话时不要报日期、不要报钟点，自然说人话（除非他问你几点/几号）。' +
+    '记忆和对话里的「今天/明天/昨天/今晚X点」都以**那句话记录的日期**为基准换算成绝对日期，再对照当前时间决定它过没过期——' +
+    '过期了的约定（比如前几天定的「学到几点」）不是现行约定，别拿它当现在的时刻表；记不清就说记不清，不要替时间编一个数字。'
+}
+
 /* ── 上次话题（last-chat.json，落工作区） ─────────────────────── */
 
 const fileOf = (wsDir) => wsDir ? path.join(wsDir, 'last-chat.json') : ''
@@ -108,4 +131,4 @@ function statusOf (wsDir, now) {
   }
 }
 
-module.exports = { PHASES, PHASE_MOOD, phaseOf, phaseBlockOf, loadLast, saveLast, dayKeyOf, noteOwner, gapBlockOf, statusOf }
+module.exports = { PHASES, PHASE_MOOD, phaseOf, phaseBlockOf, nowBlockOf, loadLast, saveLast, dayKeyOf, noteOwner, gapBlockOf, statusOf }

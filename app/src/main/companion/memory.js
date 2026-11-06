@@ -20,6 +20,15 @@ const CATS = {
 
 function file (charId) { return path.join(character.base(), charId, 'memory.json') }
 
+/** 0.46.59 本地日期 MM-DD（不能用 toISOString，那是 UTC，GMT+8 凌晨 0-8 点会错一天）。
+ * 为什么要存：11-06 实锤，做梦回顾入账的「说好 11:20 开始学、学到 0:20」不带日期，
+ * 五天后她把这条当日计划当现行约定，18:25 嘴上冒「快到 0:20 了」。 */
+const localDateOf = (ms) => {
+  const d = new Date(Number(ms) || Date.now())
+  const p2 = (n) => String(n).padStart(2, '0')
+  return p2(d.getMonth() + 1) + '-' + p2(d.getDate())
+}
+
 function read (f, fallback) {
   try { return JSON.parse(fs.readFileSync(f, 'utf8')) } catch { return fallback }
 }
@@ -48,7 +57,8 @@ function addEvent (charId, { cat = 'fact', text, keywords = [], importance = 1, 
     keywords: (Array.isArray(keywords) ? keywords : String(keywords).split(/[,，\s]+/)).filter(Boolean).slice(0, 8),
     importance: Math.max(1, Math.min(5, importance | 0)),
     source,
-    at: Date.now()
+    at: Date.now(),
+    date: localDateOf(Date.now())   // 0.46.59 入账即锚定绝对日期，相对时间词从此有基准
   }
   mem.events.push(ev)
   mem.seq = seq
@@ -287,7 +297,8 @@ function execTool (charId, name, args) {
     const now = Date.now()
     // 0.22.0 被想起来的会强化；呈现按强度分级
     for (const e of evs) reinforce(charId, e.seq, 0.05)
-    return evs.map((e) => `#${e.seq}[${(CATS[e.cat] || CATS.fact).label}] ${renderFact(e, now)}`).join('\n')
+    // 0.46.59 带日期：date 字段 + 旧条目从 at 兜底（历史条目全都没写过 date，标签从未生效）
+    return evs.map((e) => `#${e.seq}[${(CATS[e.cat] || CATS.fact).label}][${e.date || localDateOf(e.at)}] ${renderFact(e, now)}`).join('\n')
   }
   return '未知记忆工具'
 }
@@ -299,7 +310,9 @@ function summaryText (charId, query) {
   // 0.22.0 被想起来的会强化；注入按强度分级（全文/大概记得/只剩个印象）
   for (const e of evs) reinforce(charId, e.seq, 0.05)
   // 0.45.39 带日期标签：跨天聊天时「昨天/前天」有锚点，不再像独立会话
-  return '【你记得的事】\n' + evs.map((e) => `- ${e.date ? '[' + e.date + '] ' : ''}${renderFact(e, now)}`).join('\n')
+  // 0.46.59 修真 bug：date 字段此前从没人写过（addEvent 不写），条件恒假=标签从未生效。
+  // 旧条目从 at 兜底算日期，历史条目（含「学到 0:20」那种旧约定）一并带上锚点。
+  return '【你记得的事】\n' + evs.map((e) => `- [${e.date || localDateOf(e.at)}] ${renderFact(e, now)}`).join('\n')
 }
 
 module.exports = {

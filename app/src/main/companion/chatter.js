@@ -27,6 +27,7 @@
  */
 const llm = require('./llm')
 const voicesim = require('./voicesim')
+const dayflow = require('./dayflow')   // 0.46.59 时间单源：nowBlockOf 与回复/自主活动共用一块
 // 0.46.18 自言自语的语言要求：主聊天链路的【语言要求】在 index.js buildSystem，
 // 这条链路不经过它——不注入模型就默认中文嘀咕，TTS 忠实念中文（用户实测）。
 const { monologueLangBlock } = require('../../shared/lang-req')
@@ -248,7 +249,9 @@ function createChatter (deps) {
           // 0.46.54 听觉：她有耳朵了——环境声音的响度/特征/突变（安静且无事时不注入）
           ...(hearLine ? [{ role: 'system', content: '【你耳朵里的世界（此刻的环境声音；你听到的是声音特征，听不出谁在说什么内容，别编「他说了什么」）】\n' + hearLine }] : []),
           ...(langBlock ? [{ role: 'system', content: langBlock }] : []),
-          { role: 'user', content: (monoBlock ? monoBlock + '\n' : '') + frame + '\n' + DECIDE_BODY + '\n\n【当前时间】' + new Date().toLocaleString('zh-CN', { hour12: false }) }
+          // 0.46.59 时间单源：换 nowBlockOf（带精确钟点+不报时措辞+旧约定过期判定），
+          // 与回复/自主活动链路共用一块，别再各写一份（链路×2 修一处≠修完）
+          { role: 'user', content: (monoBlock ? monoBlock + '\n' : '') + frame + '\n' + DECIDE_BODY + '\n\n' + dayflow.nowBlockOf() }
         ],
         temperature: 0.95
       })
