@@ -80,6 +80,7 @@ const dayflow = require('./dayflow') // 0.45.19 连续时间体验：时间感
 const { sanitizeSearchUrl } = require('./searchq') // 0.45.33 搜索词活人化（# 标题事故）
 const { monologueLangBlock, browseMurmurs } = require('../../shared/lang-req') // 0.46.18 自语语言跟设置走
 const { biliWatch } = require('./biliWatch') // 0.46.32 她自己看视频（挡1的B站场/挡2挡3的 watch_video 工具）
+const projectsParseClose = require('./projects').parseClose // 0.46.64 项目收尾协议解析（纯函数，无环依赖）
 
 /* ------------------------------------------------------------ 挡 2：她的地盘 */
 
@@ -1558,6 +1559,8 @@ function create (deps) {
       : ''
 
     running = true
+    // 0.46.64 项目成果校验基准目录：space/free 场都是她的地盘（成果硬闸用，须在分支外先备好）
+    const spDir = (runner.kind === 'space' || runner.kind === 'free') ? spaceDirOf(c) : ''
     const site = runner.kind === 'browse' ? pickSite(ws0, rand) : SITES[Math.floor(rand() * SITES.length) % SITES.length]
     if (runner.kind === 'browse' && site) log('[autonomy] 去处：' + site.key + (site.name ? '（' + site.name + '）' : ''))   // 0.46.19 留痕
     try {
@@ -1659,12 +1662,17 @@ function create (deps) {
         todayCount++
         if (nd) nd.discharge('session')    // 0.45.18 出门一圈，无聊和好奇泄掉
         const line = runner.kind === 'browse' ? lineOf(r) : String(r.content || '').trim()
-        // 0.45.19 跨天项目：汇报记一笔；攒够进展就收尾（收尾信息并进旁白）
+        /* 0.45.19 跨天项目：汇报记一笔。0.46.64 v2：收尾走 parseClose 协议——
+           【成果】入 artifacts（逐个过 verifyArtifact 硬闸）、【状态】完成/搁置/放弃/改向/继续
+           走生命周期、【心情】入 mood；她说出口的旁白用去标签后的 clean（协议标记不能漏进人话） */
+        let said = line
         if (prj && line) {
-          const fin = prj.record(line)
-          if (fin) log('[autonomy] 项目收尾：《' + fin.title + '》 ' + (fin.summary || '').slice(0, 60))
+          const pc = projectsParseClose(line)
+          said = pc.clean || line
+          const rr = prj.record(said, pc, { spaceDir: spDir })
+          if (rr.finished) log('[autonomy] 项目收尾：《' + rr.finished.title + '》 ' + (rr.finished.summary || '').slice(0, 60))
         }
-        try { onDone(r, line) } catch (e) { log('[autonomy] onDone 失败: ' + (e && e.message)) }
+        try { onDone(r, said) } catch (e) { log('[autonomy] onDone 失败: ' + (e && e.message)) }
         // 压力越高冷却越短：憋得狠的时候，下一场来得早些
         const scale = needState ? needs.cooldownScaleOf(needState) : 1
         nextAt = now() + Math.round(nextCooldownMs(rand) * scale)

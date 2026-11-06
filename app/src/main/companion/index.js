@@ -981,8 +981,8 @@ function togetherBlock () {
     '。这些只是让你心里有数，不必刻意提起，也别每句都提。'
 }
 
-/* 0.45.72 聊天史带时间与来源（用户反馈「一大早就记忆错乱：他说完就睡了，
- * 她说的是更早开始」（具体时刻匿名化））。
+/* 0.45.72 聊天史带时间与来源（用户 11-01 反馈「一大早就记忆错乱：我 11 点半说完就睡了，
+ * 她说的是 10 点多开始」）。
  *
  * 根因不在记忆库，在喂给模型的历史：以前 map 成 {role, content}，at 和 via 全丢。
  * 于是她读到夜里 00:26~02:26 一串「45分間よく頑張ったね」（那是自动陪学对着空椅子说的），
@@ -1848,7 +1848,7 @@ async function tryQqReach (stage, idleMs) {
 
 /* 0.45.72 睡前的那句 QQ（用户 11-01：「qq 上也没有主动找我」）。
  *
- * 她提过「寂寞的话会去 QQ 找他」，主人也回欢迎她随时来 QQ 找他，
+ * 她说「寂しくなったら、QQ のほうに行くから」，主人也回「寂寞了就来 qq 找我吧，
  * 我给你设置了特别关注」—— 然后整夜一条也没发。
  * 根因在 nudge tick：`if (sleepUntil) return` 挡在 tryQqReach 前面，而 onSleepDeclared
  * 又把 baseAt 推到他该醒的时刻，于是「去睡了」之后 QQ 通道等于物理断开。
@@ -2162,7 +2162,37 @@ function getNeeds () {
 /** 跨天项目（进行中的长期小事），状态落工作区 projects.json */
 function getProjects () {
   if (!projectsInst) {
-    projectsInst = projectsMod.create({ wsDir: () => curWsDir, log })
+    projectsInst = projectsMod.create({
+      wsDir: () => curWsDir,
+      log,
+      // 0.46.64 成果硬闸：路径必须 ①先过 spaceGuard 包含性（在她的地盘内）
+      // ②真实存在 ③非空文件——三关全过才算真实成果，writing/collection 没有它不许收尾
+      verifyArtifact: (spaceDir, rel) => {
+        try {
+          const abs = autonomy.spaceGuard(String(spaceDir || ''), String(rel || ''))
+          if (!abs) return false
+          const st = require('node:fs').statSync(abs)
+          return st.isFile() && st.size > 0
+        } catch { return false }
+      },
+      // 0.46.64 项目大节点（开题/完成/放弃/改向/搁置）进记忆体系——
+      // addEvent 内部锚定本地 date（0.46.59），日后「她记得自己做过什么」全靠这条
+      onEvent: (ev, title) => {
+        try {
+          const ch = character.get() || {}
+          if (!ch.id || !title) return
+          const textMap = {
+            开题: '开始弄《' + title + '》',
+            完成: '把《' + title + '》做完了',
+            放弃: '放下了《' + title + '》',
+            改向: '《' + title + '》做到一半换了方向',
+            搁置: '把《' + title + '》暂时搁下了'
+          }
+          const text = textMap[ev]
+          if (text) require('./memory').addEvent(ch.id, { cat: 'fact', text, importance: 2, source: 'project' })
+        } catch { }
+      }
+    })
   }
   return projectsInst
 }
@@ -2189,6 +2219,12 @@ function autonomyPool () {
         .map((x) => String(x.title || '').trim())
         .filter((t) => t.length >= 2 && t.length <= 40)
       if (gt.length) out.thoughts = gt
+    } catch { }
+    // 0.46.64 搁置/放弃项目的未竟方向进选题池尾部（goals 仍最高优先）——
+    // 让「隔几天重新想起自己的项目」有通路，但不做定时复活，捡不捡随她
+    try {
+      const ex = getProjects().extras()
+      if (ex.length) out.thoughts = (out.thoughts || []).concat(ex)
     } catch { }
   } catch { }
   return out
