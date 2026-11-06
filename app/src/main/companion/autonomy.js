@@ -1611,8 +1611,14 @@ function create (deps) {
           (runner.kind === 'browse' && r.ok && (r.why === 'done-open' || (Number(r.moved) || 0) < 2)) ||
           r.why === 'user-back'
         )
-        if (unfinished && runner.kind === 'free' && !carry && r.topic) {
-          writeCarry(ws0, r.topic, (Array.isArray(r.watched) && r.watched[0]) || '')
+        if (unfinished && runner.kind === 'free') {
+          // 0.46.57 续写死锁修复（11-06 巡检实锤：carry.json 冻结在 11-05 20:12，之后 10+ 场空转）：
+          // free 挡 topic 恒空 → 有旧 carry 时第一支 (!carry) 不进、第二支 writeCarry('') 静默 no-op、
+          // 夜里全是 user-back 收场 clearCarry 也不触发 → 三条路全堵死。改为：本轮真看过/搜过的
+          // 内容（r.topic）无条件刷新牵挂；没看到东西就退到本场打开过的站名；都没有且无旧账才不动。
+          const t = String(r.topic || '').trim()
+          if (t) writeCarry(ws0, t, (Array.isArray(r.watched) && r.watched[0]) || '')
+          else if (!carry && Array.isArray(r.sites) && r.sites[0]) writeCarry(ws0, r.sites[0], '')
         } else if (unfinished) writeCarry(ws0, topic, (r.seen && r.seen[0]) || '')
         else if (carry && r && r.ok) clearCarry(ws0)   // 这场把旧牵挂看完了 → 销账
       } catch { }

@@ -914,6 +914,50 @@ test('0.46.37 look_screen：主人回来了立刻停，不许再看', async () =
 })
 
 // ── 0.46.49 记账覆盖缺口：free 挡也要进品味账和牵挂账 ──
+test('0.46.57 调度层：有旧牵挂时 free 挡被打断也要用本轮实际内容刷新 carry（续写死锁修复）', async () => {
+  const fs2 = require('node:fs')
+  const pth = require('node:path')
+  const osp = require('node:os')
+  const ws = fs2.mkdtempSync(pth.join(osp.tmpdir(), 'ryza-carry-freeze-'))
+  a.writeCarry(ws, 'chromium source 旧线索', '')   // 预置旧牵挂（真机 11-05 20:12 的状态）
+  let t = 3_000_000_000_000
+  let idle = 9999
+  let n = 0
+  const llmPath = require.resolve('../src/main/companion/llm')
+  const orig = require.cache[llmPath]
+  require.cache[llmPath] = {
+    id: llmPath, filename: llmPath, loaded: true,
+    exports: {
+      chatStream: async ({ toolExec }) => {
+        n++
+        if (n === 2) idle = 0   // 第二轮主人回来了 → user-back 收场
+        await toolExec('open_url', { url: 'https://search.bilibili.com/all?keyword=' + encodeURIComponent('WebAssembly 原理') })
+        return { content: '我在B站搜了点东西。', toolResults: [] }
+      },
+      chatOnce: async () => '', listModels: async () => []
+    }
+  }
+  const inst = a.create({
+    cfgGet: () => ({ autonomyOn: true, autonomyLevel: 3, autonomyDailyMax: 6 }),
+    log: () => {}, idleSec: () => idle, busy: () => false,
+    pool: () => ({}),
+    llmCfg: () => ({ model: 'x' }),
+    cua: { invoke: async () => ({}) },
+    openUrl: async () => {},
+    wsDir: () => ws,
+    now: () => t, rand: () => 0.9
+  })
+  try {
+    await inst.tick()
+    const carry = a.readCarry(ws)
+    assert.ok(carry, '刷新后牵挂还在')
+    assert.equal(carry.topic, 'WebAssembly 原理', '旧牵挂要被本轮实际看的东西刷新（原来冻结在旧线索）：' + JSON.stringify(carry))
+  } finally {
+    if (orig) require.cache[llmPath] = orig; else delete require.cache[llmPath]
+    inst.stop()
+  }
+})
+
 // 11-05 巡检实锤：真机成功场全是「完全开放挡」，site-stats / carry.json 自上线零首写——
 // bumpSite 只认 browse、writeCarry 对 free 挡 topic 恒空。修完三处：runFree 带账出来、
 // 调度层 free 场记品味、被打断且没旧牵挂时用真看过/搜过的东西兜话题。
