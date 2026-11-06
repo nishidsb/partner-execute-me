@@ -91,7 +91,12 @@ async function writeAudio (buf, ext, key) {
   const file = path.join(tmpDir(), crypto.createHash('md5').update(key + Date.now()).digest('hex').slice(0, 12) + ext)
   fs.writeFileSync(file, buf)
   log('[companion-tts] 合成', buf.length, 'bytes', ext)
-  return { url: require('node:url').pathToFileURL(file).href }
+  // 0.46.63 口型包络：wav 才有 PCM 可解析（mp3 跳过，渲染层走正弦兜底）
+  let env = null
+  if (ext === '.wav') {
+    try { env = require('./envelope').envelopeFromWav(buf) } catch { }
+  }
+  return { url: require('node:url').pathToFileURL(file).href, env }
 }
 
 async function speakOpenAI ({ baseUrl, apiKey, model = 'tts-1', voice = 'alloy', speed = 1, text }) {

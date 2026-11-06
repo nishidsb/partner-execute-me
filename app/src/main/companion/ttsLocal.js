@@ -32,7 +32,7 @@ const crypto = require('crypto')
 const { pathToFileURL } = require('node:url')
 
 /** 默认部署目录（设置里可改） */
-const DEFAULT_DIR = 'C:\\Users\\username\\Documents\\index-tts'
+const DEFAULT_DIR = path.join(require('node:os').homedir(), 'Documents', 'index-tts')
 /** GPT-SoVITS 整包目录（0.22.0 补丁⑤；设置里可改） */
 const DEFAULT_SOVITS_DIR = 'E:\\GPT-SoVITS-v2pro-20250604'
 /** 参考音频的台词（零样本克隆的提示文本；设置里可改） */
@@ -42,7 +42,7 @@ const DEFAULT_PROMPT_TEXT = 'いいよ……一突き、いっかい……'
  * 那个 Ryza_hires 全长 mp3 会被 400 拒掉），所以用 ffmpeg 切好的 6 秒版；
  * 文件不存在再退回目录扫描。
  */
-const DEFAULT_SOVITS_REF = 'C:\\Users\\username\\Documents\\语音\\ryza-ref-6s.wav'
+const DEFAULT_SOVITS_REF = path.join(require('node:os').homedir(), 'Documents', '语音', 'ryza-ref-6s.wav')
 /** 起服务时从这些端口里找空闲的（避开 DSH 语音后端的 9880） */
 const PORT_CANDIDATES = [9891, 9892, 9893]
 /** SoVITS api_v2 端口候选（避开 9880/DSH 和 IndexTTS 的 9891~9893） */
@@ -105,7 +105,7 @@ function guessLang (text, fallback) {
 }
 
 /** 参考音频目录（设置里 indexTtsRef 为空时扫这里取第一个音频） */
-const DEFAULT_REF_DIR = 'C:\\Users\\username\\Documents\\语音'
+const DEFAULT_REF_DIR = path.join(require('node:os').homedir(), 'Documents', '语音')
 
 /** 默认参考：扫语音目录拿第一个 mp3/wav */
 function defaultRef () {
@@ -246,7 +246,10 @@ function pcmToWavUrl (pcm, sampleRate = 32000) {
   header.write('data', 36)
   header.writeUInt32LE(dataLen, 40)
   fs.writeFileSync(file, Buffer.concat([header, pcm]))
-  return pathToFileURL(file).href
+  // 0.46.63 口型包络（参考项目同款：wav→20ms 帧振幅）
+  let env = null
+  try { env = require('./envelope').envelopeFromWav(Buffer.concat([header, pcm])) } catch { }
+  return { url: pathToFileURL(file).href, env }
 }
 
 /** HTTP POST 一句，返回 PCM */
@@ -382,7 +385,7 @@ async function synthesize (text, langHint, cfgGet) {
           const pcm = await postTtsImpl(port, chunks[0] || text, lang, ref)
           if (!pcm || pcm.length < 2000) throw new Error('合成结果为空')
           log('完成（' + Math.round((Date.now() - t0) / 1000) + 's，' + Math.round(pcm.length / 64000) + 's 音频）')
-          return { ok: true, url: pcmToWavUrl(pcm), local: true }
+          const w1 = pcmToWavUrl(pcm); return { ok: true, url: w1.url, env: w1.env, local: true }
         }
         log('长句分片合成（' + lang + '，' + text.length + ' 字 -> ' + chunks.length + ' 片）…')
         const pcms = []
@@ -396,7 +399,7 @@ async function synthesize (text, langHint, cfgGet) {
         }
         const all = Buffer.concat(pcms)
         log('完成（共 ' + Math.round((Date.now() - t0) / 1000) + 's，' + Math.round(all.length / 64000) + 's 音频）')
-        return { ok: true, url: pcmToWavUrl(all), local: true }
+        const w2 = pcmToWavUrl(all); return { ok: true, url: w2.url, env: w2.env, local: true }
       },
       resolve,
       reject
@@ -549,7 +552,10 @@ function wavToFileUrl (wav) {
   try { fs.mkdirSync(dir, { recursive: true }) } catch { }
   const file = path.join(dir, 'sovits_' + crypto.createHash('md5').update(wav).digest('hex').slice(0, 12) + '.wav')
   fs.writeFileSync(file, wav)
-  return pathToFileURL(file).href
+  // 0.46.63 口型包络
+  let env = null
+  try { env = require('./envelope').envelopeFromWav(wav) } catch { }
+  return { url: pathToFileURL(file).href, env }
 }
 
 /** SoVITS 参考音频：优先专用 6 秒参考（3~10s 限制），没有再退目录扫描 */
@@ -589,7 +595,7 @@ async function synthesizeSovits (text, langHint, cfgGet) {
         }, SOVITS_SYNTH_TIMEOUT_MS)
         if (!wav || wav.length < 2000) throw new Error('合成结果为空')
         log('SoVITS 完成（' + Math.round((Date.now() - t0) / 1000) + 's，' + Math.round(wav.length / 64000) + 's 音频）')
-        return { ok: true, url: wavToFileUrl(wav), local: true }
+        const w3 = wavToFileUrl(wav); return { ok: true, url: w3.url, env: w3.env, local: true }
       },
       resolve,
       reject

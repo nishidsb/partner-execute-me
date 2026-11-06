@@ -1848,7 +1848,8 @@ async function tryQqReach (stage, idleMs) {
 
 /* 0.45.72 睡前的那句 QQ（用户 11-01：「qq 上也没有主动找我」）。
  *
- * 她提过「寂寞的话会去 QQ 找他」，主人也回欢迎她随时来 QQ 找他—— 然后整夜一条也没发。
+ * 她提过「寂寞的话会去 QQ 找他」，主人也回欢迎她随时来 QQ 找他，
+ * 我给你设置了特别关注」—— 然后整夜一条也没发。
  * 根因在 nudge tick：`if (sleepUntil) return` 挡在 tryQqReach 前面，而 onSleepDeclared
  * 又把 baseAt 推到他该醒的时刻，于是「去睡了」之后 QQ 通道等于物理断开。
  * 这里不等阶梯：他一道晚安，她就真去 QQ 说一句（reach 的全套红线照旧生效）。 */
@@ -4617,7 +4618,7 @@ async function speakWithCurrentConfig (text) {
       signal: ac.signal
     })
     if (my !== speakRunSeq) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
-    return { ok: true, url: r.url, speed: r.speed, lang: c.replyLang || 'zh' }
+    return { ok: true, url: r.url, env: r.env, speed: r.speed, lang: c.replyLang || 'zh' }
   } catch (err) {
     // 0.46.48 被新朗读顶掉的请求：不再走本地兜底（回退链只服务最新一轮）
     if (my !== speakRunSeq || ac.signal.aborted) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
@@ -4627,7 +4628,7 @@ async function speakWithCurrentConfig (text) {
       try {
         const sv = await ttsLocal.synthesizeSovits(spoken, c.replyLang || 'zh', () => cfg())
         if (my !== speakRunSeq) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
-        return { ok: true, url: sv.url, lang: c.replyLang || 'zh', local: true }
+        return { ok: true, url: sv.url, env: sv.env, lang: c.replyLang || 'zh', local: true }
       } catch (e2) {
         log('[tts-local] SoVITS 回退失败: ' + (e2 && e2.message))
       }
@@ -4636,7 +4637,7 @@ async function speakWithCurrentConfig (text) {
       try {
         const loc = await ttsLocal.synthesize(spoken, c.replyLang || 'zh', () => cfg())
         if (my !== speakRunSeq) return { ok: false, stale: true, lang: c.replyLang || 'zh' }
-        return { ok: true, url: loc.url, lang: c.replyLang || 'zh', local: true }
+        return { ok: true, url: loc.url, env: loc.env, lang: c.replyLang || 'zh', local: true }
       } catch (e2) {
         log('[tts-local] IndexTTS 回退失败: ' + (e2 && e2.message))
       }

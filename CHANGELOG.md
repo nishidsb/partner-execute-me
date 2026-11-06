@@ -1,5 +1,14 @@
 # 更新说明（CHANGELOG）
 
+## 0.46.63（2026-11-06）
+
+**口型照抄参考项目 AgentAtelierR（用户 22:02「0.46.62 还是奇怪，直接抄项目」）**：
+- 抄到的真相：参考项目**根本不轮换嘴形**——用 `facial_mouth_XXX_scrub_XX` 专用动画（内含完整开合周期）放 13 号轨冻结（timeScale=0），**按音频能量拖播放头**（`setTrackTime(duration × 开合度)`，上限 48%）。我们的骨架全带同款 scrub 动画（002/013/004/006 系列），0.46.61 却在用 `facial_mouth_XXX_active`（那是表情动画不是口型周期）+ 错误的定时器驱动
+- 主进程新增 `envelope.js`：合成 wav 后逐行移植 `audio_envelope.dart` 提取 20ms 帧振幅包络（95 分位 peak / 12 分位 noise 归一、^0.72 幂、attack 0.85/release 0.65 单极平滑），随 IPC 附加在 TTS 返回里（writeAudio + ttsLocal 三出口 + speakWithCurrentConfig 三透传点）
+- 渲染层逐行移植 `character_lipsync.dart`：dip 检测（500ms 参考窗内能量下探=音节间隙→闭嘴最短保持 50ms）+ RMS→dB 映射（-40..-3dB）+ attack 20ms/release 60ms 指数平滑 → scrub 播放头。无包络（mp3/系统语音）走参考项目同款正弦兜底（5.2Hz、28% 相位闭嘴）
+- 0.46.62 节奏引擎降级为「骨架无 scrub 动画」的兜底；test/envelope.test.js +4（wav 解析/静音/正常语音/截断鲁棒）挂总链
+- 教训：**抄之前先读懂参考项目的真实机制**——「轮换嘴形」和「scrub 播放头」是两种完全不同的技术路线，后者才是官方做法；Buffer.toString(encoding, start, **end**) 第三参是 end 不是长度
+
 ## 0.46.62（2026-11-06）
 
 **Spine 口型节奏重做**（用户 21:47 实锤 0.46.61「很快，基本等同于乱张嘴」）：

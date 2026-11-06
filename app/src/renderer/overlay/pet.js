@@ -101,13 +101,20 @@ function setTalking (on) {
   spineTalk(on)
 }
 
-/* ---- Spine 说话口型（0.46.61，0.46.62 节奏重做）：轨 6 = 嘴形专用最高轨 ----
-   0.46.61 首版 160ms 全池随机换 = 用户实锤「很快，基本等同于乱张嘴」。
-   重做成人类语音节奏：一个「音节」= 2~4 次开合（两个固定嘴形交替，~190ms/次），
-   音节之间词间停顿（闭嘴 0.2~0.46s）——不再全池乱跳。 */
+/* ---- Spine 说话口型（0.46.63 照抄参考项目 AgentAtelierR 同款机制）----
+   参考 lib/src/character_lipsync.dart + chat_screen._sampleSpeechEnvelope：
+   1) 主进程合成 wav 时提取 20ms 帧振幅包络（audio_envelope.dart 同款算法，随 IPC 带回）
+   2) 把一个「scrub 嘴型动画」（facial_mouth_XXX_scrub_XX，内含完整开合周期）放上
+      专用轨 6 并冻结（timeScale=0），按音频能量拖播放头：time = duration × 开合度（≤48%）
+   3) 无包络（mp3/系统语音）：参考项目同款正弦兜底（5.2Hz、28% 相位闭嘴）
+   0.46.61/62 的「轮换/节奏引擎」降级为无 scrub 动画骨架的兜底。 */
 let spineTalkTimer = null
 let spineTalkActive = false
 let spineTalkGestureTimer = null
+let spineTalkEnv = null          // 当前语音的振幅包络 { frameMs, values, rawRms }
+let spineTalkDynamics = null     // 口型动态状态（attack/release/闭嘴保持）
+let spineTalkAudio = null        // 正在播的 <audio>（取 currentTime 定位包络）
+let spineTalkStartMs = 0         // 无 audio 时的时间基准
 const SPINE_MOUTH_TRACK = 6
 /* 说话时的自动小动作（用户 11-06：参考项目说话时会自然做动作）。保守版：
    只挑「轻声/倾听/轻快」类轻量手势（权威词表解析，站/坐骨架自适应），~9-15s
@@ -119,18 +126,99 @@ function spineTalkGestureTick () {
   const hit = resolveSpineWord(w)
   if (hit && hit.combo && hit.combo.length) playSpineAction(hit.combo)
 }
+/* 包络采样 + 口型动态（character_lipsync.dart 逐行移植，默认参数） */
+const LIP = { dipThreshold: 0.1, ratio: 0.1, minHoldMs: 50, refWindowMs: 500, rmsCeiling: 1, floorDb: -40, ceilingDb: -3, attackMs: 20, releaseMs: 60 }
+function lipSample (posMs) {
+  const env = spineTalkEnv
+  if (!env || !env.values || !env.values.length) return 0
+  const frame = env.frameMs || 20
+  const exact = posMs / frame
+  const lower = Math.max(0, Math.min(env.values.length - 1, Math.floor(exact)))
+  const upper = Math.min(env.values.length - 1, lower + 1)
+  const energy = env.values[lower] + (env.values[upper] - env.values[lower]) * (exact - Math.floor(exact))
+  if (!spineTalkDynamics) return energy
+  const d = spineTalkDynamics
+  if (d.prev != null && posMs < d.prev) { d.prev = null; d.openness = 0; d.closedUntil = 0 } // 倒带 → 重置
+  d.prev = posMs
+  // 参考窗（500ms）内峰值：能量下探 = 音节间隙 → 闭嘴
+  const startIdx = Math.max(0, lower - Math.ceil(LIP.refWindowMs / frame))
+  let reference = 0
+  for (let i = startIdx; i <= lower; i++) reference = Math.max(reference, env.values[i])
+  const inAudio = posMs < frame * env.values.length
+  const closed = !inAudio || energy < LIP.dipThreshold || (reference > LIP.dipThreshold && energy < reference * LIP.ratio)
+  if (closed) d.closedUntil = Math.max(d.closedUntil, posMs + LIP.minHoldMs)
+  let target = 0
+  if (!closed && posMs >= d.closedUntil && env.rawRms && env.rawRms.length === env.values.length) {
+    const rms = Math.min(LIP.rmsCeiling, Math.max(0.000001, env.rawRms[lower]))
+    const db = 20 * Math.log(rms / LIP.rmsCeiling) / Math.LN10
+    target = Math.max(0, Math.min(1, (db - LIP.floorDb) / (LIP.ceilingDb - LIP.floorDb)))
+  }
+  const deltaMs = d.lastPos == null ? frame : Math.min(100000, Math.max(0, posMs - d.lastPos))
+  d.lastPos = posMs
+  const resp = target > d.openness ? LIP.attackMs : Math.max(LIP.releaseMs, closed ? 60 : 0)
+  d.openness += (target - d.openness) * (1 - Math.exp(-deltaMs / Math.max(1, resp)))
+  if (target === 0 && d.openness < 0.005) d.openness = 0
+  return Math.max(0, Math.min(1, d.openness))
+}
 function spineTalk (on) {
   const ctx = spineAnimCtx
   if (!ctx || !ctx.state) { spineTalkStop(); return }
   if (on) {
     if (spineTalkActive) return
+    // 首选：scrub 嘴型动画（参考项目 lipSyncScrubClip 同款，002 是他们各表情的默认）
+    const scrub = (ctx.anims || []).find((a) => a.name === 'facial_mouth_002_scrub_01')
+      || (ctx.anims || []).find((a) => /facial_mouth_\d+_scrub_\d+$/i.test(a.name))
+    if (scrub) {
+      let entry = null
+      try {
+        entry = ctx.state.setAnimation(SPINE_MOUTH_TRACK, scrub.name, false)
+        entry.timeScale = 0            // 冻结：播放头由音频能量拖动（scrub）
+        entry.mixBlend = 2             // MixBlend.replace：盖住下层嘴部姿态
+        entry.alpha = 0.56             // preset.lipSyncAlpha 默认
+      } catch { entry = null }
+      if (entry) {
+        spineTalkActive = true
+        spineTalkStartMs = performance.now()
+        spineTalkDynamics = { prev: null, lastPos: null, openness: 0, closedUntil: 0 }
+        const dur = scrub.duration || 0
+        const tick = () => {
+          if (!spineTalkActive) return
+          const cc = spineAnimCtx
+          if (!cc || !cc.state) { spineTalkStop(); return }
+          // 能量：有包络按播放位置采样；没有走参考项目正弦兜底
+          let mouthOpen
+          if (spineTalkEnv) {
+            const posMs = spineTalkAudio && spineTalkAudio.currentTime
+              ? spineTalkAudio.currentTime * 1000
+              : (performance.now() - spineTalkStartMs)
+            const energy = lipSample(posMs)
+            mouthOpen = energy < 0.08 ? 0 : Math.min(0.48, Math.pow((energy - 0.08) / 0.92, 0.78) * 0.48)
+          } else {
+            const seconds = spineTalkAudio && spineTalkAudio.currentTime
+              ? spineTalkAudio.currentTime
+              : (performance.now() - spineTalkStartMs) / 1000
+            const phase = (seconds * 5.2) % 1
+            const shut = phase < 0.28
+            const pulse = shut ? 0 : Math.abs(Math.sin((phase - 0.28) / 0.72 * Math.PI))
+            mouthOpen = (shut ? 0 : 0.24 + pulse * 0.46) * 0.48
+          }
+          try { entry.time = dur * mouthOpen } catch { }
+        }
+        tick()
+        spineTalkTimer = setInterval(tick, 33)   // ~30fps 拖播放头
+        if (!spineTalkGestureTimer) {
+          spineTalkGestureTimer = setInterval(spineTalkGestureTick, 9000 + Math.floor(Math.random() * 6000))
+        }
+        return
+      }
+    }
+    // 兜底：骨架没有 scrub 动画 → 0.46.62 节奏引擎（2 嘴形交替开合+词间停顿）
     const mouths = (ctx.anims || []).filter((a) => /^facial_mouth_\d+_active$/i.test(a.name))
-    if (!mouths.length) return   // 换了没嘴形动画的模型：静默跳过，跟立绘一样
-    // 只用 2 个固定嘴形交替当「开/换口」——46 个全池随机轮 = 乱张嘴（0.46.61 教训）
+    if (!mouths.length) return
     const va = mouths[0].name
     const vb = mouths[mouths.length >> 1].name
     spineTalkActive = true
-    const burst = () => {           // 一口气：一个词 = 2~4 个音节，然后闭嘴停顿
+    const burst = () => {
       if (!spineTalkActive) return
       const c = spineAnimCtx
       if (!c || !c.state) { spineTalkStop(); return }
@@ -141,11 +229,11 @@ function spineTalk (on) {
         const cc = spineAnimCtx
         if (!cc || !cc.state) { spineTalkStop(); return }
         if (i >= n) {
-          try { cc.state.setEmptyAnimation(SPINE_MOUTH_TRACK, 0.08) } catch {}   // 词间闭嘴
+          try { cc.state.setEmptyAnimation(SPINE_MOUTH_TRACK, 0.08) } catch { }
           spineTalkTimer = setTimeout(burst, 200 + Math.floor(Math.random() * 260))
           return
         }
-        try { cc.state.setAnimation(SPINE_MOUTH_TRACK, i % 2 ? vb : va, false) } catch {}
+        try { cc.state.setAnimation(SPINE_MOUTH_TRACK, i % 2 ? vb : va, false) } catch { }
         i++
         spineTalkTimer = setTimeout(syllable, 180 + Math.floor(Math.random() * 70))
       }
@@ -162,12 +250,15 @@ function spineTalk (on) {
 function spineTalkStop () {
   if (spineTalkGestureTimer) { clearInterval(spineTalkGestureTimer); spineTalkGestureTimer = null }
   spineTalkActive = false
-  if (spineTalkTimer) { clearTimeout(spineTalkTimer); spineTalkTimer = null }
+  spineTalkEnv = null
+  spineTalkAudio = null
+  spineTalkDynamics = null
+  if (spineTalkTimer) { clearInterval(spineTalkTimer); spineTalkTimer = null }
   const ctx = spineAnimCtx
-  if (ctx && ctx.state) { try { ctx.state.setEmptyAnimation(SPINE_MOUTH_TRACK, 0.12) } catch {} }
+  if (ctx && ctx.state) { try { ctx.state.setEmptyAnimation(SPINE_MOUTH_TRACK, 0.12) } catch { } }
 }
 /** 播放一段语音；返回 Promise，在播放结束/失败/被打断时 resolve（气泡靠它跟语音对齐） */
-function playVoice (url, speed, vol) {
+function playVoice (url, speed, vol, env) {
   return new Promise((resolve) => {
     try {
       if (nowPlaying) { nowPlaying.pause(); nowPlaying = null }
@@ -178,6 +269,9 @@ function playVoice (url, speed, vol) {
       const v = Number(vol)
       if (Number.isFinite(v)) a.volume = Math.min(1, Math.max(0.05, v))
       nowPlaying = a
+      // 0.46.63 口型：包络随 IPC 带回；scrub 播放头按 audio.currentTime 定位
+      spineTalkEnv = env && env.values && env.values.length ? env : null
+      spineTalkAudio = a
       let done = false
       const finish = () => {
         if (done) return
@@ -272,7 +366,7 @@ function speakTouch (part) {
   window.aura.petSpeak(text).then((r) => {
     // 主进程把当前回复语言带回，触摸短语语种保持同步
     if (r && r.lang && TOUCH_VOICE[r.lang]) touchLang = r.lang
-    if (r && r.ok && r.url) return playVoice(r.url, r.speed)
+    if (r && r.ok && r.url) return playVoice(r.url, r.speed, undefined, r.env)
     // 未配置 API TTS → 系统 voice 念一遍（保持有反馈，语种跟当前语言）
     if (r && r.fallback && window.speechSynthesis) {
       try {
@@ -434,7 +528,7 @@ async function speakReplyText (content, opts) {
   let r = null
   try { r = await window.aura.speakReply(text) } catch {}
   if (my !== readSeq) return false // 合成期间来了新朗读 → 这份作废
-  if (r && r.ok && r.url) { await playVoice(r.url, r.speed, vol); return true }
+  if (r && r.ok && r.url) { await playVoice(r.url, r.speed, vol, r.env); return true }
   /* 0.46.56 系统语音兜底只在「用户主动选了系统语音模式」（r.fallback）时用。
      旧代码无条件念——真机实锤（11-06 投诉「fish 正常，系统 TTS 也在说，
      还比 fish 快，说的全是台词」）：两块屏的窗口都会跑到这里，合成竞速输掉的
