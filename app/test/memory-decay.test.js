@@ -159,6 +159,20 @@ test('declaresSleep：「我要睡了」算，问句「你睡了吗」绝不算�
   assert.equal(nudge.declaresSleep('今天天气不错'), false)
 })
 
+test('0.46.60 declaresSleep 主语守卫：安排「她」睡觉的不算主人宣言（11-06 19:06 实锤）', () => {
+  // 当天事故原话：主语是她，关键词命中「困了/先睡」→ 误判主人去睡静默 7 小时
+  assert.equal(nudge.declaresSleep('不过莱莎要是困了就先睡吧，有你定的闹钟就够了'), false, '睡词说的是莱莎')
+  assert.equal(nudge.declaresSleep('你先睡吧'), false, '第二人称=在跟她说')
+  assert.equal(nudge.declaresSleep('你困了就早点睡'), false)
+  assert.equal(nudge.declaresSleep('她要是困了就躺下了，别管'), false)
+  assert.equal(nudge.declaresSleep('你睡了没'), false, '无问句词的「你睡了」也不算')
+  // 正常宣言不受影响
+  assert.equal(nudge.declaresSleep('晚安，莱莎'), true, '称呼后置不影响宣言')
+  assert.equal(nudge.declaresSleep('晚安莱莎，我去了'), true)
+  assert.equal(nudge.declaresSleep('我困了，先睡了'), true)
+  assert.equal(nudge.declaresSleep('おやすみ、ライザ'), true, '日语称呼后置')
+})
+
 test('stageOf：阶梯升级 + 防翻车（间隔/退避/24h 上限/重复期）', () => {
   const now = 1000000000000
   const fresh = { stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0 }

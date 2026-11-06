@@ -47,12 +47,27 @@ const SLEEP_WORDS = (
 const QUESTION_WORDS = ('吗,呢,么,?,？,要不要,是不是,有没有,不睡,？,か,？,' +
   '睡吗,睡不,困吗').split(',').filter(Boolean)
 
+/** 0.46.60 主语守卫：睡词前方贴着「她」= 这句在安排她的睡眠，不是主人的宣言。
+    11-06 19:06 实锤：主人说「莱莎要是困了就先睡吧」（主语是她），关键词命中
+    「困了/先睡」→ 误判主人去睡、静默 7 小时 → 主人一动就被当成「回来了」。
+    中/日语主语通常前置在谓语前，只看睡词前方 8 字内；「晚安，莱莎」这类
+    称呼后置不受影响，照常算宣言。 */
+const OTHER_SUBJECT_WORDS = ('莱莎,ライザ,りぜ,リーゼ,莉莎,你,妳,她,汝').split(',')
+
 /** 这句是「我要睡了」还是「你睡了吗」——问句一律不算宣言（参考 declaresSleep 修复） */
 function declaresSleep (text) {
   const s = String(text || '')
   if (!s) return false
   if (QUESTION_WORDS.some((q) => s.includes(q))) return false
-  return SLEEP_WORDS.some((w) => s.includes(w))
+  for (const w of SLEEP_WORDS) {
+    let i = s.indexOf(w)
+    while (i >= 0) {
+      const before = s.slice(Math.max(0, i - 8), i)
+      if (!OTHER_SUBJECT_WORDS.some((n) => before.includes(n))) return true
+      i = s.indexOf(w, i + 1)
+    }
+  }
+  return false
 }
 
 /**

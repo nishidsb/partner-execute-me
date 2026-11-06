@@ -785,8 +785,10 @@ function freeToolsOf (o) {
  */
 /* 0.46.58 收场自语模板轮换游标——必须放模块级（0.46.56 放在 runFree 内，每场
    重新定义时 seq 重置为 -1，永远轮到第 0 个模板 = 轮换形同虚设，11-06 15:51
-   二次投诉实锤：12:53/13:17/14:28 三场全是同一句）。 */
-let backShareSeq = -1
+   二次投诉实锤：12:53/13:17/14:28 三场全是同一句）。
+   0.46.60 随机起跑：进程重启游标会归零（18:57 重启后 19:19 又是模板 0 实锤），
+   每次启动先随机吃掉一截，重启也接得上上一次的模板。 */
+let backShareSeq = Math.floor(Math.random() * 3) - 1
 
 async function runFree (o) {
   const opt = o || {}
@@ -943,7 +945,23 @@ async function runFree (o) {
         () => 'あ、おかえり。ん、大したことしてないよ。',
         () => 'おかえり。ちょっと画面のほうに夢中だった。'
       ]
-      const pool2 = site ? withSite : noSite
+      /* 0.46.60 问候门槛：他只是安静了一阵、人根本没走（11-06 19:19 实锤：
+         闲置 ~11 分钟被打断也「あ、おかえり」，主人莫名其妙）。真离开
+         （起场时闲置 ≥20 分钟）才配「おかえり」开头，否则只交代在干嘛。 */
+      const greeted = (Number(opt.userIdleMs) || 0) >= 20 * 60 * 1000
+      const withSiteQuiet = [
+        (s) => 'ん、いまね、' + s + ' 覗いてたとこ。',
+        (s) => 'あ、ごめん、' + s + ' ばっか見てて手が止まってた。',
+        (s) => 'ん、' + s + ' で調べものしてた。'
+      ]
+      const noSiteQuiet = [
+        () => 'ん、ちょっと画面に夢中だった。',
+        () => 'あ、ごめん、ぼーっとしてた。',
+        () => 'ん、いまいろいろ見てたとこ。'
+      ]
+      const pool2 = site
+        ? (greeted ? withSite : withSiteQuiet)
+        : (greeted ? noSite : noSiteQuiet)
       backShareSeq = (backShareSeq + 1) % pool2.length
       const line = pool2[backShareSeq](site)
       await opt.onSoliloquy(line)
@@ -1484,13 +1502,13 @@ function create (deps) {
     if (running) return force ? { ok: false, why: 'running' } : undefined
     const c = cfgGet() || {}
     const idleMs = idleMsOf(c)
+    const idle = Number(idleSec()) || 0              // 0.46.60 提到外层：起场闲置时长要传进 runFree
     const userBack = force
       ? () => false                                  // 强制跑：用户授权的观察场，不让位
       : userBackOf(idleMs)
     if (!force) {
       if (c.autonomyOn !== true) return
       rollDay()
-      const idle = Number(idleSec()) || 0
       if (idle * 1000 < idleMs) return                 // 主人在，不占电脑
       if (busy()) return                               // 正在聊天/正在执行别的任务
       if (gameOn()) return                             // 0.46.42 主人在全屏游戏/看视频，不起场
@@ -1586,7 +1604,8 @@ function create (deps) {
           soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
           carryBlock,                           // 0.46.17 牵挂注入：上次没看完的先看完
           hearDescribe: d.hearDescribe,         // 0.46.54 听一下（耳朵的特征数据）
-          sleepQuiet: sleepQuietNow             // 0.46.56 收场自语的晚安静默闸
+          sleepQuiet: sleepQuietNow,            // 0.46.56 收场自语的晚安静默闸
+          userIdleMs: idle * 1000               // 0.46.60 回场问候门槛（闲置短=人没走）
         })
       } else {
         r = await runBrowse({

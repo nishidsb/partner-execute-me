@@ -982,6 +982,34 @@ test('0.46.58 backShare 模板轮换跨场生效：连跑两场被打断，收�
   assert.notEqual(said[0], said[1], '0.46.56 把轮换游标放 runFree 内每场重置，永远第 0 个模板：' + JSON.stringify(said))
 })
 
+test('0.46.60 backShare 问候门槛：起场闲置短=人没走，收场不说「おかえり」', async () => {
+  const mkRun = (userIdleMs) => {
+    const said = []
+    let ownerBack = false
+    const llm = {
+      chatStream: async ({ toolExec }) => {
+        await toolExec('open_url', { url: 'https://github.com/nishidsb' })
+        ownerBack = true
+        return { content: '看完就回。', toolResults: [] }
+      }
+    }
+    return a.runFree({
+      llm, llmCfg: { baseUrl: 'x', model: 'm' },
+      cua: { invoke: async () => ({}) },
+      userBack: () => ownerBack, journal: () => {}, openUrl: async () => {}, log: () => {},
+      userIdleMs,
+      onSoliloquy: async (line) => said.push(String(line || ''))
+    }).then(() => said)
+  }
+  // 11-06 19:19 实锤：闲置 ~11 分钟被打断也「あ、おかえり」——他根本没走
+  const quiet = await mkRun(11 * 60 * 1000)
+  assert.ok(quiet.length >= 1, '闲置短也要交代在干嘛（只是不问候）：' + JSON.stringify(quiet))
+  assert.ok(!quiet.every((l) => /おかえり|戻った/.test(l)), '闲置 <20 分钟不许说欢迎回来：' + JSON.stringify(quiet))
+  // 真离开（≥20 分钟）保留问候
+  const greeted = await mkRun(35 * 60 * 1000)
+  assert.ok(greeted.length >= 1 && /おかえり|戻った/.test(greeted.join('')), '真离开仍要问候：' + JSON.stringify(greeted))
+})
+
 // 11-05 巡检实锤：真机成功场全是「完全开放挡」，site-stats / carry.json 自上线零首写——
 // bumpSite 只认 browse、writeCarry 对 free 挡 topic 恒空。修完三处：runFree 带账出来、
 // 调度层 free 场记品味、被打断且没旧牵挂时用真看过/搜过的东西兜话题。
