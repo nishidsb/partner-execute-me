@@ -101,8 +101,12 @@ function setTalking (on) {
   spineTalk(on)
 }
 
-/* ---- Spine 说话口型（0.46.61）：轨 6 = 嘴形专用最高轨，其他轨从不播 facial_mouth，无骨骼冲突 ---- */
+/* ---- Spine 说话口型（0.46.61，0.46.62 节奏重做）：轨 6 = 嘴形专用最高轨 ----
+   0.46.61 首版 160ms 全池随机换 = 用户实锤「很快，基本等同于乱张嘴」。
+   重做成人类语音节奏：一个「音节」= 2~4 次开合（两个固定嘴形交替，~190ms/次），
+   音节之间词间停顿（闭嘴 0.2~0.46s）——不再全池乱跳。 */
 let spineTalkTimer = null
+let spineTalkActive = false
 let spineTalkGestureTimer = null
 const SPINE_MOUTH_TRACK = 6
 /* 说话时的自动小动作（用户 11-06：参考项目说话时会自然做动作）。保守版：
@@ -119,17 +123,35 @@ function spineTalk (on) {
   const ctx = spineAnimCtx
   if (!ctx || !ctx.state) { spineTalkStop(); return }
   if (on) {
-    if (spineTalkTimer) return
+    if (spineTalkActive) return
     const mouths = (ctx.anims || []).filter((a) => /^facial_mouth_\d+_active$/i.test(a.name))
     if (!mouths.length) return   // 换了没嘴形动画的模型：静默跳过，跟立绘一样
-    const step = () => {
-      try {
-        const a = mouths[Math.floor(Math.random() * mouths.length)]
-        ctx.state.setAnimation(SPINE_MOUTH_TRACK, a.name, false)
-      } catch {}
+    // 只用 2 个固定嘴形交替当「开/换口」——46 个全池随机轮 = 乱张嘴（0.46.61 教训）
+    const va = mouths[0].name
+    const vb = mouths[mouths.length >> 1].name
+    spineTalkActive = true
+    const burst = () => {           // 一口气：一个词 = 2~4 个音节，然后闭嘴停顿
+      if (!spineTalkActive) return
+      const c = spineAnimCtx
+      if (!c || !c.state) { spineTalkStop(); return }
+      let i = 0
+      const n = 2 + Math.floor(Math.random() * 3)
+      const syllable = () => {
+        if (!spineTalkActive) return
+        const cc = spineAnimCtx
+        if (!cc || !cc.state) { spineTalkStop(); return }
+        if (i >= n) {
+          try { cc.state.setEmptyAnimation(SPINE_MOUTH_TRACK, 0.08) } catch {}   // 词间闭嘴
+          spineTalkTimer = setTimeout(burst, 200 + Math.floor(Math.random() * 260))
+          return
+        }
+        try { cc.state.setAnimation(SPINE_MOUTH_TRACK, i % 2 ? vb : va, false) } catch {}
+        i++
+        spineTalkTimer = setTimeout(syllable, 180 + Math.floor(Math.random() * 70))
+      }
+      syllable()
     }
-    step()
-    spineTalkTimer = setInterval(step, 160)   // ~6 次/秒换嘴形，近似说话开合节奏
+    burst()
     if (!spineTalkGestureTimer) {
       spineTalkGestureTimer = setInterval(spineTalkGestureTick, 9000 + Math.floor(Math.random() * 6000))
     }
@@ -139,9 +161,8 @@ function spineTalk (on) {
 }
 function spineTalkStop () {
   if (spineTalkGestureTimer) { clearInterval(spineTalkGestureTimer); spineTalkGestureTimer = null }
-  if (!spineTalkTimer) return
-  clearInterval(spineTalkTimer)
-  spineTalkTimer = null
+  spineTalkActive = false
+  if (spineTalkTimer) { clearTimeout(spineTalkTimer); spineTalkTimer = null }
   const ctx = spineAnimCtx
   if (ctx && ctx.state) { try { ctx.state.setEmptyAnimation(SPINE_MOUTH_TRACK, 0.12) } catch {} }
 }
