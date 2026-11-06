@@ -778,6 +778,11 @@ function freeToolsOf (o) {
  * 挡 3 跑一场：她真的自己用这台电脑（看屏幕 → 决定 → 动手 → 再看）。
  * cua 引擎自带用户让位；这里再加主人回来中止 + 总时长上限。
  */
+/* 0.46.58 收场自语模板轮换游标——必须放模块级（0.46.56 放在 runFree 内，每场
+   重新定义时 seq 重置为 -1，永远轮到第 0 个模板 = 轮换形同虚设，11-06 15:51
+   二次投诉实锤：12:53/13:17/14:28 三场全是同一句）。 */
+let backShareSeq = -1
+
 async function runFree (o) {
   const opt = o || {}
   const log = opt.log || (() => { })
@@ -907,7 +912,6 @@ async function runFree (o) {
      0.46.56 两处收敛：① 晚安静默期内直接跳过（深夜不该「おかえり」）；② 模板
      轮换（11-06 投诉：每次回来都是同一句「あ、おかえり。いまね、URL を覗いてた
      とこ」——复读机观感。4 个变体轮着来，裸域名也只偶尔提）。 */
-  let backShareSeq = -1
   const backShare = async () => {
     try {
       if (typeof opt.onSoliloquy !== 'function') return

@@ -958,6 +958,30 @@ test('0.46.57 调度层：有旧牵挂时 free 挡被打断也要用本轮实际
   }
 })
 
+test('0.46.58 backShare 模板轮换跨场生效：连跑两场被打断，收场自语不能是同一句', async () => {
+  const said = []
+  const mkRun = () => {
+    let ownerBack = false
+    const llm = {
+      chatStream: async ({ toolExec }) => {
+        await toolExec('open_url', { url: 'https://github.com/nishidsb' })   // site 非空 → withSite 池
+        ownerBack = true
+        return { content: '看完就回。', toolResults: [] }
+      }
+    }
+    return a.runFree({
+      llm, llmCfg: { baseUrl: 'x', model: 'm' },
+      cua: { invoke: async () => ({}) },
+      userBack: () => ownerBack, journal: () => {}, openUrl: async () => {}, log: () => {},
+      onSoliloquy: async (line) => said.push(String(line || ''))
+    })
+  }
+  await mkRun()
+  await mkRun()
+  assert.ok(said.length >= 2, '两场都要有收场自语：' + JSON.stringify(said))
+  assert.notEqual(said[0], said[1], '0.46.56 把轮换游标放 runFree 内每场重置，永远第 0 个模板：' + JSON.stringify(said))
+})
+
 // 11-05 巡检实锤：真机成功场全是「完全开放挡」，site-stats / carry.json 自上线零首写——
 // bumpSite 只认 browse、writeCarry 对 free 挡 topic 恒空。修完三处：runFree 带账出来、
 // 调度层 free 场记品味、被打断且没旧牵挂时用真看过/搜过的东西兜话题。
