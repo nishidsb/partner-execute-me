@@ -400,7 +400,10 @@ function statusOf (state) {
   return {
     active: a ? {
       title: a.title, type: a.type, status: a.status,
-      notes: (a.notes || []).length, artifacts: (a.artifacts || []).length
+      notes: (a.notes || []).length, artifacts: (a.artifacts || []).length,
+      updatedAt: Number(a.updatedAt) || 0,        // 0.46.65 quiet 轨「项目搁浅」驱动用
+      paused: a.status === 'paused',
+      pauseReason: String(a.pauseReason || '')
     } : null,
     doneCount: (s.done || []).length
   }

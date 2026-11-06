@@ -397,6 +397,27 @@ function spaceToolsOf (dir, opts) {
       }
     },
     {
+      name: 'read_project_note',
+      desc: '读主人主动分享的项目进展笔记（他没开放时读不了；单次最多 8KB，offset 传上次返回的 nextOffset 往后翻）。只能读这一个文件，别的都碰不了。',
+      params: {
+        type: 'object',
+        properties: { offset: { type: 'number', description: '从第几个字节接着读（上次返回的 nextOffset），首次不传' } },
+        required: []
+      },
+      run: (a) => {
+        const cc = (typeof o.cocreateCfg === 'function' && o.cocreateCfg()) || {}
+        if (cc.on !== true || !String(cc.file || '').trim()) return '他还没在设置里开放共同创作，读不了。别问，也别猜他项目的事。'
+        let buf
+        try { buf = fs.readFileSync(String(cc.file).trim()) } catch { return '共享笔记现在读不到（还没写好或挪走了）。如实说你这会儿看不到，别装作看过了。' }
+        const off = Math.max(0, Math.min(buf.length, Math.floor(Number(a && a.offset) || 0)))
+        const piece = buf.subarray(off, off + COCREATE_INJECT_MAX)
+        L('cocreate-read', path.basename(String(cc.file).trim()), { bytes: piece.length, offset: off })
+        const next = off + piece.length
+        return piece.toString('utf8') +
+          (next < buf.length ? '\n（未完，nextOffset=' + next + '，总长 ' + buf.length + ' 字节）' : '\n（已到结尾）')
+      }
+    },
+    {
       name: 'watch_video',
       desc: '在 B 站搜一个视频并看掉它：给关键词（或视频链接/BV号），返回标题、UP主、简介和字幕全文——你「看」到的内容就是这份字幕。没有字幕的视频会如实说看不了，别装作看完了。',
       params: { type: 'object', properties: { query: { type: 'string', description: '关键词或视频链接/BV号' } }, required: [] },
@@ -459,6 +480,9 @@ async function runSpace (o) {
   const journal = opt.journal || (() => { })
   const openUrl = opt.openUrl
   const topic = String(opt.topic || '').trim()
+  /* 0.46.65 quiet 模式：人在电脑前的静默活动——不出声、不开网页、不抢窗口；
+     停场条件由调用方反转（userBack 传 busy()=他开始跟我聊天才停） */
+  const quiet = !!opt.quiet
   if (!llm || typeof llm.chatStream !== 'function') return { ok: false, why: 'no-llm' }
   if (!dir) return { ok: false, why: 'no-dir' }
 
@@ -471,12 +495,14 @@ async function runSpace (o) {
 
   const space = spaceToolsOf(dir, {
     journal, userBack, openUrl,
+    cocreateCfg: opt.cocreateCfg,
     onUserBack: () => { try { opt.signal && opt.signal.abort() } catch { } }
   })
 
   const tasteBlock = tasteBlockOf(opt.tastes)   // 0.45.17 记忆改变行为
   const goalBlock = String(opt.goalBlock || '')   // 0.45.18 需求驱动：动机语气
   const projBlock = String(opt.projBlock || '')   // 0.45.19 跨天项目：推进进行中的事
+  const cocreateBlock = String(opt.cocreateBlock || '')  // 0.46.65 共同创作（主人显式开放才有）
   const phaseBlock = dayflow.phaseBlockOf(opt.now)  // 0.45.19 时间感
   // 0.46.59 精确时间块：模糊时段不够——11-06 18:25 她自主收场时把记忆里 11-04 的
   // 「学到 0:20」旧约定当成快到的截止（「もうすぐ0時20分だね」，实际 18:25）。
@@ -485,25 +511,31 @@ async function runSpace (o) {
   const carryBlock = String(opt.carryBlock || '')   // 0.46.17 牵挂：上次没看完的先看完
   const langReq = monologueLangBlock(cfg.replyLang)   // 0.46.18 自语/汇报的语言跟设置走
   const sys = [
-    '主人离开了（键盘鼠标好几分钟没动），接下来几分钟是你自己的时间。',
+    quiet
+      ? '他就在电脑前忙自己的事。安安静静做你手里的活就好，不要打扰他，不用跟他说话，也不出声。'
+      : '主人离开了（键盘鼠标好几分钟没动），接下来几分钟是你自己的时间。',
     '你在磁盘上有一块「自己的地盘」：' + dir,
     '地盘里的东西全归你：可以写笔记、记账、整理以前存的东西、写点想写的话。只许动地盘里面的，外面的一个字节都不碰——工具已经做了硬限制，试了也会被拦。',
-    topic ? '你今天感兴趣的话题：「' + topic + '」。可以去搜搜看（open_url），把值得留的记进你的笔记。搜索时像活人那样：几个自然关键词，别把文档标题、# 号、引号原样搬进搜索框。' : '',
-    '想看视频的话，watch_video 可以在 B 站搜一个视频并看掉它（字幕全文，不用开浏览器）。',
+    (!quiet && topic) ? '你今天感兴趣的话题：「' + topic + '」。可以去搜搜看（open_url），把值得留的记进你的笔记。搜索时像活人那样：几个自然关键词，别把文档标题、# 号、引号原样搬进搜索框。' : '',
+    !quiet ? '想看视频的话，watch_video 可以在 B 站搜一个视频并看掉它（字幕全文，不用开浏览器）。' : '',
     ...(carryBlock ? [carryBlock] : []),
     ...(tasteBlock ? [tasteBlock] : []),
     ...(goalBlock ? [goalBlock] : []),
     ...(projBlock ? [projBlock] : []),
+    ...(cocreateBlock ? [cocreateBlock] : []),
     ...(phaseBlock ? [phaseBlock] : []),
     ...(nowBlock ? [nowBlock] : []),
     ...(langReq ? [langReq] : []),
-    '用工具做事，别只是想。做完之后，用一两句话、第一人称、口语说说你刚才干了什么（不用跟主人打招呼，他不在）。',
+    '用工具做事，别只是想。做完之后，用一两句话、第一人称、口语说说你刚才干了什么' + (quiet ? '（不用跟主人打招呼，他在忙，也不用等他回应）。' : '（不用跟主人打招呼，他不在）。'),
     '小气一点：两三个工具调用能做完就做完，别把时间花在翻来覆去列目录上。',
     SOLI_PROMPT
   ].filter(Boolean).join('\n')
 
+  // 0.46.65 quiet：工具表只留 space_*（不开网页不出声），LLM 硬点别的名字也拒
+  const defs = quiet ? space.defs.filter((t) => /^space_/.test(t.function.name)) : space.defs
+
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
-  journal({ level: 2, kind: 'session-start', detail: dir })
+  journal({ level: 2, kind: quiet ? 'quiet-start' : 'session-start', detail: dir })
   const t0 = Date.now()
   let content = ''
   try {
@@ -515,27 +547,28 @@ async function runSpace (o) {
         { role: 'system', content: sys },
         { role: 'user', content: '你的地盘现在有：' + inventory + '。开始吧。' }
       ],
-      tools: space.defs,
+      tools: defs,
       toolExec: async (name, args) => {
         if (Date.now() - t0 > maxScriptMsOf(cfg)) { try { ctrl && ctrl.abort() } catch { }; return '安全时间上限到了，立刻收尾。' }
         if (Date.now() - t0 > maxScriptMsOf(cfg) * 0.85) return '快到安全时间上限了——把手头这步做完就收尾，不要再开始新的事情。'
+        if (quiet && !/^space_/.test(name)) return '这个工具这会儿不可用（他在忙，不开网页、不出声）。做你地盘里的事就好。'
         const r2 = await space.exec(name, args)
         return r2
       }
     })
     content = String((r && r.content) || '').trim()
-    await soliEmitter(opt, cfg)(content)   // 0.46.0 顺嘴的自语：解析（自语）行 → 宿主出口（限频）
+    if (!quiet) await soliEmitter(opt, cfg)(content)   // 0.46.0 顺嘴的自语（quiet 全程无声，不走）
   } catch (e) {
     const msg = String((e && e.message) || e)
     if (/abort/i.test(msg) || space.stopped()) {
-      journal({ level: 2, kind: 'session-end', detail: '主人回来，中断' })
+      journal({ level: 2, kind: 'session-end', detail: quiet ? '他开始跟我聊天，静默收场' : '主人回来，中断' })
       return { ok: false, why: 'user-back' }
     }
     log('[autonomy] 地盘活动失败: ' + msg.slice(0, 120))
     journal({ level: 2, kind: 'session-end', detail: '出错 ' + msg.slice(0, 80) })
     return { ok: false, why: 'llm-error' }
   }
-  journal({ level: 2, kind: 'session-end', detail: '正常结束' })
+  journal({ level: 2, kind: 'session-end', detail: quiet ? '静默活动正常结束' : '正常结束' })
   // 中止信号可能被流吞掉（fetch 已完成才让位）：循环停了就不算一场完整的活动
   if (space.stopped()) {
     journal({ level: 2, kind: 'session-end', detail: '主人回来，中断' })
@@ -644,7 +677,7 @@ function freeToolsOf (o) {
   // 0.46.35 完全开放 ≠ 只会开网页：挡 3 并入挡 2 的地盘工具（写笔记/整理自己的文件）——
   // 提示词一直叫她「查到的记进笔记」，工具表里却从没给过笔记工具（断链，真机 74 场全在浏览的根因之一）。
   const space = o.spaceDir
-    ? spaceToolsOf(o.spaceDir, { journal, userBack, onUserBack })
+    ? spaceToolsOf(o.spaceDir, { journal, userBack, onUserBack, cocreateCfg: o.cocreateCfg })
     : null
   // 0.46.36 space 自带的 open_url（挡 2 白名单版）和 watch_video 与 free 自己的那份重名——
   // LLM 400 "Tool names must be unique"，0.46.35 部署后挡 3 场场全灭（真机 00:52~02:37 实锤）。
@@ -1187,6 +1220,38 @@ function pickRunner (c, hasLlm) {
   return { level: 1, kind: 'browse' }
 }
 
+/* ── 0.46.65 quiet 轨（静默陪伴活动）：人在电脑前也可以安安静静做自己的活 ──
+ * 与出门场完全分开：独立开关（默认关——主人 11-06 拍板，真机验证前不进日常运行）、
+ * 独立冷却、独立每日上限；busy（他在跟我聊天）/游戏全屏/晚安静默一票否决；
+ * 驱动二选一：needs 总压力 ≥ QUIET_PRESSURE_MIN，或项目搁浅超一天（惦记）。
+ * 没有合适的事就不活动——不许为消耗上限而动。 */
+const QUIET_PRESSURE_MIN = 60
+const QUIET_DAILY_DEFAULT = 2
+const QUIET_PROJECT_STALE_MS = 24 * 3600000
+/** quiet 冷却 1~3 小时（比出门场长：她在场时的活动要更克制） */
+function quietCooldownMs (rand) {
+  const r = typeof rand === 'function' ? rand : Math.random
+  return Math.round((60 + r() * 120) * 60 * 1000)
+}
+/** quiet 场门禁（纯函数，可单测）。o = {busy, gameOn, sleepQuiet, now, nextQuietAt, quietToday, pressure, projectStale} */
+function quietGate (c, o) {
+  if (!c || c.quietOn !== true) return { ok: false, why: 'quiet-off' }
+  const x = o || {}
+  if (x.busy) return { ok: false, why: 'busy' }
+  if (x.gameOn) return { ok: false, why: 'game' }
+  if (x.sleepQuiet) return { ok: false, why: 'sleep-quiet' }
+  if ((Number(x.now) || 0) < (Number(x.nextQuietAt) || 0)) return { ok: false, why: 'quiet-cooldown' }
+  if ((Number(x.quietToday) || 0) >= Math.max(1, Number(c.quietDailyMax) || QUIET_DAILY_DEFAULT)) return { ok: false, why: 'quiet-daily-max' }
+  if (!((Number(x.pressure) || 0) >= QUIET_PRESSURE_MIN) && !x.projectStale) return { ok: false, why: 'quiet-no-urge' }
+  return { ok: true }
+}
+
+/* ── 0.46.65 共同创作（read_project_note）：主人显式开放才存在的只读窗 ──
+ * 配置 global.companion.cocreate = { on:false, file:'共享笔记绝对路径' }，默认关；
+ * 每次 run 现读 config 不缓存 → 撤回授权立即生效。落盘读 200KB 不设限的是 space 文件，
+ * 这里另设注入上限 8KB（防共享文件吃爆上下文，主人 11-06 修正③），带 offset 翻页。 */
+const COCREATE_INJECT_MAX = 8 * 1024
+
 /** 0.46.49 品味账认站：free 挡开过的网页域名映射回 SITES key（认不得的站不记账，不污染） */
 function siteKeyOf (host) {
   const h = String(host || '').toLowerCase()
@@ -1472,6 +1537,9 @@ function create (deps) {
   let lastResult = null
   let todayCount = 0
   let dayKey = ''
+  // 0.46.65 quiet 轨独立账本：跟出门场（nextAt/todayCount）完全分开
+  let quietToday = 0
+  let nextQuietAt = 0
 
   /** 挡 2 的地盘目录：用户指定的优先；没指定就落在角色工作区里的 her-space */
   function spaceDirOf (c) {
@@ -1487,7 +1555,7 @@ function create (deps) {
   function rollDay () {
     const dt = new Date(now())
     const k = dt.getFullYear() + '-' + (dt.getMonth() + 1) + '-' + dt.getDate()
-    if (k !== dayKey) { dayKey = k; todayCount = 0 }
+    if (k !== dayKey) { dayKey = k; todayCount = 0; quietToday = 0 }
   }
 
   /**
@@ -1507,15 +1575,42 @@ function create (deps) {
     const userBack = force
       ? () => false                                  // 强制跑：用户授权的观察场，不让位
       : userBackOf(idleMs)
+    let quietMode = false
     if (!force) {
       if (c.autonomyOn !== true) return
       rollDay()
-      if (idle * 1000 < idleMs) return                 // 主人在，不占电脑
-      if (busy()) return                               // 正在聊天/正在执行别的任务
-      if (gameOn()) return                             // 0.46.42 主人在全屏游戏/看视频，不起场
-      if (sleepQuietNow()) return                      // 0.46.56 晚安静默期内不起场（她说过她去睡了）
-      if (now() < nextAt) return
-      if (todayCount >= Math.max(1, Number(c.autonomyDailyMax) || 6)) return
+      const userHere = idle * 1000 < idleMs
+      if (!userHere) {
+        if (busy()) return                               // 正在聊天/正在执行别的任务
+        if (gameOn()) return                             // 0.46.42 主人在全屏游戏/看视频，不起场
+        if (sleepQuietNow()) return                      // 0.46.56 晚安静默期内不起场（她说过她去睡了）
+        if (now() < nextAt) return
+        if (todayCount >= Math.max(1, Number(c.autonomyDailyMax) || 6)) return
+      } else {
+        /* 0.46.65 quiet 轨：人在电脑前也可以安安静静做自己的活。
+           默认关（quietOn !== true 不动）；busy=他在跟我聊天、游戏全屏、晚安静默全一票否决；
+           独立冷却+独立每日上限；驱动=needs 压力够大或项目搁浅超一天。没劲头就不动。 */
+        let pressure = 0
+        try {
+          if (d.needs) {
+            const pp = pool() || {}
+            const hasT = ['thoughts', 'themes', 'biliTitles'].some((k) => Array.isArray(pp[k]) && pp[k].length)
+            pressure = needs.pressureOf(d.needs.state({ hasTopics: hasT, hadExperience: todayCount > 0 }))
+          }
+        } catch { }
+        let projStale = false
+        try {
+          const prjSt = d.projects ? d.projects.status() : null
+          projStale = !!(prjSt && prjSt.active && Number(prjSt.active.updatedAt) &&
+            (now() - Number(prjSt.active.updatedAt)) >= QUIET_PROJECT_STALE_MS)
+        } catch { }
+        const g = quietGate(c, {
+          busy: busy(), gameOn: gameOn(), sleepQuiet: sleepQuietNow(),
+          now: now(), nextQuietAt, quietToday, pressure, projectStale: projStale
+        })
+        if (!g.ok) return
+        quietMode = true
+      }
     } else {
       if (busy()) return { ok: false, why: 'busy' }
       rollDay()
@@ -1537,7 +1632,19 @@ function create (deps) {
     // 0.45.19 跨天项目：没有进行中的就从话题池立一个；block 注入 sys
     const prj = d.projects || null
     const projBlock = prj ? prj.block(p.themes || []) : ''
-    const runner = pickRunner(c, !!(d.llmCfg && d.llmCfg() && d.llmCfg().model))
+    // 0.46.65 共同创作块：主人显式开放（global.companion.cocreate={on,file}）才非空
+    const cocreateCfgOf = () => {
+      try {
+        const cc = c.cocreate
+        return (cc && typeof cc === 'object') ? cc : {}
+      } catch { return {} }
+    }
+    const _cc = cocreateCfgOf()
+    const cocreateBlock = (_cc.on === true && String(_cc.file || '').trim())
+      ? '他自己项目的进展放在一个共享笔记里了，read_project_note 可以看（单次 8KB，返回里给了 nextOffset 就能带 offset 接着翻）。这是他自己愿意分享的事：有兴趣再去看；看完可以有自己的看法、建议、期待，也记进你的记忆（带日期）。但你的项目和生活仍是你的、优先——有想法才聊，不强制，也别因为看了就立刻找他说话。'
+      : ''
+    // 0.46.65 quiet 场固定走地盘挡（不出声不开窗），出门场照旧三挡
+    const runner = quietMode ? { level: 2, kind: 'quiet' } : pickRunner(c, !!(d.llmCfg && d.llmCfg() && d.llmCfg().model))
     // 0.46.17 品味：喜恶记忆参与选题（讨厌的剔除、喜欢的加权）
     const tastes = typeof d.tastes === 'function' ? (d.tastes() || []) : []
     let topic = ''
@@ -1553,33 +1660,40 @@ function create (deps) {
       // 挡 2 没话题也能去地盘写点什么，话题只是加分项
       if (topic) log('[autonomy] 选题「' + String(topic).slice(0, 24) + '」' + (carry ? '（续接牵挂）' : ''))   // 0.46.19 品味留痕
     }
-    // 挡 2/3（free/space）没有本地选题，牵挂走提示词注入
-    const carryBlock = (carry && runner.kind !== 'browse')
+    // 挡 2/3（free/space）没有本地选题，牵挂走提示词注入；quiet 场不续牵挂（不浏览）
+    const carryBlock = (carry && (runner.kind === 'space' || runner.kind === 'free'))
       ? '有一件之前没看完的事：「' + carry.topic + '」。如果还感兴趣，可以先把它看完再自由活动。'
       : ''
 
     running = true
-    // 0.46.64 项目成果校验基准目录：space/free 场都是她的地盘（成果硬闸用，须在分支外先备好）
-    const spDir = (runner.kind === 'space' || runner.kind === 'free') ? spaceDirOf(c) : ''
-    const site = runner.kind === 'browse' ? pickSite(ws0, rand) : SITES[Math.floor(rand() * SITES.length) % SITES.length]
+    // 0.46.64 项目成果校验基准目录：space/free/quiet 场都是她的地盘（成果硬闸用，须在分支外先备好）
+    const spDir = (runner.kind === 'space' || runner.kind === 'free' || runner.kind === 'quiet') ? spaceDirOf(c) : ''
+    const site = runner.kind === 'browse'
+      ? pickSite(ws0, rand)
+      : (runner.kind === 'quiet' ? null : SITES[Math.floor(rand() * SITES.length) % SITES.length])
     if (runner.kind === 'browse' && site) log('[autonomy] 去处：' + site.key + (site.name ? '（' + site.name + '）' : ''))   // 0.46.19 留痕
     try {
       let r
-      if (runner.kind === 'space') {
+      if (runner.kind === 'space' || runner.kind === 'quiet') {
         const dir = spaceDirOf(c)
         try { fs.mkdirSync(dir, { recursive: true }) } catch { }
         r = await runSpace({
-          topic, dir, log, now,
+          topic: runner.kind === 'quiet' ? '' : topic, dir, log, now,
           llm: require('./llm'),
           llmCfg: d.llmCfg ? d.llmCfg() : null,
           journal: journalFn,
           openUrl: d.openUrl,
-          userBack,
+          // 0.46.65 quiet：停场条件反转——他开始跟我聊天（busy）才停，人坐在电脑前不是停止理由
+          userBack: runner.kind === 'quiet' ? () => !!busy() : userBack,
+          quiet: runner.kind === 'quiet',
           sleep: d.sleep,
           tastes: d.tastes ? d.tastes() : [],   // 0.45.17 记忆改变行为
           goalBlock,                            // 0.45.18 需求驱动
           projBlock,                            // 0.45.19 跨天项目
-          onSoliloquy: d.onSoliloquy,           // 0.46.0 活动中的自言自语
+          cocreateBlock,                        // 0.46.65 共同创作（默认无）
+          cocreateCfg: cocreateCfgOf,           // 0.46.65 read_project_note 现读配置（撤回即失效）
+          // quiet 全程无声：不给自语出口（也顺带杜绝喂进冷落账本）
+          onSoliloquy: runner.kind === 'quiet' ? null : d.onSoliloquy,
           soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
           carryBlock,                           // 0.46.17 牵挂注入：上次没看完的先看完
           hearDescribe: d.hearDescribe          // 0.46.54 听一下（耳朵的特征数据）
@@ -1603,6 +1717,8 @@ function create (deps) {
           tastes: d.tastes ? d.tastes() : [],   // 0.45.17 记忆改变行为
           goalBlock,                            // 0.45.18 需求驱动
           projBlock,                            // 0.45.19 跨天项目
+          cocreateBlock,                        // 0.46.65 共同创作（默认无）
+          cocreateCfg: cocreateCfgOf,           // 0.46.65 read_project_note 现读配置
           onSoliloquy: d.onSoliloquy,           // 0.46.0 活动中的自言自语
           soliMax: c.autonomySoliloquyMax,      // 每场自语上限（宿主配置实时）
           carryBlock,                           // 0.46.17 牵挂注入：上次没看完的先看完
@@ -1659,8 +1775,14 @@ function create (deps) {
         else if (carry && r && r.ok) clearCarry(ws0)   // 这场把旧牵挂看完了 → 销账
       } catch { }
       if (r.ok) {
-        todayCount++
-        if (nd) nd.discharge('session')    // 0.45.18 出门一圈，无聊和好奇泄掉
+        // 0.46.65 quiet 场记独立账本（quietToday/nextQuietAt），出门场照旧
+        if (quietMode) {
+          quietToday++
+          nextQuietAt = now() + quietCooldownMs(rand)
+        } else {
+          todayCount++
+        }
+        if (nd) nd.discharge('session')    // 0.45.18 出门/静默干完一圈，无聊和好奇泄掉
         const line = runner.kind === 'browse' ? lineOf(r) : String(r.content || '').trim()
         /* 0.45.19 跨天项目：汇报记一笔。0.46.64 v2：收尾走 parseClose 协议——
            【成果】入 artifacts（逐个过 verifyArtifact 硬闸）、【状态】完成/搁置/放弃/改向/继续
@@ -1674,23 +1796,28 @@ function create (deps) {
         }
         try { onDone(r, said) } catch (e) { log('[autonomy] onDone 失败: ' + (e && e.message)) }
         // 压力越高冷却越短：憋得狠的时候，下一场来得早些
-        const scale = needState ? needs.cooldownScaleOf(needState) : 1
-        nextAt = now() + Math.round(nextCooldownMs(rand) * scale)
+        if (!quietMode) {
+          const scale = needState ? needs.cooldownScaleOf(needState) : 1
+          nextAt = now() + Math.round(nextCooldownMs(rand) * scale)
+        }
       } else if (r.why === 'llm-error') {
         // 0.45.11：deepseek 高峰期 503 把刚开场的一场整个报废（真机日志实证）——
         // 一次服务端抖动不该换来一小时禁闭，llm.js 已加退避重试，这里再兜一层：5 分钟后就地补跑
-        nextAt = now() + 5 * 60 * 1000
+        if (quietMode) nextQuietAt = now() + 5 * 60 * 1000
+        else nextAt = now() + 5 * 60 * 1000
       } else {
         // 0.46.4 被打断（user-back）也算出了半趟门：真的看了做了，好奇泄一半。
         // 以前完全不泄压 → 好奇常年 100，她永远憋着一股劲到处开网页。
         if (r.why === 'user-back' && nd) nd.discharge('interrupt')
-        nextAt = now() + nextCooldownMs(rand)
+        if (quietMode) nextQuietAt = now() + quietCooldownMs(rand)
+        else nextAt = now() + nextCooldownMs(rand)
       }
-      log('[autonomy] 结束 why=' + (r.why || '?') + ' 下次最早 ' +
-        Math.round((nextAt - now()) / 60000) + ' 分钟后')
+      log('[autonomy] 结束 why=' + (r.why || '?') + (quietMode ? '（quiet）' : '') + ' 下次最早 ' +
+        Math.round(((quietMode ? nextQuietAt : nextAt) - now()) / 60000) + ' 分钟后')
     } catch (e) {
       log('[autonomy] 剧本异常: ' + (e && e.message))
-      nextAt = now() + 20 * 60 * 1000
+      if (quietMode) nextQuietAt = now() + 20 * 60 * 1000
+      else nextAt = now() + 20 * 60 * 1000
       if (force) return { ok: false, why: 'error' }
     } finally {
       running = false
@@ -1730,6 +1857,12 @@ function create (deps) {
       last: lastResult,
       needs: d.needs ? d.needs.status() : null,   // 0.45.18 三股压力可见
       project: d.projects ? d.projects.status() : null,   // 0.45.19 进行中的项目
+      // 0.46.65 quiet 轨可见性
+      quiet: {
+        on: c.quietOn === true,
+        today: quietToday,
+        nextInMs: Math.max(0, nextQuietAt - now())
+      },
       phase: dayflow.phaseOf(now()).key           // 0.45.19 她现在的时间段
     }
   }
@@ -1740,6 +1873,9 @@ function create (deps) {
 module.exports = {
   IDLE_TRIGGER_MS, TICK_MS, COOLDOWN_MIN, COOLDOWN_MAX, MAX_SCRIPT_MS, SITES, BROWSER_PN,
   MAX_SPACE_FILE, JOURNAL_MAX, CUA_FREE_TOOLS,
+  /* 0.46.65 quiet 轨 + 共同创作 */
+  QUIET_PRESSURE_MIN, QUIET_DAILY_DEFAULT, QUIET_PROJECT_STALE_MS, COCREATE_INJECT_MAX,
+  quietGate, quietCooldownMs,
   nextCooldownMs, pickTopic, lineOf, runBrowse, isBrowser, arrived, create, idleMsOf,
   /* 0.46.32 她自己看视频 */
   runVideoWatch,
