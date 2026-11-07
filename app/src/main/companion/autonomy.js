@@ -418,6 +418,19 @@ function spaceToolsOf (dir, opts) {
       }
     },
     {
+      name: 'write_project_note',
+      desc: '主人开放共同创作时，把你的回应/想法/做完东西的说明**追加**到他那份共享笔记的末尾（会自动署名莱莎+时间）。只能追加，他写的字动不了；没开放就写不了。有话才写，别为写而写。',
+      params: {
+        type: 'object',
+        properties: { text: { type: 'string', description: '要追加的内容，纯文本，一次最多 4KB' } },
+        required: ['text']
+      },
+      run: (a) => {
+        const cc = (typeof o.cocreateCfg === 'function' && o.cocreateCfg()) || {}
+        return require('./progressNote').appendNote(cc, a && a.text, (msg) => L('cocreate-write', msg))
+      }
+    },
+    {
       name: 'watch_video',
       desc: '在 B 站搜一个视频并看掉它：给关键词（或视频链接/BV号），返回标题、UP主、简介和字幕全文——你「看」到的内容就是这份字幕。没有字幕的视频会如实说看不了，别装作看完了。',
       params: { type: 'object', properties: { query: { type: 'string', description: '关键词或视频链接/BV号' } }, required: [] },
@@ -1651,7 +1664,7 @@ function create (deps) {
     }
     const _cc = cocreateCfgOf()
     const cocreateBlock = (_cc.on === true && String(_cc.file || '').trim())
-      ? '他自己项目的进展放在一个共享笔记里了，read_project_note 可以看（单次 8KB，返回里给了 nextOffset 就能带 offset 接着翻）。这是他自己愿意分享的事：有兴趣再去看；看完可以有自己的看法、建议、期待，也记进你的记忆（带日期）。但你的项目和生活仍是你的、优先——有想法才聊，不强制，也别因为看了就立刻找他说话。'
+      ? '他自己项目的进展放在一个共享笔记里了，read_project_note 可以看（单次 8KB，返回里给了 nextOffset 就能带 offset 接着翻）。这不是只读的：write_project_note 可以把你的回应/想法**追加**到他写的内容后面（只许追加，他的字动不了）。这是他自己愿意分享的事：有兴趣再去看；看完有看法就写回去，他做完的东西你也可以接着弄——这才叫共同创作。但你的项目和生活仍是你的、优先——有想法才动笔，不强制，也别因为看了就立刻找他说话。'
       : ''
     // 0.46.65 quiet 场固定走地盘挡（不出声不开窗），出门场照旧三挡
     const runner = quietMode ? { level: 2, kind: 'quiet' } : pickRunner(c, !!(d.llmCfg && d.llmCfg() && d.llmCfg().model))

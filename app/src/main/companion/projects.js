@@ -462,6 +462,10 @@ function create (deps) {
         const title = r.finished ? r.finished.title : (r.abandoned ? r.abandoned.title : (state.active ? state.active.title : ''))
         try { if (title) d.onEvent(r.event, title) } catch { }
       }
+      // 0.46.72 作品交付：真完成（硬闸过了、有真实成果文件）→ 通知宿主送到主人看得见的地方
+      if (r.finished && typeof d.onDeliver === 'function') {
+        try { d.onDeliver(r.finished, sp) } catch { }
+      }
       emitSync()
       return r
     },

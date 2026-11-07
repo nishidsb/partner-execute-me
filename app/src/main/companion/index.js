@@ -2206,6 +2206,14 @@ function getProjects () {
           const cc = cfg().cocreate || {}
           require('./progressNote').write(st, cc, log)
         } catch (e) { log('[projects] 进展笔记同步异常: ' + (e && e.message)) }
+      },
+      // 0.46.72 作品交付：她真做完的项目，成果文件复制到共享目录「莱莎的作品/」+ 共享笔记里留一行
+      onDeliver: (finished, spaceDir) => {
+        try {
+          const cc = cfg().cocreate || {}
+          if (!cc.on || !cc.file) return
+          require('./progressNote').deliverArtifacts(finished, spaceDir, cc, (s, r) => autonomy.spaceGuard(s, r), log)
+        } catch (e) { log('[projects] 作品交付异常: ' + (e && e.message)) }
       }
     })
   }

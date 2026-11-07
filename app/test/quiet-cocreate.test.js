@@ -269,3 +269,104 @@ test('progressNote 接线：宿主 index.js 真的注入 onSync + 启动回填�
   const psrc = fs.readFileSync(path.join(__dirname, '../src/main/companion/projects.js'), 'utf8')
   assert.ok(psrc.includes('function emitSync'), 'projects.js 有 emitSync')
 })
+
+/* ── 0.46.72 共同创作真正的「共同」：write_project_note + 作品交付 ── */
+
+test('progressNote.appendNote：追加署名段，主人原内容一个字不动', () => {
+  const dir = tmp()
+  const shared = path.join(dir, '笔记.md')
+  fs.writeFileSync(shared, '主人的原文')
+  const cc = { on: true, file: shared }
+  const logs = []
+  const r1 = progressNote.appendNote(cc, '我看了你写的问题，我的想法是……', (m) => logs.push(m))
+  assert.ok(r1.includes('已追加'), '成功话术：' + r1)
+  const body = fs.readFileSync(shared, 'utf8')
+  assert.ok(body.startsWith('主人的原文'), '原文还在开头')
+  assert.ok(body.includes('**莱莎**（'), '署名+时间戳在')
+  assert.ok(body.includes('我的想法是'), '内容在')
+  assert.ok(logs.length === 1, '留痕一次')
+  // 再追加一次 → 两次都在，顺序保留
+  progressNote.appendNote(cc, '第二条')
+  const body2 = fs.readFileSync(shared, 'utf8')
+  assert.ok(body2.indexOf('我的想法是') < body2.indexOf('第二条'), '追加按顺序')
+  assert.ok(body2.startsWith('主人的原文'), '原文仍在开头')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('progressNote.appendNote：没开/空文/文件丢失/超大 全部如实拒绝', () => {
+  const dir = tmp()
+  const shared = path.join(dir, '笔记.md')
+  fs.writeFileSync(shared, 'x')
+  const off = { on: false, file: shared }
+  assert.ok(progressNote.appendNote(off, 'hi', null).includes('没在设置里开放'), 'off 拒绝')
+  assert.ok(progressNote.appendNote({}, 'hi', null).includes('没在设置里开放'), '空配置拒绝')
+  assert.ok(progressNote.appendNote({ on: true, file: shared }, '  ', null).includes('是空的'), '空文拒绝')
+  assert.ok(progressNote.appendNote({ on: true, file: path.join(dir, '没有.md') }, 'hi', null).includes('读不到'), '文件丢失拒绝')
+  // 超 4KB 截断（不拒绝，截断落盘）
+  const big = 'あ'.repeat(5000)
+  const r = progressNote.appendNote({ on: true, file: shared }, big, null)
+  assert.ok(r.includes('已追加'), '大文本截断后仍写入')
+  // 超大文件拒绝（>512KB）
+  const huge = path.join(dir, 'huge.md')
+  fs.writeFileSync(huge, 'x'.repeat(513 * 1024))
+  assert.ok(progressNote.appendNote({ on: true, file: huge }, 'hi', null).includes('太大'), '超大文件拒绝')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('progressNote.deliverArtifacts：成果复制到「莱莎的作品」+ 共享笔记留一行，原件不动', () => {
+  const dir = tmp()
+  const space = path.join(dir, 'space')
+  fs.mkdirSync(space, { recursive: true })
+  const shared = path.join(dir, '笔记.md')
+  fs.writeFileSync(shared, '主人的原文')
+  fs.writeFileSync(path.join(space, '成果.md'), '# 她写的作品')
+  fs.writeFileSync(path.join(space, '空.md'), '')
+  const cc = { on: true, file: shared }
+  const guard = (s, r) => { const p = path.resolve(s, r); return p.startsWith(path.resolve(s)) ? p : null }
+  const finished = { title: '写一篇短文', artifacts: [{ path: '成果.md', kind: 'final' }, { path: '空.md', kind: 'final' }] }
+  const logs = []
+  const msg = progressNote.deliverArtifacts(finished, space, cc, guard, (m) => logs.push(m))
+  assert.ok(msg && msg.includes('写一篇短文') && msg.includes('莱莎的作品/'), '返回说明：' + msg)
+  const outDir = path.join(dir, '莱莎的作品')
+  const delivered = fs.readdirSync(outDir)
+  assert.equal(delivered.length, 1, '空文件被跳过，只送 1 件：' + JSON.stringify(delivered))
+  assert.ok(delivered[0].includes('写一篇短文') && delivered[0].includes('成果.md'), '文件名带项目标题')
+  assert.equal(fs.readFileSync(path.join(outDir, delivered[0]), 'utf8'), '# 她写的作品', '内容一致')
+  assert.equal(fs.readFileSync(path.join(space, '成果.md'), 'utf8'), '# 她写的作品', '她地盘的原件不动')
+  const body = fs.readFileSync(shared, 'utf8')
+  assert.ok(body.startsWith('主人的原文'), '主人笔记原文在前')
+  assert.ok(body.includes('**莱莎**（') && body.includes('作品放在'), '笔记里留了交付说明')
+  // off → null 不送
+  assert.equal(progressNote.deliverArtifacts(finished, space, { on: false, file: shared }, guard, null), null)
+  assert.equal(progressNote.deliverArtifacts(finished, space, cc, guard, null) && true, true, '二次调用防撞车不炸')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('progressNote.deliverArtifacts：越界/无 guard/无成果 → null 不送', () => {
+  const dir = tmp()
+  const shared = path.join(dir, '笔记.md')
+  fs.writeFileSync(shared, 'x')
+  const cc = { on: true, file: shared }
+  const finished = { title: 'T', artifacts: [{ path: '../outside.md' }] }
+  const strictGuard = () => null
+  assert.equal(progressNote.deliverArtifacts(finished, dir, cc, strictGuard, null), null, '越界全跳过')
+  assert.equal(progressNote.deliverArtifacts({ title: 'T', artifacts: [] }, dir, cc, strictGuard, null), null, '无成果')
+  assert.equal(progressNote.deliverArtifacts(finished, '', cc, strictGuard, null), null, '无 spaceDir')
+  assert.equal(progressNote.deliverArtifacts(null, dir, cc, strictGuard, null), null, '空 finished')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('0.46.72 接线静态扫描：write_project_note 进工具表 + 路由按 spaceDefs + onDeliver 交付', () => {
+  const asrc = fs.readFileSync(path.join(__dirname, '../src/main/companion/autonomy.js'), 'utf8')
+  assert.ok(asrc.includes("name: 'write_project_note'"), '工具表里有 write_project_note')
+  assert.ok(asrc.includes('progressNote\').appendNote') || asrc.includes("appendNote(cc"), 'run 里调 appendNote')
+  // write_project_note 在 spaceDefs 名单里 → 路由按名单自动覆盖（不用改 exec）
+  const defLine = asrc.split('\n').findIndex((l) => l.includes("name: 'write_project_note'"))
+  const routeLine = asrc.split('\n').find((l) => l.includes('spaceDefs.some'))
+  assert.ok(defLine > -1 && routeLine && asrc.indexOf("name: 'write_project_note'") < asrc.indexOf(routeLine) + 1e9, '工具在 spaceToolsOf 内（spaceDefs 路由可达）')
+  const psrc = fs.readFileSync(path.join(__dirname, '../src/main/companion/projects.js'), 'utf8')
+  assert.ok(psrc.includes('d.onDeliver'), 'projects.record 触发 onDeliver')
+  const isrc = fs.readFileSync(path.join(__dirname, '../src/main/companion/index.js'), 'utf8')
+  assert.ok(isrc.includes('deliverArtifacts'), 'index.js 注入 onDeliver → deliverArtifacts')
+  assert.ok(isrc.includes('autonomy.spaceGuard'), '交付走 spaceGuard 包含性校验')
+})
