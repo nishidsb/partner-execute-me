@@ -173,6 +173,19 @@ test('0.46.60 declaresSleep 主语守卫：安排「她」睡觉的不算主人�
   assert.equal(nudge.declaresSleep('おやすみ、ライザ'), true, '日语称呼后置')
 })
 
+test('0.46.69 declaresSleep 邀请否决：睡词后跟「一起/看视频」不算宣言（11-07 16:34 实锤）', () => {
+  // 当天事故原话：白天说休息+邀请一起看视频 → 命中「休息了」→ 误判晚安 → QQ 发晚安+静默到 23:34
+  assert.equal(nudge.declaresSleep('我暂时可以好好休息了莱莎，来一起看视频吧'), false, '邀请看视频不是就寝')
+  assert.equal(nudge.declaresSleep('休息了休息了，一起来玩游戏吧'), false)
+  assert.equal(nudge.declaresSleep('我去眯一会，等下回来一起聊天'), false)
+  // 真宣言不受影响（邀请词在睡词前方，不查前方）
+  assert.equal(nudge.declaresSleep('一起看完这集我就休息了'), true, '邀请词在前方不误伤')
+  assert.equal(nudge.declaresSleep('晚安，我先去睡了'), true)
+  assert.equal(nudge.declaresSleep('困了，去躺下了'), true)
+  // 已知代价：真晚安+句尾邀请会被漏判——宁可漏判不误判（漏=照常陪聊，误=乱发晚安+静默数小时）
+  assert.equal(nudge.declaresSleep('我先睡了，你们一起玩吧'), false, '已知漏判，接受')
+})
+
 test('stageOf：阶梯升级 + 防翻车（间隔/退避/24h 上限/重复期）', () => {
   const now = 1000000000000
   const fresh = { stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0 }

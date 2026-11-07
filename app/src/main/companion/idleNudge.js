@@ -54,6 +54,15 @@ const QUESTION_WORDS = ('吗,呢,么,?,？,要不要,是不是,有没有,不睡,
     称呼后置不受影响，照常算宣言。 */
 const OTHER_SUBJECT_WORDS = ('莱莎,ライザ,りぜ,リーゼ,莉莎,你,妳,她,汝').split(',')
 
+/** 0.46.69 邀请否决：睡词后方 12 字内跟着「一起/视频」这类共同活动词 = 这是
+    「陪我休息/一起玩」，不是就寝宣言。
+    11-07 16:34 实锤：主人说「我暂时可以好好休息了莱莎，来一起看视频吧」，
+    「休息了」命中 → 误判晚安 → QQ 发了晚安 + 静默到 23:34。
+    只查后方不查前方：「一起看完这集我就休息了」这种是真宣言，不能误伤；
+    代价是「我先睡了，你们一起玩吧」会被漏判——宁可漏判（照常陪聊）不误判
+    （乱发晚安+静默几小时）。 */
+const INVITE_VETO_WORDS = '一起,视频,电影,游戏,聊天,陪我,看番,看剧,打牌'.split(',')
+
 /** 这句是「我要睡了」还是「你睡了吗」——问句一律不算宣言（参考 declaresSleep 修复） */
 function declaresSleep (text) {
   const s = String(text || '')
@@ -63,7 +72,10 @@ function declaresSleep (text) {
     let i = s.indexOf(w)
     while (i >= 0) {
       const before = s.slice(Math.max(0, i - 8), i)
-      if (!OTHER_SUBJECT_WORDS.some((n) => before.includes(n))) return true
+      const after = s.slice(i + w.length, i + w.length + 12)
+      const subjectOk = !OTHER_SUBJECT_WORDS.some((n) => before.includes(n))
+      const noInvite = !INVITE_VETO_WORDS.some((v) => after.includes(v))
+      if (subjectOk && noInvite) return true
       i = s.indexOf(w, i + 1)
     }
   }
