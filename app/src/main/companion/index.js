@@ -329,6 +329,8 @@ async function snubLine (saidText, streak, rl) {
 /** 冷落成立（inner sweepSays 判定回调）：当场自言自语一句——走 narration 通道，
  *  不期待回应、不再进负反馈（她自己嘟囔不算「跟他说话」，这是语义底线）。 */
 async function onSnubbed (saidText, streak) {
+  // 0.46.67 双保险：晚安静默期内不嘀咕（exempt 已挡判定，这里挡别的调用路径）
+  if (nudgeRec.sleepUntil && Date.now() < Number(nudgeRec.sleepUntil)) return
   const c = cfg()
   const rl = c.replyLang === 'auto' ? 'zh' : (c.replyLang || 'zh')
   let line = ''
@@ -505,6 +507,9 @@ function syncInner (char) {
     exempt: () => {
       try { if (require('../gameMode').isActive()) return true } catch { }
       try { if (study.active(studySess)) return true } catch { }
+      // 0.46.67 晚安静默期不记冷落：她答应过夜里不开口（sleepUntil 挂着），
+      // 主人不接话天经地义——11-07 00:04 实锤：静默期内 snub 照判、嘀咕还 TTS 出声
+      try { if (nudgeRec.sleepUntil && Date.now() < Number(nudgeRec.sleepUntil)) return true } catch { }
       return false
     },
     onSnubbed: (text, streak) => { onSnubbed(text, streak) },

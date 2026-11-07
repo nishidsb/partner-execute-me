@@ -186,3 +186,32 @@ test('0.46.33 rhythm：被晾的那阵子主动开口最小间隔拉长', async 
   assert.equal(r.ok, false, '被晾后间隔拉长应仍挡住: ' + JSON.stringify(r))
   assert.ok(r.waitMs > 7 * 60 * 1000, '拉长后的剩余等待应 > 7 分钟: ' + r.waitMs)
 })
+
+test('0.46.67 晚安静默期不记冷落不嘀咕：道晚安后主人不接话天经地义（00:04 实锤修复）', async () => {
+  const inner = require('../src/main/companion/inner')
+  const ws = tmpWs()
+  const t0 = Date.now()
+  const snubs = []
+  let sleepQuiet = false
+  inner.setContext({
+    wsDir: ws,
+    log: () => { },
+    feedback: 'on',
+    cfgGet: () => ({ coldShoulderOn: true, coldShoulderMin: 3 }),
+    idleSec: () => 0,   // 人在电脑前（半夜用电脑工作很正常）
+    exempt: () => sleepQuiet,   // 宿主把晚安静默并进豁免
+    onSnubbed: (text, streak) => snubs.push({ text, streak })
+  })
+  // 她说了句话没人接，且正在晚安静默期（23:45 道过晚安挂到早上）
+  inner.noteSayTimeout('夜更深了')
+  sleepQuiet = true
+  inner.sweepSays(t0 + 4 * 60 * 1000)
+  assert.equal(self.snubStreakNow(ws, t0 + 4 * 60 * 1000), 0, '静默期不记冷落')
+  assert.equal(snubs.length, 0, '静默期不嘀咕不 TTS')
+  // 天亮静默解除 → 同样情形恢复正常记账
+  sleepQuiet = false
+  inner.noteSayTimeout('早啊，睡得还好吗')
+  inner.sweepSays(t0 + 8 * 60 * 1000)
+  assert.equal(self.snubStreakNow(ws, t0 + 8 * 60 * 1000), 1, '静默解除后照常记')
+  assert.equal(snubs.length, 1)
+})
