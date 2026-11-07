@@ -152,3 +152,21 @@ test('cocreate：配置指向哪读哪（文件不存在→如实说读不了）
   assert.ok((await run('read_project_note', {})).includes('读不到'))
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('挡3 路由修复：freeToolsOf 里 read_project_note 走 space 执行器，不再掉进 CUA（0.46.66）', async () => {
+  const dir = tmp()
+  const note = path.join(dir, 'shared-note.md')
+  fs.writeFileSync(note, '进度：路由修复验证', 'utf8')
+  const free = autonomy.freeToolsOf({
+    spaceDir: dir,
+    journal: () => {},
+    userBack: () => false,
+    cocreateCfg: () => ({ on: true, file: note }),
+    cua: { invoke: async () => { throw new Error('CUA 不该被调到 read_project_note') } }
+  })
+  const names = free.defs.map((d) => d.function.name)
+  assert.ok(names.includes('read_project_note'), '挡3 工具表里有 read_project_note')
+  const out = String(await free.exec('read_project_note', {}))
+  assert.ok(out.includes('进度：路由修复验证'), '真正读到内容（走 space 执行器）：' + out.slice(0, 60))
+  fs.rmSync(dir, { recursive: true, force: true })
+})

@@ -740,7 +740,14 @@ function freeToolsOf (o) {
     exec: async (name, args) => {
       const a = args || {}
       // 0.46.35 地盘工具（space_*）：路由给 spaceToolsOf（自带越界守卫 + 留日志）
-      if (space && /^space_/.test(name)) return space.exec(name, a)
+      // 0.46.66 路由修复：read_project_note 不带 space_ 前缀，之前只按前缀路由——
+      // 工具表里声明了它（LLM 会调），执行却掉进 CUA 分支报「未知 CUA 操作」
+      // （真机 11-07 07:31/08:46/09:52 三连实锤）。改成按 spaceDefs 声明名单路由。
+      // ⚠️ 名单必须用 spaceDefs（已滤掉 open_url/watch_video）而不是 space.defs——
+      // space.defs 里有白名单版 open_url，路由进去会用 space 自己的 stopped 闸，
+      // free.stopped() 永远 false → 主人回来检测失效 → carry 被误销账
+      // （0.46.49/0.46.57 两个 carry 测试当场抓回来的教训，别再合并这两个名单）。
+      if (space && (/^space_/.test(name) || spaceDefs.some((d) => d.function && d.function.name === name))) return space.exec(name, a)
       if (name === 'listen') {
         const g = gate(); if (g) return g
         if (listens >= LISTEN_MAX) return '这场已经听了 ' + listens + ' 次了，凭已听到的决定接下来做什么就好。'

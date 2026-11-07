@@ -180,6 +180,7 @@ function ensure (state, themes, now, rand) {
   const avoid = (s.done || []).map((d) => d.title)
   const pool = (Array.isArray(themes) ? themes : [])
     .map((t) => String(t || '').trim())
+    .map((t) => t.replace(/^#+\s*/, '').trim())   // 0.46.66 抓屏选题带进「# 搜索记录」这类 markdown 头，标题里不该有
     .filter((t) => t.length >= 2 && t.length <= 40)
   const theme = pool.find((t) => !avoid.some((a) => a.includes(t) || t.includes(a))) || pool[0] || ''
   const lastType = (s.done && s.done[0] && s.done[0].type) || ''
