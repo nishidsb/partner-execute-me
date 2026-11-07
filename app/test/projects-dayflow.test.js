@@ -318,3 +318,41 @@ test('autonomy.create + projects：4 场记 4 笔，v2 不再攒笔自动收尾'
   assert.equal(st.project.doneCount, 0, 'v2 攒笔不自动收尾')
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+/* ── 0.46.73 自主制作动真格：做东西是本质（主人 23:0x 拍板） ── */
+
+test('0.46.73 选题权重：动手做的类型占大头，研究不再最重', () => {
+  const w = projects.TYPE_WEIGHTS
+  assert.ok(w.writing > w.research, '写作 > 研究：' + JSON.stringify(w))
+  assert.ok(w.conceive >= w.research, '构思 ≥ 研究')
+  assert.ok(w.collection >= w.research, '收藏 ≥ 研究')
+  assert.ok(Object.values(w).every((x) => x >= 1), '没有归零的类型')
+})
+
+test('0.46.73 构思也必须有真实文件才能收尾', () => {
+  assert.ok(projects.NEEDS_FILE_TYPES.includes('conceive'), 'conceive 进 NEEDS_FILE_TYPES')
+  const s = projects.normalize({ active: { title: '构思点东西', type: 'conceive', why: 'w', steps: ['a', 'b', 'c'] } })
+  const blocked = projects.finishProject(s, 10, () => true)
+  assert.ok(blocked.blocked, '没有成果文件不许收尾：' + blocked.blocked)
+  s.active.artifacts = [{ path: '构思.md', kind: 'final' }]
+  const ok = projects.finishProject(s, 11, () => true)
+  assert.ok(ok.finished, '有真实成果就能收尾')
+})
+
+test('0.46.73 blockOf 注入 craftHint：每场都告诉她「这场就真的动手做」', () => {
+  for (const type of projects.TYPES) {
+    const tpl = projects.TYPE_TEMPLATES[type]
+    assert.ok(tpl.craftHint && tpl.craftHint.length >= 10, type + ' 有 craftHint')
+    const b = projects.blockOf({ active: { title: 'T-' + type, type, why: 'w', steps: ['s1'], noteIdx: 0, notes: [] } })
+    assert.ok(b.includes('真的动手') || b.includes('动手做') || b.includes('记进') || b.includes('存进去'), type + ' 注入动手话术')
+    assert.ok(b.includes(tpl.craftHint.slice(0, 10)), type + ' craftHint 原文进块')
+  }
+  const pb = projects.blockOf({ active: { title: 'T', type: 'writing', why: 'w', steps: ['s1'], status: 'paused', pauseReason: 'r', notes: [] } })
+  assert.ok(!pb.includes('craftHint标记'), '搁置态不炸')
+})
+
+test('0.46.73 sys 提示词：地盘话术含「做作品」定位（静态扫描）', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/main/companion/autonomy.js'), 'utf8')
+  assert.ok(src.includes('想动手做的东西别只停留在想'), 'spaceBlock 有动手做定位')
+  assert.ok(src.includes('那是你自己的目录'), 'space_write 定位为作品目录')
+})

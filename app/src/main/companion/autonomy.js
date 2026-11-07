@@ -936,8 +936,8 @@ async function runFree (o) {
      和建议清单把行为全锚定在浏览上。重写：行为面拓宽（不止浏览）+ 地盘写笔记 + 隐私红线
      （设置页一直承诺「不会翻你隐私」，提示词里却从没写过这条约束）。 */
   const spaceBlock = opt.spaceDir
-    ? '你的地盘（' + opt.spaceDir + '）也在：space_write/space_append 可以记笔记、存你想留的东西，' +
-      'space_list/space_read 可以翻你自己以前存的。查到有用的东西，随手记一笔，别下次又空手从头查。'
+    ? '你的地盘（' + opt.spaceDir + '）也在：space_write/space_append 不只是记笔记——想写点什么、做点什么作品，那是你自己的目录，随便你用；' +
+      'space_list/space_read 可以翻你自己以前存的。查到有用的东西记一笔；想动手做的东西别只停留在想，写出来、存进去才算做了。'
     : ''
   const sys = [
     '主人离开了（键盘鼠标好几分钟没动），这台电脑归你用，直到你把想做的事做完为止。',

@@ -36,10 +36,11 @@ const MOOD_CAP = 8
 const ARTIFACT_CAP = 12
 
 const TYPES = ['research', 'writing', 'collection', 'organize', 'conceive']
-/** 选题加权：研究仍是大头，但写作/收藏/构思都有真概率，整理偶尔来一次 */
-const TYPE_WEIGHTS = { research: 3, writing: 2, collection: 2, organize: 1, conceive: 1 }
-/** 需要「有真实作品文件」才能收尾的类型 */
-const NEEDS_FILE_TYPES = ['writing', 'collection']
+/** 选题加权（0.46.73 主人拍板「自主制作=做出来的东西」）：动手做的类型占大头——
+ * 写作最重，构思/收藏次之，研究降为普通概率；整理偶尔来一次 */
+const TYPE_WEIGHTS = { research: 2, writing: 3, collection: 2, organize: 1, conceive: 2 }
+/** 需要「有真实作品文件」才能收尾的类型（0.46.73 构思也必须有落盘的构思文档） */
+const NEEDS_FILE_TYPES = ['writing', 'collection', 'conceive']
 
 /** 五类型模板：steps 只是默认起点，blockOf 注入时明确「可跳步/加步/改向」 */
 const TYPE_TEMPLATES = {
@@ -47,6 +48,7 @@ const TYPE_TEMPLATES = {
     label: '研究',
     steps: ['查资料弄明白它是什么', '把值得留的记进自己的笔记', '写一小段自己的看法收尾'],
     finishHint: '形成一段足以表达你自己认识的总结',
+    craftHint: '用 space_append 把查到的东西记进你的笔记文件，最后把你自己的看法也写进去——记下来的才是你的',
     titleOf: (t) => '弄清楚「' + t + '」',
     whyOf: () => '前几天就对它有点好奇，一直没腾出整块时间',
     fallback: '把手头的好奇理一理',
@@ -56,6 +58,7 @@ const TYPE_TEMPLATES = {
     label: '写作',
     steps: ['想清楚要写什么、大概什么样', '动笔写出初稿，存进自己的地盘', '自己读一遍，改到觉得过得去'],
     finishHint: '完成一篇你自己觉得过得去的作品，真实存在地盘里',
+    craftHint: '这场就真的动手写：space_write 开（或续）你自己的作品文件，把想说的话一段一段写进去——写出来的文字才是作品，光在心里打腹稿不算做',
     titleOf: (t) => '围绕「' + t + '」写点自己想写的',
     whyOf: () => '一直有个想写写看的念头',
     fallback: '写点最近想写的',
@@ -65,6 +68,7 @@ const TYPE_TEMPLATES = {
     label: '收藏',
     steps: ['定下要收什么、什么才值得留', '把真正喜欢的存进自己的地盘', '按自己的方式分好类'],
     finishHint: '收出一册有组织、回头找得到东西的收藏',
+    craftHint: '真的往地盘里存东西：space_write/space_append 把值得留的存进去、分好类——存进去的才算收藏',
     titleOf: (t) => '收一收「' + t + '」相关的宝贝',
     whyOf: () => '看到好东西总想留下来',
     fallback: '把喜欢的宝贝归一册',
@@ -74,6 +78,7 @@ const TYPE_TEMPLATES = {
     label: '整理',
     steps: ['盘点现状，看看都有些什么', '定个归置的路子', '动手归置到位'],
     finishHint: '原来乱的那堆东西真的归了位、找得到',
+    craftHint: '真的动手归置：space_move/space_write 把地盘里的东西理到位——归完要看得出来变整齐了',
     titleOf: (t) => '把「' + t + '」理出个头绪',
     whyOf: () => '一直堆着的东西该理理了',
     fallback: '把手头的笔记理一理',
@@ -83,6 +88,7 @@ const TYPE_TEMPLATES = {
     label: '构思',
     steps: ['把要构思的东西定下来', '铺开了想，不怕跑偏', '把成形的部分写下来存好'],
     finishHint: '写出一份能表达设计想法的构思说明',
+    craftHint: '用 space_write 把脑子里的影子写成一份构思文档：想到哪写到哪，写成真东西才算构思过',
     titleOf: (t) => '构思「' + t + '」',
     whyOf: () => '脑子里有个模糊的影子，想让它清楚起来',
     fallback: '把脑子里的影子画出来',
@@ -207,6 +213,7 @@ function blockOf (state) {
     if (arts.length) lines.push('你已经有这些成果：' + arts.map((x) => x.path).join('、') + '。')
     const step = a.steps[Math.min(a.noteIdx || 0, a.steps.length - 1)]
     lines.push('这次可以顺手推进它：' + step + '。不用一场做完，推进一点就行。')
+    lines.push('想动手的话这场就真的动手做：' + tpl.craftHint + '。')
   }
   lines.push('可以跳过步骤、中途加步骤，觉得没意思了就换方向或者放下。这个项目「做完」的标准：' + tpl.finishHint + '。真到了才说做完；没做出真实文件，就不能说完成了作品。')
   lines.push('收尾时在最后带上这些标记（没有就都不带，别编）：这场写了或存了成果文件就加【成果】文件名（多个用、隔开，相对你地盘的路径）；这次想收尾就加【状态】完成；想放一放就【状态】搁置；彻底不要了就【状态】放弃；想换个方向就【状态】改向：新题目；搁置过的想捡回来就【状态】继续；有感触可以带一句【心情】一句话。')
