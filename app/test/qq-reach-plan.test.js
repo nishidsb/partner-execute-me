@@ -132,3 +132,19 @@ test('⑦宿主真的接上了：仓里存在工具/桥/提示词/设置项', ()
   assert.match(html, /value="valley"/, '要有谷时选项')
   assert.match(html, /value="all"/, '要有全时段选项')
 })
+
+test('⑤「当场承诺」也免冷却（0.46.67）：屏幕刚开过口，晚安 QQ 不再被共用账本顶掉', () => {
+  const ic = { reachOn: true, ownerAccounts: ['359524452'], reachWindowMode: 'all' }
+  // 11-06 晚实锤复现：屏幕 00:19 刚开口 → nextAt 推到 ~01:00，00:30 主人道晚安
+  const rec = { lastAt: at(0, 19), nextAt: at(0, 19) + 45 * 60000, day: new Date(at(0, 30)).toDateString(), count: 3 }
+  const blocked = reach.shouldReach(rec, ic, { now: at(0, 30), connected: true })
+  assert.equal(blocked.ok, false)
+  assert.equal(blocked.why, 'cooldown', '普通路径仍受冷却约束（防滥用）')
+  const bye = reach.shouldReach(rec, ic, { now: at(0, 30), connected: true, bypassWindow: true, bypassCooldown: true })
+  assert.equal(bye.ok, true, '晚安承诺（bypassCooldown）应该放行')
+  assert.equal(bye.uid, '359524452')
+  // 免冷却不等于免安全边界：掉线/没配主人/关了开关照样拒
+  assert.equal(reach.shouldReach(rec, ic, { now: at(0, 30), connected: false, bypassCooldown: true }).why, 'disconnected')
+  assert.equal(reach.shouldReach(rec, ic, { now: at(0, 30), connected: true, bypassCooldown: true, }).ok, true)
+  assert.equal(reach.shouldReach(rec, { reachOn: false }, { now: at(0, 30), connected: true, bypassCooldown: true }).why, 'off')
+})

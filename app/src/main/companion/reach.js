@@ -63,11 +63,17 @@ function shouldReach (rec, ic, o) {
   }
   const r = rec || {}
   // 「两边只算一次」：nextAt 由任意一边开过口时写入（桌面陪伴也算），到点前谁都别再开口
-  const next = Number(r.nextAt) || 0
-  if (next && now < next) return { ok: false, why: 'cooldown' }
-  // 老记录（0.45.96 及之前没有 nextAt）：退回「距上次开口至少 GAP_MIN_MS」
-  const last = Number(r.lastAt) || 0
-  if (!next && last && now - last < GAP_MIN_MS) return { ok: false, why: 'cooldown' }
+  // 0.46.67 bypassCooldown：当场承诺（道晚安）不但免时段，还得免冷却——
+  // 真机 11-06 晚实锤：23:35 屏幕刚开口 → 23:45 晚安被 cooldown 拦；
+  // 00:19 又开口 → 00:30/00:31 晚安再被拦，三连毁约（共用账本本意是节流，不该拦承诺）。
+  // 滥用风险有界：晚安入口自带 30 分钟锁 + busy 锁，一次晚安最多补发一条。
+  if (!(o && o.bypassCooldown)) {
+    const next = Number(r.nextAt) || 0
+    if (next && now < next) return { ok: false, why: 'cooldown' }
+    // 老记录（0.45.96 及之前没有 nextAt）：退回「距上次开口至少 GAP_MIN_MS」
+    const last = Number(r.lastAt) || 0
+    if (!next && last && now - last < GAP_MIN_MS) return { ok: false, why: 'cooldown' }
+  }
   return { ok: true, why: '', uid }
 }
 

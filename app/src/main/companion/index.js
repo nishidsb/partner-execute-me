@@ -1869,8 +1869,10 @@ async function tryQqGoodnight () {
   try {
     const now = Date.now()
     const ic = imApi ? imApi.cfg() : null
-    // 「晚安」是当场承诺（他就在跟你道别），不吃谷时窗口：说了要去 QQ 找他，就得真去
-    const gate = reach.shouldReach(reachRec, ic, { now, connected: imApi ? imApi.connected() : false, bypassWindow: true })
+    // 「晚安」是当场承诺（他就在跟你道别），不吃谷时窗口：说了要去 QQ 找他，就得真去。
+    // 0.46.67 也不吃共用账本的冷却——11-06 晚真机实锤：屏幕刚开过口，三次晚安
+    // 全被 cooldown 拦下（[reach] 睡前没去 QQ：cooldown ×3），承诺被账本毁约。
+    const gate = reach.shouldReach(reachRec, ic, { now, connected: imApi ? imApi.connected() : false, bypassWindow: true, bypassCooldown: true })
     if (!gate.ok) { log('[reach] 睡前没去 QQ：' + gate.why); return }
     const text = await nudgeLineByHint(SLEEP_REACH_HINT)
     if (!text) { log('[reach] 睡前那句没生成出来，这次不发了'); return }
