@@ -180,3 +180,88 @@ test('0.46.70 接线锁死：runFree 必须把 cocreateCfg 传进 freeToolsOf（
   assert.ok(line, '找到 runFree 的 freeToolsOf 构造行')
   assert.ok(/cocreateCfg:\s*opt\.cocreateCfg/.test(line), 'runFree→freeToolsOf 必须透传 cocreateCfg')
 })
+
+/* ── 0.46.71 共同创作「写向」：progressNote ── */
+
+const progressNote = require('../src/main/companion/progressNote')
+
+test('progressNote.render：active 项目 + done 记录都进文本', () => {
+  const md = progressNote.render({
+    active: {
+      title: '弄清楚搜索引擎的事', type: 'research', status: 'active',
+      why: '他最近常搜东西', updatedAt: 1794000000000,
+      notes: ['查到了一点眉目', '感觉方向不对，换个查法']
+    },
+    done: [
+      { title: '收集陶艺入门视频', type: 'collection', summary: '存了三个', outcome: 'finished', finishedAt: 1793000000000 },
+      { title: '写点什么', type: 'writing', summary: '没写出来', outcome: 'abandoned', finishedAt: 1792000000000 }
+    ]
+  })
+  assert.ok(md.includes('弄清楚搜索引擎的事'), 'active 标题在')
+  assert.ok(md.includes('暂时搁下') === false, 'active 状态没写搁置')
+  assert.ok(md.includes('换个查法'), '最近的记录在')
+  assert.ok(md.includes('收集陶艺入门视频'), 'done 标题在')
+  assert.ok(md.includes('放着了'), 'abandoned 有标记')
+  assert.ok(md.includes('做完了'), 'finished 有标记')
+  assert.ok(md.length < progressNote.CAP, '渲染结果在上限内')
+})
+
+test('progressNote.render：paused 项目带搁置理由；无项目显示空态', () => {
+  const md1 = progressNote.render({ active: { title: 'A', type: 'research', status: 'paused', pauseReason: '先把手头的事弄完', notes: [] }, done: [] })
+  assert.ok(md1.includes('暂时搁下') && md1.includes('先把手头的事弄完'), '搁置理由在')
+  const md2 = progressNote.render({ active: null, done: [] })
+  assert.ok(md2.includes('暂时没有开着的项目'), '空态如实说')
+})
+
+test('progressNote.write：cocreate 开着才写，落共享笔记同目录，off/无 file 不动笔', () => {
+  const dir = tmp()
+  const shared = path.join(dir, '给莱莎看的项目进展.md')
+  fs.writeFileSync(shared, '主人写的，不许被碰')
+  const state = { active: { title: '弄清楚搜索引擎的事', type: 'research', status: 'active', notes: ['第一步'] }, done: [] }
+  // off / 没配 → 不写
+  assert.equal(progressNote.write(state, { on: false, file: shared }, null), false)
+  assert.equal(progressNote.write(state, { on: true }, null), false)
+  assert.equal(progressNote.write(state, {}, null), false)
+  // 开着 → 写到同目录的「莱莎这边的进展.md」
+  assert.equal(progressNote.write(state, { on: true, file: shared }, null), true)
+  const out = path.join(dir, '莱莎这边的进展.md')
+  assert.ok(fs.existsSync(out), '写向文件落盘')
+  const body = fs.readFileSync(out, 'utf8')
+  assert.ok(body.includes('弄清楚搜索引擎的事'), '内容来自 projects 状态')
+  // 主人的原笔记一个字不许动
+  assert.equal(fs.readFileSync(shared, 'utf8'), '主人写的，不许被碰')
+  // outFile 覆盖路径
+  const custom = path.join(dir, 'sub', 'my.md')
+  assert.equal(progressNote.write(state, { on: true, file: shared, outFile: custom }, null), true)
+  assert.ok(fs.existsSync(custom), 'outFile 生效')
+  // 坏路径 → false 不 throw
+  assert.equal(progressNote.write(state, { on: true, file: shared, outFile: 'Z://no//such//dir//x.md' }, null), false)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('progressNote 接线：projects.create 的 onSync 钩子真的被调（开题+record）', () => {
+  const dir = tmp()
+  const ws = path.join(dir, 'ws')
+  fs.mkdirSync(ws, { recursive: true })
+  const projects = require('../src/main/companion/projects')
+  const seen = []
+  const inst = projects.create({
+    wsDir: () => ws, now: () => 1794000000000,
+    onSync: (st) => seen.push(st && st.active ? st.active.title : null)
+  })
+  inst.block(['做点研究'])
+  assert.ok(seen.length >= 1 && seen[0], '立新项目触发 onSync：' + JSON.stringify(seen))
+  inst.record('【状态】搁置【心情】有点累')
+  assert.ok(seen.length >= 2, '收尾也触发 onSync')
+  inst.sync()
+  assert.ok(seen.length >= 3, '手动 sync 也可用')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('progressNote 接线：宿主 index.js 真的注入 onSync + 启动回填（静态扫描）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../src/main/companion/index.js'), 'utf8')
+  assert.ok(src.includes("require('./progressNote').write"), 'getProjects 里注入 onSync → progressNote.write')
+  assert.ok(/startAutonomy\s*\(\)\s*\{[\s\S]{0,200}getProjects\(\)\.sync\(\)/.test(src), 'startAutonomy 启动回填 getProjects().sync()')
+  const psrc = fs.readFileSync(path.join(__dirname, '../src/main/companion/projects.js'), 'utf8')
+  assert.ok(psrc.includes('function emitSync'), 'projects.js 有 emitSync')
+})

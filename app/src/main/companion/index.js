@@ -2198,6 +2198,13 @@ function getProjects () {
           const text = textMap[ev]
           if (text) require('./memory').addEvent(ch.id, { cat: 'fact', text, importance: 2, source: 'project' })
         } catch { }
+      },
+      // 0.46.71 共同创作「写向」：项目状态一变就重写「莱莎这边的进展.md」（cocreate 开着才写）
+      onSync: (st) => {
+        try {
+          const cc = ((cfg().global || {}).companion || {}).cocreate || {}
+          require('./progressNote').write(st, cc, log)
+        } catch { }
       }
     })
   }
@@ -2239,6 +2246,8 @@ function autonomyPool () {
 
 function startAutonomy () {
   if (autonomyInst) return autonomyInst
+  // 0.46.71 启动回填：把当前项目进展先写一遍（不然要等下一场活动才有进展笔记）
+  try { getProjects().sync() } catch { }
   autonomyInst = autonomy.create({
     cfgGet: () => cfg(),
     log,

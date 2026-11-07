@@ -423,6 +423,10 @@ function create (deps) {
     return state
   }
   function commit () { try { save(wsDirOf(), state) } catch { } }
+  /** 0.46.71 写向钩子：项目状态有变化就通知宿主同步「莱莎这边的进展.md」（d.onSync） */
+  function emitSync () {
+    if (typeof d.onSync === 'function') { try { d.onSync(state) } catch { } }
+  }
 
   return {
     /** 没有 active 就立新项目；返回注入块。开题走 onEvent 进记忆 */
@@ -434,6 +438,7 @@ function create (deps) {
       if (!had && state.active && typeof d.onEvent === 'function') {
         try { d.onEvent('开题', state.active.title) } catch { }
       }
+      if (!had && state.active) emitSync()
       return blockOf(state)
     },
     /**
@@ -457,8 +462,11 @@ function create (deps) {
         const title = r.finished ? r.finished.title : (r.abandoned ? r.abandoned.title : (state.active ? state.active.title : ''))
         try { if (title) d.onEvent(r.event, title) } catch { }
       }
+      emitSync()
       return r
     },
+    /** 0.46.71 宿主启动时回填一次进展笔记（否则要等到下一场活动才有文件） */
+    sync () { ensureState(); emitSync() },
     /** 搁置/放弃项目的未竟方向，供选题池尾部（goals 仍是最高优先） */
     extras () {
       ensureState()
