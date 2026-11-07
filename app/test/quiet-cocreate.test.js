@@ -170,3 +170,13 @@ test('挡3 路由修复：freeToolsOf 里 read_project_note 走 space 执行器�
   assert.ok(out.includes('进度：路由修复验证'), '真正读到内容（走 space 执行器）：' + out.slice(0, 60))
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('0.46.70 接线锁死：runFree 必须把 cocreateCfg 传进 freeToolsOf（19:41 真机实锤）', () => {
+  // 0.46.66 的测试直接调 freeToolsOf 传参所以绿了——洞在 runFree→freeToolsOf 的传递层：
+  // 0.46.65 起 runFree 构造工具表时漏传 cocreateCfg，挡 3 场 read_project_note 永远「没开放」，
+  // 她 07:31/08:46/09:52/19:41 四次想读全失败。静态扫描锁死这根线（pc-ws-wiring 模式）。
+  const src = fs.readFileSync(path.join(__dirname, '../src/main/companion/autonomy.js'), 'utf8')
+  const line = src.split('\n').find((l) => l.includes('const free = freeToolsOf('))
+  assert.ok(line, '找到 runFree 的 freeToolsOf 构造行')
+  assert.ok(/cocreateCfg:\s*opt\.cocreateCfg/.test(line), 'runFree→freeToolsOf 必须透传 cocreateCfg')
+})

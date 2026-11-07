@@ -896,7 +896,10 @@ async function runFree (o) {
     return ''
   }
 
-  const free = freeToolsOf({ cua, journal: journalBoth, userBack, openUrl, spaceDir: opt.spaceDir, onUserBack: () => { try { opt.signal && opt.signal.abort() } catch { } }, biliWatchFn: opt.biliWatchFn })
+  // 0.46.70 ⚠️ cocreateCfg 必须透传——0.46.65 漏了这里：quiet 轨（runSpace）传了、free 轨没传，
+  // read_project_note 在挡 3 场永远「他还没在设置里开放」（19:41 真机实锤，她试了 4 次全失败）。
+  // 链路缺口×2 老坑再现：runSpace 与 runFree 是两份独立接线，修一处≠修完。
+  const free = freeToolsOf({ cua, journal: journalBoth, userBack, openUrl, spaceDir: opt.spaceDir, cocreateCfg: opt.cocreateCfg, onUserBack: () => { try { opt.signal && opt.signal.abort() } catch { } }, biliWatchFn: opt.biliWatchFn })
 
   const tasteBlock = tasteBlockOf(opt.tastes)   // 0.45.17 记忆改变行为：她的喜恶进行为决策
   const goalBlock = String(opt.goalBlock || '')   // 0.45.18 需求驱动：动机语气
