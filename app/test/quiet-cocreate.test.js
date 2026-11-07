@@ -261,6 +261,10 @@ test('progressNote 接线：projects.create 的 onSync 钩子真的被调（开�
 test('progressNote 接线：宿主 index.js 真的注入 onSync + 启动回填（静态扫描）', () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/main/companion/index.js'), 'utf8')
   assert.ok(src.includes("require('./progressNote').write"), 'getProjects 里注入 onSync → progressNote.write')
+  // 0.46.71 真机坑：cfg() 返回的就是 global.companion 本体，取 cocreate 必须是 cfg().cocreate——
+  // 套一层 cfg().global.companion 会永远拿到空对象，write 按设计静默 no-op（回填不落盘无日志）
+  assert.ok(src.includes('cfg().cocreate'), 'onSync 必须用 cfg().cocreate 取（cfg()=companion 本体）')
+  assert.ok(!src.includes('cfg().global.companion.cocreate'), '禁止 cfg().global.companion.cocreate（形状错误）')
   assert.ok(/startAutonomy\s*\(\)\s*\{[\s\S]{0,200}getProjects\(\)\.sync\(\)/.test(src), 'startAutonomy 启动回填 getProjects().sync()')
   const psrc = fs.readFileSync(path.join(__dirname, '../src/main/companion/projects.js'), 'utf8')
   assert.ok(psrc.includes('function emitSync'), 'projects.js 有 emitSync')

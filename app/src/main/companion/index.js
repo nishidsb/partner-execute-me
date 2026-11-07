@@ -2200,11 +2200,12 @@ function getProjects () {
         } catch { }
       },
       // 0.46.71 共同创作「写向」：项目状态一变就重写「莱莎这边的进展.md」（cocreate 开着才写）
+      // ⚠️ cfg() 返回的就是 global.companion 本体（0.45.3x 约定）——别再套一层 .global.companion
       onSync: (st) => {
         try {
-          const cc = ((cfg().global || {}).companion || {}).cocreate || {}
+          const cc = cfg().cocreate || {}
           require('./progressNote').write(st, cc, log)
-        } catch { }
+        } catch (e) { log('[projects] 进展笔记同步异常: ' + (e && e.message)) }
       }
     })
   }
