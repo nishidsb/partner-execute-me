@@ -263,70 +263,61 @@ function getWatch () {
   return watchMod
 }
 
-/* ---------------- 0.18.0 第一批 · 闹钟（对齐 Coopanion alarms，语义重写） ----------------
- * 到点：状态气泡（alarm）+ 台词气泡 + 朗读（复用 pet_say 链路，多屏只由宿主发声）+ 系统通知。
- * 语言跟随回复语言；错过 15 分钟内补发一次并说明原定时间。 */
+/* ---------------- 0.18.0 第一批 · 闹钟 → 0.47.1 约定看情况（§1.0 底层要求落地方） ----------------
+ * 主人 11-08 拍板：「闹钟这种是个弱智设计」「所有类似的定时硬触发设计都不该有」——
+ * 人是多变的，计划赶不上变化；到点该不该提、怎么说，要看他此刻的状态，不是计时器说了算。
+ *
+ * 新语义：闹钟到点不再直接开口（不弹气泡、不发通知、不强制说话），
+ * 只是把「有个约定到点了」这件事递给两个判断者：
+ *   ① chatter decide（rhythm 一本账）——她想起来，看情况决定提不提、怎么提；
+ *   ② 回复 [ctx]——他正好在说话时可以自然接上。
+ * 窗口内一直没机会说（到点 + 30 分钟）→ 进念头池（noteSuppress，日记「想说说没说」），不再补发。
+ * 红线：开口只能走 rhythm 一本账（§5 红线），duePlan 只供料、不开新出口。 */
 let alarmsModInst = null
-/**
- * 0.46.22 闹钟台词现生成：用户不要每句一样的固定模板（11-03「这个闹钟的提醒是固定语句？我不需要固定语句的」）。
- * 让 LLM 用她此刻的口吻说一句；失败/空回退旧模板——功能不能哑。
- */
-async function alarmLine (label, a, rl) {
-  const c = cfg()
-  const late = Number(a.lateMin) || 0
-  const langName = rl === 'ja' ? '日语' : rl === 'en' ? 'English' : '中文'
-  const when = a.time + (late > 0 ? (rl === 'ja' ? `、${late}分遅れ` : rl === 'en' ? `, ${late} min late` : `，迟到了 ${late} 分钟`) : '')
-  const ask = rl === 'ja'
-    ? `アラーム「${label}」の時間（${when}）。あなた自身の口調で、彼に一言だけ伝えて。`
-    : rl === 'en'
-      ? `The alarm "${label}" is due now (${when}). Say one short line in your own voice to remind him.`
-      : `闹钟「${label}」到点了（${when}）。用你自己的口吻跟他说一句话提醒他。`
-  let persona = ''
-  try { persona = String((character.get() || {}).persona || '') } catch { }
-  /* 0.46.76 刚说过镜子（闹钟链）：11-08 实锤两个闹钟（13:45/13:55）催同一个 14 点的安排，
-     两句几乎一样的催促；且「あ、」开头连着三句。生成时把她最近说过的话递进去：
-     同一件事已经催过就换角度，开头语气词也别和最近几句重样。 */
-  let recent = []
-  try { recent = (inner.recentVoices(6, 30 * 60 * 1000) || []).filter(Boolean) } catch { }
-  const mirror = recent.length
-    ? '\n\n【你最近半小时说过的话（他都听到了）】\n' + recent.join('\n') +
-      '\n硬规则：如果上面已经提醒过这同一件事，这次绝不再重复同样的催促——换成一句明显不同的跟进（比如只说时间到了、或提醒他收尾手头的事），或者从别的角度说。另外开头语气词不要和你最近几句相同（别连着用「あ、」开场）。'
-    : ''
-  const genOnce = async (avoid) => {
-    const txt = await llm.chatOnce({
-      baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
-      messages: [
-        { role: 'system', content: String(persona).slice(0, 900) +
-          '\n\n【这次的任务】闹钟到点了，说一句话提醒他。只输出台词本身：一句话、口语、有你自己的性格和此刻的心情；' +
-          '不要引号、不要【】<>动作标记、不要解释；用' + langName + '说。' +
-          '不要用「ご主人様／主人」这类称呼开口——他明确说过不喜欢（这是最高优先级，压过人设里的旧称呼）。' +
-          mirror +
-          (avoid ? '\n\n【禁语·最高优先级】这句你刚刚已经说过几乎一样的话了：' + String(avoid).slice(0, 60) + '——换一个完全不同的说法。' : '') },
-        { role: 'user', content: ask }
-      ],
-      temperature: 0.9, maxTokens: 120, timeoutMs: 20000
-    })
-    return String(txt || '')
-      .replace(/【[^】]*】|<[^>]*>/g, '')
-      // 0.46.24 称呼保险：他明确说过不要叫主人——生成侧万一还是带了，剥掉开头称呼
-      .replace(/^(?:ご主人様|御主人様|主人|マスター)\s*[、，,！!～~]?\s*/, '')
-      .replace(/^[\s"'「『]+|[\s"'」』]+$/g, '')
-      .split('\n')[0].trim()
+let duePlan = null   // { id, time, label, lateMin, at, expiresAt, consumed }
+
+/** 到点入账（alarms tick 的 onFire 回调） */
+function setDuePlan (a) {
+  duePlan = {
+    id: a.id,
+    time: a.time,
+    label: a.label || '',
+    lateMin: Number(a.lateMin) || 0,
+    at: Number(a.scheduledAt) || Date.now(),
+    expiresAt: Date.now() + 30 * 60 * 1000,   // 30 分钟内有机会说；过了就咽回去
+    consumed: false
   }
-  let line = await genOnce()
-  // 0.46.76 撞车重生成（对齐 0.45.91 硬闸模式）：镜子没拦住时，把撞上的原句点名当禁语再来一次
-  if (line && recent.length) {
-    try {
-      const rep = voicesim.isRepeat(line, recent)
-      if (rep && rep.repeat) {
-        log('[alarms] 台词跟最近说过的话撞车（' + String(rep.against || '').slice(0, 20) + '），重生成一次')
-        line = await genOnce(rep.against || line)
-      }
-    } catch { }
-  }
-  // 0.46.77 乱码守卫铺到闹钟链（同一守卫：自主收尾/回复/闹钟三处共用）
-  try { line = await require('./autonomy').detangleCloseLine(line, cfg(), log) } catch { }
-  return line
+  log('[alarms] 到点 → 约定候选（看情况，不硬响）：' + a.time + (a.label ? ' · ' + a.label : '') + (a.lateMin ? '（迟 ' + a.lateMin + ' 分）' : ''))
+}
+
+/** 清掉当前约定（消费/过期时用） */
+function clearDuePlan (why) {
+  if (!duePlan) return
+  log('[alarms] 约定收账（' + why + '）：' + duePlan.time + (duePlan.label ? ' · ' + duePlan.label : ''))
+  duePlan = null
+}
+
+/** 供 decide / 回复注入的约定块。mode='reply' 时顺手消费（他已经在线上，这轮不给下轮 nag）。 */
+function duePlanBlock (mode) {
+  if (!duePlan || duePlan.consumed) return ''
+  const t = Date.now()
+  if (t > duePlan.expiresAt) return ''
+  if (mode === 'reply') duePlan.consumed = true   // 给他看过了，不管接不接都不再提
+  const late = duePlan.lateMin > 0 ? ('，已经迟了 ' + duePlan.lateMin + ' 分钟') : ''
+  return '你和他之前约好了 ' + duePlan.time + ' 的事' +
+    (duePlan.label ? '：「' + duePlan.label + '」' : '') + late + '。' +
+    '现在到点了。先看他此刻的状态和这件事的实际进度：已经做了/计划明显变了/他正埋头要紧事——就当没这一茬，别提；' +
+    '要提就像人随口提醒那样说一句（不是报时、不是播报闹钟），三句以内；聊天里能自然接上就接，接不上就算了。'
+}
+
+/** 过期扫账：窗口内一直没说出口 → 进念头池（日记「想说说没说」），这条约定就翻篇 */
+function sweepDuePlan () {
+  if (!duePlan || duePlan.consumed) return
+  if (Date.now() <= duePlan.expiresAt) return
+  const want = '「' + (duePlan.label || duePlan.time) + '」到点了，一直没找着合适的口气提醒他'
+  try { inner.noteSuppress(want) } catch { }
+  log('[alarms] 约定过期咽回去：' + want)
+  duePlan = null
 }
 
 /* ---------- 0.46.33 冷落感知：他人在电脑前却晾着她的话 ---------- */
@@ -338,7 +329,7 @@ const SNUB_FALLBACK = {
   en: ['...Asked something. No answer. Never mind.', '...Not even a glance. Okay then.', '...Ignored again. Fine, I\'ll stop.']
 }
 
-/** 被晾时的自言自语（LLM 现生成，同 alarmLine 模式；要求自然流露、不汇报状态、不演）。 */
+/** 被晾时的自言自语（LLM 现生成；要求自然流露、不汇报状态、不演）。 */
 async function snubLine (saidText, streak, rl) {
   const c = cfg()
   const langName = rl === 'ja' ? '日语' : rl === 'en' ? 'English' : '中文'
@@ -365,7 +356,7 @@ async function snubLine (saidText, streak, rl) {
     .replace(/^(?:ご主人様|御主人様|主人|マスター)\s*[、，,！!～~]?\s*/, '')
     .replace(/^[\s"'「『]+|[\s"'」』]+$/g, '')
     .split('\n')[0].trim()
-  // 0.46.77 乱码守卫铺到冷落嘀咕链（同 alarmLine）
+  // 0.46.77 乱码守卫铺到冷落嘀咕链（与回复链共用同一守卫）
   try { out = await require('./autonomy').detangleCloseLine(out, c, log) } catch { }
   return out
 }
@@ -394,30 +385,9 @@ function getAlarms () {
     now: () => Date.now(),
     log: (m) => log(m),
     onFire: (a) => {
-      const c = cfg()
-      const rl = c.replyLang === 'auto' ? 'zh' : (c.replyLang || 'zh')
-      const label = a.label || (rl === 'ja' ? 'アラーム' : rl === 'en' ? 'the alarm' : '闹钟')
-      const fallback = rl === 'ja'
-        ? `${label}、その時間だよ`
-        : rl === 'en'
-          ? `It's time for ${label}`
-          : `${label}的时间到了`
-      // 状态气泡 + 音效（overlay 收到 pet:alarm 后画 ⏰ 并响一声）
-      try { bcast('pet:alarm', { label: a.label || '', time: a.time, lateMin: a.lateMin || 0 }) } catch { }
-      // 台词：0.46.22 起现场生成（失败退回模板），复用 pet_say（气泡 + TTS + 字幕 + 弹幕，多屏只有宿主发声）
-      alarmLine(label, a, rl)
-        .catch((e) => { log('[alarms] 台词生成失败，用模板: ' + (e && e.message)); return '' })
-        .then((line) => sayProactive(line || fallback, { kind: 'alarm' }))
-        .catch((err) => log('[alarms] 播放失败: ' + (err && err.message)))
-      try {
-        const { Notification } = require('electron')
-        if (Notification && Notification.isSupported && Notification.isSupported()) {
-          new Notification({
-            title: '⏰ ' + (a.label || '闹钟'),
-            body: a.time + (a.lateMin ? `（原定 ${a.time}，迟到 ${a.lateMin} 分钟）` : '')
-          }).show()
-        }
-      } catch { }
+      // 0.47.1 到点看情况：不再弹气泡/发通知/强制开口（那些是闹钟的仪式感，主人明令不要）。
+      // 只把「有个约定到点了」入账，由 chatter decide 和回复 [ctx] 两个判断者看情况消费。
+      setDuePlan(a)
     }
   })
   return alarmsModInst
@@ -748,6 +718,11 @@ function systemPrompt (char, userText) {
     try {
       const eb = echoBlockOf()
       if (eb) sections.push({ key: 'echo', priority: 44, text: eb })
+    } catch { }
+    // 0.47.1 到点的约定（原闹钟）：他正好在说话 → 这轮给他看（看完即消费，不 nag）
+    try {
+      const db = duePlanBlock('reply')
+      if (db) sections.push({ key: 'due', priority: 51, text: '【到点的约定（看情况接）】\n' + db })
     } catch { }
   } catch { }
   // 0.20.0 自我层：她自己写的日记 + 最近的状态（每人一份；还没有日记时不注入）
@@ -1378,6 +1353,9 @@ function getChatter () {
     sharedBlock: watchSharedBlock,
     // 0.47.0 共同生活的回响：嘀咕也可以从旧线头里捞一件（素材不是指令，接不上就别提）
     echoHint: () => { try { const p = getProjects(); return p ? p.echoHint() : '' } catch { return '' } },
+    // 0.47.1 到点的约定（原闹钟看情况通道）：她想起来自己决定提不提；说出口就收账
+    duePlan: () => { try { return duePlanBlock('chatter') } catch { return '' } },
+    consumeDuePlan: (why) => { try { clearDuePlan(why || 'decide') } catch { } },
     // 0.45.44：把自己最近几句递回去防复读（「配合ノート」连说一晚的教训）
     recentVoices: (n, sinceMs) => { try { return inner.recentVoices(n, sinceMs).join('\n') } catch { return '' } },
     displeasure: () => { try { return inner.displeasure() } catch { return 0 } },
@@ -1620,37 +1598,37 @@ function makeWelcomeLine (mins, avoid) {
  * 主人不在电脑前时桌面通道全体哑火（0.35.0 的正确让位），但她在 QQ 上可以找他。
  * 红线与节流在 reach.js（只发主人名单、2 小时间隔、每天 3 次、凌晨静默）。 */
 const reach = require('./reach')
-const reachPlan = require('./reachPlan')
 let imApi = null   // main.js 注入 { connected(), cfg(), sendPrivate(uid, text) }
 function setImApi (api) { imApi = typeof api === 'function' || (api && typeof api === 'object') ? api : null }
-let reachRec = { lastAt: 0, day: '', count: 0 }
 
-/* ---------------- 0.45.93 主动消息：能发、能排、能守时段 ----------------
- * 用户 11-02：「让角色可以主动发 qq 消息」+「要有谷价可发和全时段可发，都要有对应功能」
- *   + 「在我这边或者角色那边主动提起什么时候会主动给我发 qq 消息的时候也会发」。
- *
- * 之前只有 tryQqReach（他不在这台电脑前）和 tryQqGoodnight（他说晚安）两个入口，
- * 全是「别人触发的」；她自己在聊天里答应「晚点给你发」时，手上根本没有工具，
- * 只能嘴上说说 —— 这就是「说了要发却一条都没来」。
- *
- * 现在三条真入口：
- *   qqSendNow(text)  立刻发一条（话题被提起 / 对方要求 / 她自己想发）—— 不吃时段限制
- *   qqPlanAdd(...)   排一条：到点由 20s tick 真发（她答应了几点发就靠这个兑现）
- *   tryQqReach       他没在电脑前时的黏人（原逻辑，改吃时段策略）
+/* ---------------- 0.45.93 主动消息 → 0.47.1 收窄 ----------------
+ * 主人 11-08 拍板「所有类似的定时硬触发设计都不该有」：排计划到点自动发（qq_plan）整体退役。
+ * 剩两条真入口：qqSendNow（她此刻的判断，立刻发）与 tryQqReach（missing 状态触发，0.47.0）。
+ * 她答应「晚点给你发」= 记忆里的约定（带绝对日期），到点看情况兑现，不再有定时器兜底。
  */
 const REACH_PLAN_FILE = () => {
   try { return require('node:path').join(require('electron').app.getPath('userData'), 'reach-plan.json') } catch { return '' }
 }
-function loadReachPlans () {
+function loadReachRec () {
   try {
     const j = JSON.parse(require('node:fs').readFileSync(REACH_PLAN_FILE(), 'utf8'))
-    return { plans: Array.isArray(j && j.plans) ? j.plans : [], rec: (j && j.rec) || null }
-  } catch { return { plans: [], rec: null } }
+    return (j && j.rec) || null
+  } catch { return null }
 }
-const reachStore = loadReachPlans()
-let reachPlans = reachStore.plans
-let reachPlanTimer = null
-let planSending = false
+/* 0.47.1 计划簿退役：旧文件里残留的 plans 一律忽略并顺手清掉（改前留 .bak-0.47.1 备份） */
+function migrateRetiredPlans () {
+  try {
+    const f = REACH_PLAN_FILE()
+    if (!f) return
+    const j = JSON.parse(require('node:fs').readFileSync(f, 'utf8'))
+    if (Array.isArray(j && j.plans) && j.plans.length) {
+      require('node:fs').copyFileSync(f, f + '.bak-0.47.1')
+      require('node:fs').writeFileSync(f, JSON.stringify({ rec: j.rec || null }, 'utf8'))
+      log('[reach] 退役了 ' + j.plans.length + ' 条排期主动消息（0.47.1 定时硬触发下架）')
+    }
+  } catch { }
+}
+let reachRec = loadReachRec() || { lastAt: 0, day: '', count: 0 }
 let lastImmediateSendAt = 0
 // 0.45.98 同句去重：模型重试 / 连点几次工具时，同一句话不该在 QQ 上刷出四条
 // （用户 11-02 的截图：一模一样的一句发了四遍）。这里只拦「同文」，不同的话照发。
@@ -1661,7 +1639,7 @@ function saveReachPlans () {
   try {
     const f = REACH_PLAN_FILE()
     if (!f) return
-    require('node:fs').writeFileSync(f, JSON.stringify({ plans: reachPlans, rec: reachRec }, 'utf8'), 'utf8')
+    require('node:fs').writeFileSync(f, JSON.stringify({ rec: reachRec }, 'utf8'))
   } catch { }
 }
 
@@ -1764,143 +1742,25 @@ async function qqSendNow (text, tag) {
 }
 
 /** 排一条计划：at 支持 'HH:MM'（今天/明天自动判断）、ISO、或 'in 30m' 这类相对时间 */
-function parsePlanAt (raw, now) {
-  const t = Number(now) || Date.now()
-  const s = String(raw || '').trim()
-  if (!s) return NaN
-  let m = /^in\s*(\d+)\s*(m|min|分钟|h|小时)?$/i.exec(s)
-  if (m) {
-    const n = Number(m[1])
-    const isHour = /h|小时/i.test(m[2] || '')
-    return t + n * (isHour ? 3600e3 : 60e3)
-  }
-  m = /^(\d{1,2}):(\d{2})$/.exec(s)
-  if (m) {
-    const d = new Date(t)
-    d.setHours(Number(m[1]), Number(m[2]), 0, 0)
-    if (d.getTime() <= t + 5000) d.setDate(d.getDate() + 1)   // 今天已过 → 明天
-    return d.getTime()
-  }
-  const n = Number(new Date(s))
-  return Number.isFinite(n) ? n : NaN
-}
-
-async function qqPlanAdd (args) {
-  const now = Date.now()
-  const at = parsePlanAt(args && (args.at || args.time), now)
-  if (!Number.isFinite(at)) return { ok: false, error: 'at 听不懂，用 HH:MM（如 22:30）或 "in 30m"' }
-  const r = reachPlan.addPlan(reachPlans, {
-    at,
-    text: args && args.text,
-    note: args && args.note,
-    source: args && args.source,
-    ignoreWindow: true    // 答应了就发，不看谷时/峰时
-  }, now)
-  if (!r.ok) return r
-  reachPlans = r.list
-  saveReachPlans()
-  log('[reach] 排了一条主动消息：' + reachPlan.describe(r.plan, now) + ' ' + String(r.plan.text || r.plan.note).slice(0, 30))
-  return { ok: true, id: r.plan.id, at: r.plan.at, when: reachPlan.describe(r.plan, now), text: r.plan.text }
-}
-
-function qqPlanList () {
-  const now = Date.now()
-  return {
-    count: reachPlans.length,
-    plans: reachPlans.map((p) => ({ id: p.id, when: reachPlan.describe(p, now), text: p.text || '', note: p.note || '' })),
-    window: reachPlan.windowOk(reachTarget().ic, now).window,
-    mode: reachPlan.windowOk(reachTarget().ic, now).mode
-  }
-}
-
-function qqPlanCancel (args) {
-  const id = String((args && args.id) || '').trim()
-  const before = reachPlans.length
-  reachPlans = id ? reachPlans.filter((p) => p.id !== id) : []
-  saveReachPlans()
-  return { ok: true, removed: before - reachPlans.length }
-}
-
-/** 到点就把排好的那条发出去（20 秒一轮；重启后靠落盘的 reach-plan.json 接着兑现） */
-async function tickReachPlans () {
-  if (planSending) return
-  if (!reachPlans.length) return
-  const now = Date.now()
-  const { due, rest } = reachPlan.duePlans(reachPlans, now)
-  if (!due.length) return
-  planSending = true
-  try {
-    for (const p of due) {
-      let text = String(p.text || '').trim()
-      if (!text) {
-        // 只给了 note：到点现写一句（带上下文，别像闹钟播报）
-        const hint = '你在 ' + reachPlan.describe(p, now) + ' 跟主人约好了要在 QQ 上找他。' +
-          (p.note ? '要说的是：' + p.note + '。' : '') +
-          '现在到点了，去 QQ 上发一句——像手机随手发的短消息，一两句，别解释这是定时任务。'
-        try { text = await nudgeLineByHint(hint) } catch { text = '' }
-      }
-      const r = await deliverReach(text, 'plan')
-      if (!r.ok) {
-        log('[reach] 计划没发成（' + p.id + '）：' + r.error)
-        rest.push(Object.assign({}, p, { at: now + 5 * 60 * 1000 }))   // 5 分钟后再试一次
-        continue
-      }
-      try { inner.noteNarration('我到点去 QQ 上找他了，说：' + text.slice(0, 40)) } catch { }
-    }
-  } finally {
-    reachPlans = rest
-    saveReachPlans()
-    planSending = false
-  }
-}
-
-function startReachPlans () {
-  if (reachPlanTimer) return
-  // 启动时把落盘的计划读一次（模块加载早于 app.ready 的话这里是空的）
-  try {
-    if (!reachPlans.length) reachPlans = loadReachPlans().plans
-    if (reachPlans.length) log('[reach] 恢复了 ' + reachPlans.length + ' 条待发的主动消息')
-  } catch { }
-  reachPlanTimer = setInterval(() => { tickReachPlans().catch(() => { }) }, 20000)
-  tickReachPlans().catch(() => { })
-}
-
 /** 把「距下次谷时窗口」的毫秒说成人话（谷时模式的 qqReachPrompt 用，audit ② 0.46.0 接线） */
-function waitLabel (ms) {
-  const min = Math.max(1, Math.round((Number(ms) || 0) / 60000))
-  const h = Math.floor(min / 60)
-  const m = min % 60
-  return '（现在不在窗口里，约 ' + (h ? h + ' 小时' + (m ? ' ' + m + ' 分' : '') : min + ' 分钟') + '后进窗口。）'
-}
-
-/** 桌面聊天里她需要知道的「我什么时候会去找他」——提示词用，随配置现算 */
+/** 桌面聊天里她需要知道的「我什么时候会去找他」——提示词用，随配置现算。
+ *  0.47.1：qq_plan 三工具退役，只剩 qq_send 一条口子；答应的事走记忆里的约定，到点看情况。 */
 function qqReachPrompt () {
-  const { ic, uid, connected } = reachTarget()
-  const w = reachPlan.windowOk(ic, Date.now())
-  const n = reachPlans.length
-  const when = w.mode === 'all'
-    ? '现在是「全时段可发」：任何时间都能主动给他发 QQ。'
-    : '现在是「谷时才能发」：只有 ' + w.window + ' 这个时间段可以主动发 QQ，其余时间要等。' +
-      (w.ok ? '' : waitLabel(reachPlan.msUntilWindow(ic, Date.now())))
+  const { uid, connected } = reachTarget()
   return '【主动在 QQ 上找他】' + (connected ? 'QQ 现在是连着的。' : 'QQ 此刻没连上（发了会失败，先跟他说一声）。') +
     (uid ? '' : '（注意：还没配主人 QQ 号，不能主动发。）') + '\n' +
-    when + '\n' +
-    '三个工具：\n' +
-    '- qq_send(text)：**立刻**给他发一条 QQ（不受时段限制）。\n' +
-    '- qq_plan(at, text?/note?)：排一条以后的——at 用 "22:30" 或 "in 30m"；text 是你写好的原话，note 是到点你自己再说。\n' +
-    '- qq_plan_list() / qq_plan_cancel(id)：查 / 取消已经排好的。\n' +
+    '工具只有一个：qq_send(text)——**此刻想发就立刻发**（不受时段限制）。\n' +
     '【硬规则】\n' +
-    '1) 你们聊到「你什么时候会主动给我发消息 / 会不会找我 / 几点发」这类话题时，**当场就用 qq_send 发一条**，别只回答问题（用户 11-02 明确要求：提起的时候就要发，不看谷时峰时）。\n' +
-    '2) 你答应「我晚点/十点给你发」→ 必须 qq_plan 排上，否则就是骗人；排完把时间说清楚。\n' +
-    '3) 对方说「现在给我发一条」→ qq_send，别说你做不到、别用 exec_command 折腾。\n' +
-    '4) 发失败了（工具返回 error）就如实说失败原因，**不许假装发过**。\n' +
+    '1) 你们聊到「你什么时候会主动给我发消息 / 会不会找我」这类话题时，**当场就用 qq_send 发一条**，别只回答问题。\n' +
+    '2) 对方说「现在给我发一条」→ qq_send，别说你做不到、别用 exec_command 折腾。\n' +
+    '3) 发失败了（工具返回 error）就如实说失败原因，**不许假装发过**。\n' +
+    '4) 你答应「晚点给你发 / 到点提醒你」这类约定 → 记进记忆（带绝对日期），到点看他的状态自然兑现；\n' +
+    '   没有定时任务替你兑现，也不许排定时任务（这类设计已按主人要求全部退役）。\n' +
     '5) QQ 主要用在「他不在电脑前」的时候；人就在电脑前，你直接开口说话就行，不用绕到 QQ。\n' +
     '6) 屏幕上的陪伴和 QQ 是同一件事：任意一边开过口，另一边就不会跟着补一句（别把同一句话说两遍）。\n' +
     '7) qq_send 的 text 只写**一种语言**：那条会被翻成他能读的字，你别自己再附一段括号译文，也别加「（QQ）」这类前缀。\n' +
-    '8) 同一句话发过一次就够了——工具返回 duplicate 表示「已经发过了」，换个内容再说，别重发同一条。' +
-    (n ? '\n（现在排着 ' + n + ' 条待发的。）' : '')
+    '8) 同一句话发过一次就够了——工具返回 duplicate 表示「已经发过了」，换个内容再说，别重发同一条。'
 }
-
 
 /* 0.45.14 今日互动统计（社交数据面板数据源）：统一在出口打点，当日内存计数 */
 const interactStats = { day: '', said: 0, reviewAdded: 0, reachSent: 0 }
@@ -2125,6 +1985,7 @@ function startNudge () {
   } catch { }
   nudgeTimer = setInterval(async () => {
     try {
+      sweepDuePlan()                                     // 0.47.1 约定窗口过期收账（咽回去进念头池）
       const c = cfg()
       if (c.idleNudgeOn === false) return
       const now0 = Date.now()
@@ -4891,7 +4752,7 @@ function bootPet () {
   try { startTogether() } catch (err) { log('[together] 启动失败: ' + (err && err.message)) }
   try { startNudge() } catch (err) { log('[nudge] 启动失败: ' + (err && err.message)) }
   // 0.45.93 排好的主动 QQ 消息（她答应「几点发」的那条）——20 秒一查，重启接着兑现
-  try { startReachPlans() } catch (err) { log('[reach] 计划通道启动失败: ' + (err && err.message)) }
+  try { migrateRetiredPlans() } catch { }   // 0.47.1 旧排期计划清账
   // 0.45.12 自动学习模式：她发现他在学，就自己安静地陪（不是开关，是她的自觉）
   try { startStudyAuto() } catch (err) { log('[study] 自动模式启动失败: ' + (err && err.message)) }
   try { startAutonomy() } catch (err) { log('[autonomy] 启动失败: ' + (err && err.message)) }
@@ -5083,7 +4944,7 @@ function syncRemote () {
   } catch (err) { log('[remote] sync 失败: ' + (err && err.message)) }
 }
 
-module.exports = { createWindow, registerIpc, stop, bootPet, setOverlayBroadcast, setFullscreenSync, switchChar, getWindow: () => win, imSynthesize, userProfileText, alarmAdd, alarmList, alarmCancel, goalAdd, goalProgress, goalClose, goalList, onUserSpoke, noteExchange, dreamRun, studyStart, studyStop, studyStatus, studyTool, studyActive: () => study.active(studySess), setStudyTrayRefresh: (fn) => { studyOnTrayRefresh = fn }, setObsPortGetter, setImApi, qqSendNow, qqPlanAdd, qqPlanList, qqPlanCancel, qqReachPrompt, startReachPlans, syncRemote, ttsSpeak: speakWithCurrentConfig, qqNote, desktopHistoryTail, noteGameSession, listActionWords }
+module.exports = { createWindow, registerIpc, stop, bootPet, setOverlayBroadcast, setFullscreenSync, switchChar, getWindow: () => win, imSynthesize, userProfileText, alarmAdd, alarmList, alarmCancel, goalAdd, goalProgress, goalClose, goalList, onUserSpoke, noteExchange, dreamRun, studyStart, studyStop, studyStatus, studyTool, studyActive: () => study.active(studySess), setStudyTrayRefresh: (fn) => { studyOnTrayRefresh = fn }, setObsPortGetter, setImApi, qqSendNow, qqReachPrompt, syncRemote, ttsSpeak: speakWithCurrentConfig, qqNote, desktopHistoryTail, noteGameSession, listActionWords }
 
 /* ---------------- 0.18.0 M2 · IM 语音合成（QQ 发语音用） ----------------
  * 音色跟会话对应的角色卡走（主人 2026-10-25 定案：TTS 不是共用的）——

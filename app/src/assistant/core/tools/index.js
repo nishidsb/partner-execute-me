@@ -7,9 +7,10 @@ import './builtin.js'
 import './shell.js'
 // S3：桌宠七工具（执行由宿主注入的 bridge 承担，核心自己不认识 Electron）
 import { setPetBridge } from './pet.js'
-// 0.18.0 第一批：闹钟三工具（alarm_set / alarm_list / alarm_cancel），走同一条宿主桥
-import './alarm.js'
-import { setAlarmBridge } from './alarm.js'
+// 0.47.1 闹钟三工具（alarm_set / alarm_list / alarm_cancel）下架——主人 11-08 拍板：
+// 「闹钟这种是个弱智设计」「所有类似的定时硬触发设计都不该有」——人是多变的，计划赶不上变化。
+// 时间相关一律 = 约定进记忆 + 到点看情况（duePlan 通道），不再有任何模型可设的定时触发。
+// 0.47.1 QQ 排计划三工具（qq_plan / qq_plan_list / qq_plan_cancel）同批下架（同类定时硬触发）。
 // 0.46.28 生活线三工具（goal_set / goal_list / goal_update），走同一条宿主桥
 import './goal.js'
 import { setGoalBridge } from './goal.js'
@@ -53,11 +54,11 @@ export {
   exec, listDefs, list, get, needConfirm, setGate, isAllowed, register, unregister,
   setPetBridge, setSystemBridge, setCuaBridge, hasCua, cuaActive, setCuaVision, cuaVision, cuaPrompt,
   setProfileBridge, setHealthBridge, setUserToolsBridge, setReachBridge, syncUserTools, USER_TOOL_CHAT,
-  setAlarmBridge, setStudyBridge, setGoalBridge, setBiliBridge
+  setStudyBridge, setGoalBridge, setBiliBridge
 }
 export default {
   exec, listDefs, list, get, needConfirm, setGate, isAllowed, register, unregister,
   setPetBridge, setSystemBridge, setCuaBridge, hasCua, cuaActive, setCuaVision, cuaVision, cuaPrompt,
   setProfileBridge, setHealthBridge, setUserToolsBridge, setReachBridge, syncUserTools, USER_TOOL_CHAT,
-  setAlarmBridge, setStudyBridge, setGoalBridge, setBiliBridge
+  setStudyBridge, setGoalBridge, setBiliBridge
 }

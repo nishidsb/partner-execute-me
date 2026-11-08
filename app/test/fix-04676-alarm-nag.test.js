@@ -3,7 +3,7 @@
  * 0.46.76 静态接线测试（同 pc-ws-wiring.test.js 模式）：
  * 真机事故：11-08 13:45/13:55 两个闹钟催同一个 14 点的安排，两句几乎一样的催促
  * （加上 13:25 回复里已经说过一遍=三连）；「あ、」开头连着三句；
- * 13:59 收尾自语混入简体字形乱码（日文句子里夹着「结论」）直进聊天窗。
+ * 13:59 收尾自语混入简体字形乱码（「触れないって结论も結論として」）直进聊天窗。
  */
 const test = require('node:test')
 const assert = require('node:assert')
@@ -20,15 +20,20 @@ test('0.46.76 闹钟同窗去重常驻 alarms.add', () => {
   assert.ok(/const dup = \(daily === false\)/.test(src), '只对一次性闹钟去重（每天闹钟不去重）')
 })
 
-test('0.46.76 闹钟台词生成带刚说过镜子 + 撞车重生成', () => {
+test('0.47.1 到点看情况：闹钟不再直接开口，只入账约定候选', () => {
   const src = readApp('app/src/main/companion/index.js')
-  const m = src.match(/async function alarmLine[\s\S]*?\n\}/)
-  assert.ok(m, 'alarmLine 存在')
-  assert.ok(m[0].includes('recentVoices(6, 30 * 60 * 1000)'), '镜子取最近半小时台词')
-  assert.ok(m[0].includes('你已经提醒过这同一件事') || m[0].includes('已经提醒过这同一件事'), '硬规则：同件事不许催第二遍')
-  assert.ok(m[0].includes('voicesim.isRepeat'), '生成后过撞车检测')
-  assert.ok(m[0].includes('禁语·最高优先级'), '撞车重生成带禁语')
-  assert.ok(m[0].includes('「あ、」开场'), '开头语气词防连用')
+  assert.ok(!/async function alarmLine/.test(src), 'alarmLine 生成函数已随直接开口路径退役')
+  const m = src.match(/onFire: \(a\) => \{[\s\S]*?\n    \}/)
+  assert.ok(m, 'onFire 回调存在')
+  assert.ok(m[0].includes('setDuePlan(a)'), '到点只入账约定候选（看情况）')
+  assert.ok(!m[0].includes('sayProactive'), '不许直接开口（sayProactive 已移出 onFire）')
+  assert.ok(!m[0].includes('pet:alarm'), '不许再弹 ⏰ 气泡')
+  assert.ok(!m[0].includes('Notification'), '不许再发系统通知')
+  assert.ok(src.includes('function duePlanBlock'), 'duePlan 注入块存在')
+  assert.ok(src.includes('sweepDuePlan'), '过期扫账存在')
+  assert.ok(src.includes('noteSuppress'), '过期咽回去进念头池（想说说没说）')
+  assert.ok(/duePlanBlock\('reply'\)/.test(src), '回复链注入约定')
+  assert.ok(/duePlan: \(\) => \{ try \{ return duePlanBlock\('chatter'\)/.test(src), 'chatter 链注入约定')
 })
 
 test('0.46.76 收尾自语乱码守卫：简体字形检测 + 重写 + 接线', () => {

@@ -502,27 +502,6 @@ async function invoke (name, args) {
     case 'pet_act': return act(args)
     case 'pet_set': return set(args)
     case 'pet_quiet': return quiet(args)
-    // 0.18.0 第一批：闹钟（懒加载 companion，避免 petBridge ↔ companion 循环依赖）
-    case 'alarm_set': {
-      const r = require('./companion').alarmAdd(args || {})
-      if (!r || !r.ok) throw new Error((r && r.error) || '闹钟没设成')
-      return { ok: true, id: r.alarm.id, time: r.alarm.time, label: r.alarm.label, daily: r.alarm.daily }
-    }
-    case 'alarm_list': {
-      const list = require('./companion').alarmList()
-      return {
-        count: list.length,
-        alarms: list.map((a) => ({
-          id: a.id,
-          time: a.time,
-          label: a.label,
-          daily: a.daily !== false,
-          enabled: a.enabled !== false,
-          nextAt: a.nextAt ? new Date(a.nextAt).toLocaleString('zh-CN') : ''
-        }))
-      }
-    }
-    case 'alarm_cancel': return require('./companion').alarmCancel(args || {})
     // 0.46.28 生活线三工具（她自己的目标：定/看/更新 → companion/goals.js 按工作区落盘）
     case 'goal_set': {
       const r = require('./companion').goalAdd(args || {})
@@ -559,13 +538,6 @@ async function invoke (name, args) {
       if (!r || !r.ok) throw new Error((r && r.error) || '没发出去')
       return { ok: true, sent: true, text: r.text, at: new Date(r.at).toLocaleTimeString('zh-CN', { hour12: false }) }
     }
-    case 'qq_plan': {
-      const r = await require('./companion').qqPlanAdd(args || {})
-      if (!r || !r.ok) throw new Error((r && r.error) || '没排上')
-      return r
-    }
-    case 'qq_plan_list': return require('./companion').qqPlanList()
-    case 'qq_plan_cancel': return require('./companion').qqPlanCancel(args || {})
     // 0.45.71 学习监督：真实聊天通道的 study_* 也走这条桥（懒加载，理由同上）
     case 'study_start':
     case 'study_peek':

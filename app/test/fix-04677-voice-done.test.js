@@ -62,14 +62,14 @@ test('0.46.77 乱码守卫字段修复：apiBaseUrl 兼容 + 假名注音信号 
   assert.ok(/detangleCloseLine, garbledJa,/.test(src), 'exports 供回复/闹钟链共用')
 })
 
-test('0.46.77 乱码守卫铺全链：回复/闹钟/冷落三处都过守卫', () => {
+test('0.46.77 乱码守卫铺全链：回复/冷落两处都过守卫（0.47.1 闹钟链退役）', () => {
   const assistant = read('src/main/assistant/index.js')
   assert.ok(/lang\.reply === 'ja' && r\.content/.test(assistant), 'assistant 回复链挂守卫')
   assert.ok(assistant.includes("require('../companion/autonomy').detangleCloseLine"), '走同一个守卫函数')
   const host = read('src/main/companion/index.js')
   const guardCalls = (host.match(/detangleCloseLine\(/g) || []).length
-  assert.ok(guardCalls >= 2, '闹钟链 + 冷落链都挂守卫（实得 ' + guardCalls + '）')
-  assert.ok(host.includes("require('./autonomy').detangleCloseLine(line, cfg(), log)"), 'alarmLine 过守卫')
+  assert.ok(guardCalls >= 1, '冷落链挂守卫（0.47.1 闹钟直接开口已退役，实得 ' + guardCalls + '）')
+  assert.ok(!host.includes('alarmLine'), 'alarmLine 已随到点直接开口路径退役')
 })
 
 test('0.46.77 镜子文案补「追问限一次」', () => {

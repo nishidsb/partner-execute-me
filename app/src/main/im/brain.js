@@ -47,7 +47,7 @@ function coreToolsMod () {
  *  不进——命令行已有 pc_run（带主人确认），桌面动作在 QQ 场景没意义。 */
 const CORE_TOOL_BRIDGE = new Set([
   'get_time', 'calc', 'system_info', 'open_url', 'open_app',
-  'alarm_set', 'alarm_list', 'alarm_cancel',
+  // 0.47.1 alarm 三工具随闹钟端口下架撤出白名单（同类定时硬触发设计全退役）
   'bili_watch',
   'goal_set', 'goal_list', 'goal_update',
   'file_read', 'file_grep', 'file_glob',

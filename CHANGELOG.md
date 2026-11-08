@@ -1,5 +1,14 @@
 # 更新说明（CHANGELOG）
 
+## 0.47.1（2026-11-08）
+
+**定时硬触发全退役（主人 20:0x「闹钟这种是个弱智设计」「所有类似的这种闹钟设计都不该有」，红线 §5.16）**：
+- 模型端口全关：alarm_set/alarm_list/alarm_cancel + qq_plan/qq_plan_list/qq_plan_cancel 六工具下架；设置页闹钟管理保留（主人端口）
+- 到点看情况：闹钟引擎保留仅做到点判定；onFire 不再弹气泡/发通知/强制开口，只入账约定候选（duePlan）；消费端 = 嘀咕 decide（她判断提不提，说出口即收账）+ 回复 [ctx]（看过即消费）；30 分钟窗口过期 → noteSuppress 念头池，不补发
+- QQ 排期定时器退役（tickReachPlans/startReachPlans 删）；reach-plan.json 旧 plans 启动清账（留备份）；reachPlan.js 只剩谷时窗口判定；qqReachPrompt 明写「不许排定时任务」
+- 死代码清扫：alarmLine/parsePlanAt/waitLabel/msUntilWindow/addPlan/duePlans/describe
+- 存量 4 条闹钟转「约定」语义；测试 fix-04701 ×4 + 六个旧测试按新语义改写；全量 1144/0 + audit 零基线外 + wirecheck 过
+
 ## 0.47.0（2026-11-08）
 
 **陪伴感 2.0：触发源重构（主人 18:1x「陪伴感更多是依靠黏人模式来的，我要的不是这种」，拍板入导读红线 §5.15）**：

@@ -204,12 +204,14 @@ test('护栏：废话通道的频控与时段必须写死，不能被后人改�
   assert.match(src, /chatterVoiceDailyMax/, '每日朗读上限必须在场')
 })
 
-test('护栏：闹钟类开口不受安静度拦截（功能不能因为心情失效）', () => {
+test('护栏：看屏搭话不受安静度拦截（功能不能因为心情失效）', () => {
   const src = fs.readFileSync(path.resolve(__dirname, '../src/main/companion/index.js'), 'utf8')
   // 0.37.0：这行判据从 opts.kind 改成了先解构的 kind，护栏正则跟着松一格——
   // 之前它一直红着没人管，等于这条护栏早就名存实亡。
   assert.match(src, /(?:opts\.)?kind === 'watch'/, '只有看屏搭话会被安静度拦')
-  assert.match(src, /kind: 'alarm'/, '闹钟必须带 alarm 标记')
+  // 0.47.1：kind: 'alarm' 随闹钟直接开口路径退役——到点只入账约定候选，看情况开口
+  assert.ok(!src.includes("kind: 'alarm'"), '闹钟开口标记已退役')
+  assert.ok(src.includes('setDuePlan'), '到点走约定候选通道')
   assert.match(src, /noteSuppress/, '想开口但忍住这件事要留痕')
 })
 

@@ -6,6 +6,9 @@
  *   「需要有选项是谷价可发和全时段可发，这都需要有对应的功能不只是选项」
  *   「在我这边或者角色那边主动提起什么时候会主动给我发 qq 消息的时候也会发。这个不用在意谷价还是峰价」
  *
+ * 0.47.1：排期（addPlan/duePlans/定时到点发）随「定时硬触发设计全退役」拍板下架，
+ *   这里改为锁退役状态；窗口策略与节流保留（tryQqReach 仍要用）。
+ *
  * 这里锁住三件事：
  *   ① 两种模式真的改变行为（不是摆设）
  *   ② 谷时窗口跨零点算得对（23:00→08:00 不能变成「永远发不出去」）
@@ -43,13 +46,6 @@ test('②谷时：只在窗口内发，跨零点也算得对', () => {
   assert.equal(w.window, '23:00–08:00')
 })
 
-test('③谷时窗口跨零点时，msUntilWindow 不能给出 0（那是「已经在窗口里」的意思）', () => {
-  const ic = { reachWindowMode: 'valley', reachValleyFrom: '23:00', reachValleyTo: '08:00' }
-  const ms = plan.msUntilWindow(ic, at(15, 0))
-  assert.ok(ms > 7 * 3600e3 && ms <= 9 * 3600e3, '15:00 到 23:00 约 8 小时，实际 ' + Math.round(ms / 3600e3) + 'h')
-  assert.equal(plan.msUntilWindow(ic, at(23, 30)), 0, '已经在窗口里就是 0')
-})
-
 test('④shouldReach 吃时段策略；「当场承诺」可以绕过窗口', () => {
   const ic = {
     reachOn: true,
@@ -77,48 +73,22 @@ test('④shouldReach 吃时段策略；「当场承诺」可以绕过窗口', ()
   assert.equal(reach.shouldReach(rec, { ownerAccounts: [] }, { now: at(23, 30), connected: true }).why, 'no-owner')
 })
 
-test('⑤排一条计划：时间必须合理，"22:30" 这类由宿主解析', () => {
-  const now = at(21, 0)
-  const bad = plan.addPlan([], { at: now - 1000, text: '晚了' }, now)
-  assert.equal(bad.ok, false, '过去的时间要拒绝')
-  const empty = plan.addPlan([], { at: now + 3600e3 }, now)
-  assert.equal(empty.ok, false, 'text/note 都没有要拒绝')
-  const ok = plan.addPlan([], { at: now + 3600e3, text: '我一会儿找你', ignoreWindow: true }, now)
-  assert.equal(ok.ok, true)
-  assert.equal(ok.plan.ignoreWindow, true)
-  assert.equal(ok.list.length, 1)
-  // 排满上限
-  let list = []
-  for (let i = 0; i < plan.MAX_PLANS; i++) list = plan.addPlan(list, { at: now + (i + 1) * 60000, text: 'x' + i }, now).list
-  assert.equal(plan.addPlan(list, { at: now + 999 * 60000, text: 'y' }, now).ok, false)
-})
-
-test('⑥到点挑出来发；过期超过两小时的不补发；没到点的留着', () => {
-  const now = at(22, 0)
-  const list = [
-    { id: 'a', at: now - 60e3, text: '到点了' },
-    { id: 'b', at: now + 60e3, text: '还早' },
-    { id: 'c', at: now - 3 * 3600e3, text: '昨晚的旧账' }
-  ]
-  const r = plan.duePlans(list, now)
-  assert.deepEqual(r.due.map((p) => p.id), ['a'], '只发到点的，且不补发太旧的')
-  assert.deepEqual(r.rest.map((p) => p.id), ['b'])
-})
-
-test('⑦宿主真的接上了：仓里存在工具/桥/提示词/设置项', () => {
+test('⑦0.47.1 宿主接线：qq_send 保留，排期端口全部退役', () => {
   const comp = read('src/main/companion/index.js')
   assert.match(comp, /async function qqSendNow/, '要有「立刻发」')
-  assert.match(comp, /async function qqPlanAdd/, '要有「排一条」')
-  assert.match(comp, /function startReachPlans/, '要有到点检查的定时器')
+  assert.ok(!comp.includes('qqPlanAdd'), 'qqPlanAdd 已退役')
+  assert.ok(!comp.includes('startReachPlans'), '到点检查定时器已退役')
   assert.match(comp, /function qqReachPrompt/, '要给她一份「我能主动发」的说明')
+  assert.ok(comp.includes('migrateRetiredPlans'), '旧排期数据启动时清账（留备份）')
 
   const bridge = read('src/main/petBridge.js')
   assert.match(bridge, /case 'qq_send'/)
-  assert.match(bridge, /case 'qq_plan'/)
+  assert.ok(!bridge.includes("case 'qq_plan'"), 'qq_plan 转发已删')
 
   const tool = read('src/assistant/core/tools/reach.js')
-  for (const n of ['qq_send', 'qq_plan', 'qq_plan_list', 'qq_plan_cancel']) {
-    assert.ok(tool.includes('name: ' + "'" + n + "'"), '缺少工具 ' + n)
+  assert.ok(tool.includes("name: 'qq_send'"), 'qq_send 保留')
+  for (const n of ['qq_plan', 'qq_plan_list', 'qq_plan_cancel']) {
+    assert.ok(!tool.includes("name: '" + n + "'"), '工具已退役: ' + n)
   }
 
   const main = read('src/main/main.js')

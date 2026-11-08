@@ -245,34 +245,29 @@ test('0.46.41 嘀咕入账带译文：等译文回来一起入账（原文先入
   assert.match(tl, /m\.sub && m\.sub !== m\.content \? '<br>' \+ esc\(stripTags\(m\.sub\)\)/, '对话时间线显示译文行')
 })
 
-test('0.46.22 闹钟台词现生成：LLM 生成 + 模板兜底，不再固定语句', () => {
+test('0.47.1 到点看情况（原 0.46.22 闹钟台词现生成）：不再有直接开口路径', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/index.js'), 'utf8')
-  assert.match(src, /async function alarmLine \(label, a, rl\)/, 'alarmLine 生成函数存在')
-  assert.match(src, /temperature: 0\.9, maxTokens: 120, timeoutMs: 20000/, '生成参数（有温度才不千篇一律）')
-  assert.match(src, /不要引号、不要【】<>动作标记/, '提示词禁动作标记')
-  const fa = src.indexOf('async function alarmLine')
-  const fb = src.indexOf('function getAlarms ()')
-  const head = src.slice(fa, fb)
-  assert.match(head, /return String\(txt \|\| ''\)/, '空回统一清洗')
+  assert.ok(!/async function alarmLine /.test(src), 'alarmLine 已退役（到点不再直接生成台词开口）')
+  assert.match(src, /function setDuePlan \(a\)/, '到点入账约定候选')
+  assert.match(src, /function duePlanBlock \(mode\)/, 'duePlan 注入块（reply/chatter 两种消费）')
+  assert.match(src, /expiresAt: Date\.now\(\) \+ 30 \* 60 \* 1000/, '30 分钟窗口（过了就咽回去，不补发）')
   const body = src.slice(src.indexOf('onFire: (a) => {'), src.indexOf('alarmAdd'))
-  assert.match(body, /alarmLine\(label, a, rl\)/, 'onFire 走生成')
-  assert.match(body, /\.catch\(\(e\) => \{ log\('\[alarms\] 台词生成失败，用模板/, '生成失败留痕')
-  assert.match(body, /line \|\| fallback/, '空/失败回退模板（功能不能哑）')
-  assert.match(body, /kind: 'alarm'/, '仍走 sayProactive（负反馈不拦闹钟）')
+  assert.ok(body.includes('setDuePlan(a)'), 'onFire 只入账')
+  assert.ok(!body.includes('sayProactive') && !body.includes('pet:alarm') && !body.includes('Notification'),
+    '不弹气泡/不发通知/不强制开口——闹钟的仪式感全撤')
 })
 
-test('0.46.24 闹钟称呼：人设进生成 + 禁称主人 + 模板无ご主人様', () => {
+test('0.46.24→0.47.1 称呼禁令仍在：闹钟生成已退役，禁令由 snubLine（她仅剩的直接开口路径）承接', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/index.js'), 'utf8')
-  const fa = src.indexOf('async function alarmLine')
-  const fb = src.indexOf('function getAlarms ()')
+  assert.ok(!src.includes('async function alarmLine'), '闹钟台词生成已退役')
+  const fa = src.indexOf('async function snubLine')
+  const fb = src.indexOf('async function onSnubbed')
+  assert.ok(fa > 0 && fb > fa, 'snubLine 存在')
   const head = src.slice(fa, fb)
   assert.match(head, /character\.get\(\) \|\| \{\}\)\.persona/, '生成要带她自己的人设（不再是泛泛的桌面伙伴）')
   assert.match(head, /不要用「ご主人様／主人」这类称呼/, '称呼禁令进提示词（他明确说过）')
-  assert.ok(!/ご主人様に一言だけ/.test(head), 'ask 里不许再印 ご主人様')
   assert.match(head, /\^\(\?:ご主人様\|御主人様\|主人\|マスター\)/, '生成结果后处理剥开头称呼（双保险）')
-  const body = src.slice(src.indexOf('onFire: (a) => {'), src.indexOf('alarmAdd'))
-  assert.ok(!/ご主人様、\$\{label\}/.test(body), '兜底模板不许再有 ご主人様')
-  assert.ok(!/主人，\$\{label\}/.test(body), '兜底模板不许再有 主人')
+  assert.ok(!src.includes('ご主人様、${label}'), '旧闹钟兜底模板（ご主人様）已随整条路径退役')
 })
 
 test('0.46.42 复读闸/提示词镜子走 90 分钟时间窗（无界「最近 8 句」横跨几小时：旧台词拦新句+误导模型打转——11-04 14:49~15:02 十几句全被咽回去实锤）', () => {

@@ -286,9 +286,7 @@ async function init ({ logDir, dataRoot: root, bcast } = {}) {
   // module 级 bridge，宿主从来没注入过——她每次设闹钟都报「闹钟未连接（宿主没有注入定时器）」
   // （ryza.log 10-31 起多次实证），只能用 remember 曲线救国。学习三工具同款（setStudyBridge
   // 也没人喂），petBridge 里 case 全都写好了，一并接上。
-  if (tools && typeof tools.setAlarmBridge === 'function') {
-    tools.setAlarmBridge((name, args) => require('../petBridge').invoke(name, args))
-  }
+  // 0.47.1 alarm 桥随闹钟工具下架一起撤（工具都没了，注了也是白注）。
   if (tools && typeof tools.setStudyBridge === 'function') {
     tools.setStudyBridge((name, args) => require('../petBridge').invoke(name, args))
   }
@@ -596,7 +594,7 @@ async function handleSend (_e, text, images) {
       }
     } catch { }
     // 0.46.77 回复链乱码守卫（链路×2）：0.46.76 只装了自主收尾链，16:33 实锤回复里
-    // 也出「漢字（かな）」式夹生注音——同一守卫复用到回复。ja 模式检出简体字形/
+    // 也出「九十（かな）分」这种夹生注音——同一守卫复用到回复。ja 模式检出简体字形/
     // 假名注音括注 → 重写一次（守卫内部失败保留原文）。重写要同步回历史，否则回看
     // 聊天记录还是乱码（对齐上面内嵌动作改历史的做法）。
     if (lang.reply === 'ja' && r.content) {

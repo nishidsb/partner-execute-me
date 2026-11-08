@@ -142,6 +142,9 @@ function createChatter (deps) {
   const hear = deps.hear || null
   // 0.47.0 共同生活的回响：她手头的小项目等旧线头（空串=没有，整段不进预算）
   const echoHint = deps.echoHint || (() => '')
+  // 0.47.1 到点的约定（原闹钟看情况通道）：供料给她自己判断；说出口由宿主收账
+  const duePlan = deps.duePlan || (() => '')
+  const consumeDuePlan = deps.consumeDuePlan || (() => { })
 
   let timer = null
   let dayKey = ''
@@ -229,6 +232,9 @@ function createChatter (deps) {
     // 0.47.0 共同生活的回响：她手头的小项目（没有 → 空串，不进预算）
     let echoLine = ''
     try { echoLine = String(echoHint() || '') } catch { }
+    // 0.47.1 到点的约定：空串=没有到点的约定（不进预算）
+    let dueLine = ''
+    try { dueLine = String(duePlan() || '') } catch { }
     // 0.46.18 语言跟设置走：replyLang 固定语言时注入【语言要求】（auto=跟人设走，不注入）
     const langBlock = monologueLangBlock(c.replyLang)
     // 独白状态：正在独白就让她接着说（或收尾）
@@ -261,6 +267,8 @@ function createChatter (deps) {
     ...(hearLine ? [{ role: 'system', content: '【你耳朵里的世界（此刻的环境声音；你听到的是声音特征，听不出谁在说什么内容，别编「他说了什么」）】\n' + hearLine }] : []),
     // 0.47.0 共同生活的回响：旧线头有自然接点才捞，没接点就当没有
     ...(echoLine ? [{ role: 'system', content: '【共同经历的回响（有自然接点就顺口提半句，别硬提、别全倒出来）】\n' + echoLine }] : []),
+    // 0.47.1 到点的约定：这条只有她自己知道——看他的状态决定提不提，提就用自己的话说
+    ...(dueLine ? [{ role: 'system', content: dueLine }] : []),
           ...(langBlock ? [{ role: 'system', content: langBlock }] : []),
           // 0.46.59 时间单源：换 nowBlockOf（带精确钟点+不报时措辞+旧约定过期判定），
           // 与回复/自主活动链路共用一块，别再各写一份（链路×2 修一处≠修完）
@@ -313,6 +321,8 @@ function createChatter (deps) {
           // 0.46.0 沉默是正常选择：不占当日预算，独白保持开着（下次接着想）
           log('[chatter] 她想了想，决定不说')
         } else {
+          // 0.47.1 她开口了 → 到点的约定就算有了着落（不管这句是不是在提它；没提说明不重要）
+          try { if (dueLine) consumeDuePlan('decide-speak') } catch { }
           // 0.45.85 复读硬闸：提示词镜子（「别重复」）拦不住同一刺激物的变体修辞——
           // 用户实锤：对屏幕上同一行残留文字，一个半小时里变着花样嘀咕了 6 遍。
           // 生成结果再跟最近说过的话比一次，撞车的句子丢掉。
