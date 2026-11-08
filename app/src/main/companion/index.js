@@ -1248,7 +1248,9 @@ async function sayProactive (text, opts) {
     const dk = require('../danmaku')
     if (r && r.dmHeld) { try { if (dk.isOn()) dk.say(display || t) } catch { } }
     if (display) {
-      try { pb.subtitle({ text: display }) } catch { }
+      // 0.47.2 skipDm：dmHold 那条已经 dk.say 过译文，别再 replaceLast 把弹幕最后
+      // 一条覆盖成全句（弹幕盒里前半句出现两遍，看着像复读——11-08 22:01 实锤）
+      try { pb.subtitle({ text: display, skipDm: !!(r && r.dmHeld) }) } catch { }
       log('[companion] 主动台词字幕：' + display.slice(0, 40))
     }
     try { require('../assistant').pushExternalReply(t, display) } catch { }
@@ -1308,7 +1310,9 @@ async function sayNarration (text, opts) {
       const dk = require('../danmaku')
       if (rr && rr.dmHeld) { try { if (dk.isOn()) dk.say(display || t) } catch { } }
       if (display) {
-        try { require('../petBridge').subtitle({ text: display }) } catch { }
+        // 0.47.2 skipDm：dmHold 那条上面已经用 dk.say 把译文推上弹幕了，这里再
+        // replaceLast(整句) 会把切句后的最后一条覆盖成全句 → 前半句出现两遍（11-08 实锤）
+        try { require('../petBridge').subtitle({ text: display, skipDm: !!(rr && rr.dmHeld) }) } catch { }
         log('[chatter] 嘀咕字幕：' + display.slice(0, 40))
       }
     }).catch(() => noteLedger(''))

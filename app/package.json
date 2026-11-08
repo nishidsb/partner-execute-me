@@ -1,6 +1,6 @@
 {
   "name": "ryza-assistant-app",
-  "version": "0.47.1",
+  "version": "0.47.2",
   "description": "Partner.execute(me); - AI 桌面伙伴（桌宠 + 助手核心），基于 AuraDesk 架构扩展。名字致敬 Mili 的歌曲《world.execute(me);》",
   "main": "src/main/main.js",
   "author": "ciallooooo",

@@ -383,13 +383,17 @@ async function quiet ({ minutes, sound, roam } = {}) {
  * 主动台词的译文补丁（看屏陪伴 / 时间观念 / 闹钟）：
  * 台词先按原语言开口（朗读已经是原语言），翻译回来再把气泡文字换成字幕。
  * 只改显示，不动 TTS、不重置气泡停留时间（语音还没念完）。
+ * 0.47.2 skipDm：调用方已经把**译文**用 dk.say 推过弹幕（dmHold 扣住的那条）。
+ * 这时再 replaceLast(整句) 会把弹幕按句号切出的最后一条覆盖成全句——
+ * 前半句在弹幕盒里出现两遍，看起来像她把同一句话说了两次（11-08 22:01 实锤：
+ * 盒子里「手边已经切到另一个画面了。」×2，日志里生成只有一次）。
  */
-function subtitle ({ text } = {}) {
+function subtitle ({ text, skipDm } = {}) {
   const t = String(text || '').trim()
   if (!t) return { ok: false }
   bcast('pet:cmd', { kind: 'say-sub', text: t.slice(0, SAY_MAX_CHARS) })
   // 弹幕层开着时，弹幕那边也要跟着换字（不然弹幕还是原语言、气泡没了就永远读不到译文）
-  try { require('./danmaku').replaceLast(t) } catch {}
+  if (!skipDm) { try { require('./danmaku').replaceLast(t) } catch {} }
   return { ok: true }
 }
 

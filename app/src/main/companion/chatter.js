@@ -165,6 +165,13 @@ function createChatter (deps) {
   // 分数线 0.5→0.65（「话题相近但内容不同」的句子更容易活下来，最像的变体照吞）。
   const SWALLOW_ESCAPE = 3
   const SWALLOW_ESC_SCORE = 0.65
+  // 0.47.2 一字不差复读的长期闸：复读硬闸只看最近 90 分钟（REPEAT_WINDOW_MS），
+  // 同一个刺激物（挂机游戏界面、常驻窗口）一晚上出现十几次，窗口一过模型就会把
+  // 几乎原句的话再说一遍——用户 11-08 实锤「一模一样的话不只看到一次两次」。
+  // 24h 内跟她说过的任何一句几乎一字不差（Jaccard ≥ 0.85）的，无条件咽回去；
+  // 泄压也不放——泄压放的是「话题相近但内容不同」的念头，一字不差永远不是活人该说的话。
+  const VERBATIM_WINDOW_MS = 24 * 60 * 60 * 1000
+  const VERBATIM_HIT = 0.85
 
   function todayKey () {
     const d = new Date()
@@ -323,7 +330,7 @@ function createChatter (deps) {
         } else {
           // 0.47.1 她开口了 → 到点的约定就算有了着落（不管这句是不是在提它；没提说明不重要）。
           // 注意：consumeDuePlan 无条件调（clearDuePlan 内部对空约定是 no-op）——
-          // dueLine 是 decide() 的局部变量，这里拿不到；之前写成 if (dueLine) 会 ReferenceError 被 try 吞掉（20:31 真机实锤）。
+          // dueLine 是 decide() 的局部变量，这里拿不到；以前写成条件调用会 ReferenceError 被 try 吞掉（20:31 真机实锤）。
           try { consumeDuePlan('decide-speak') } catch { }
           // 0.45.85 复读硬闸：提示词镜子（「别重复」）拦不住同一刺激物的变体修辞——
           // 用户实锤：对屏幕上同一行残留文字，一个半小时里变着花样嘀咕了 6 遍。
@@ -332,9 +339,19 @@ function createChatter (deps) {
           // 0.46.42 硬闸同款时间窗：时间窗外说过的不算复读（隔几小时再说相似的话不是复读机）
           try { mirror = String(recentVoices(8, voicesim.REPEAT_WINDOW_MS) || '') } catch { }
           const voiceList = mirror ? mirror.split('\n').map((s) => s.trim()).filter(Boolean) : []
+          // 0.47.2 长期镜：24h 内说过的全部话（事件文件跨重启留存），只用来拦一字不差
+          let longList = []
+          try { longList = recentVoices(0, VERBATIM_WINDOW_MS) || [] } catch { }
           const escape = swallowStreak >= SWALLOW_ESCAPE
           if (escape) log('[chatter] 连续咽回去 ' + swallowStreak + ' 句，泄压放行一轮（近似原句照拦）')
           let passed = r.lines.filter((line) => {
+            // 一字不差闸：24h 内说过几乎一样的 → 无条件咽回去（泄压也不放）
+            if (longList.length && longList.some((h) => voicesim.similarity(line, h) >= VERBATIM_HIT)) {
+              swallowStreak++
+              try { if (noteSwallowed) noteSwallowed(line) } catch { }
+              log('[chatter] 24h 内说过几乎一样的话，咽回去：' + line.slice(0, 30))
+              return false
+            }
             const rep = voiceList.length ? voicesim.isRepeat(line, voiceList) : null
             // 泄压时只拦最像的变体（score ≥ SWALLOW_ESC_SCORE），话题相近但内容不同的放行
             if (rep && rep.repeat && !(escape && rep.score < SWALLOW_ESC_SCORE)) {

@@ -215,7 +215,7 @@ test('0.46.20/0.46.22 嘀咕字幕：等译文再上弹幕（原文先飞走、�
   assert.match(body, /new Promise\(\(r\) => setTimeout\(\(\) => r\(''\), 6000\)\)/, '译文 6 秒封顶，失败兜底')
   assert.match(body, /rr && rr\.dmHeld/, '扣住过才由译文补上弹幕')
   assert.match(body, /dk\.isOn\(\)\) dk\.say\(display \|\| t\)/, '弹幕推译文（译文空推原文兜底）')
-  assert.match(body, /petBridge'\)\.subtitle\(\{ text: display \}\)/, '译文经 petBridge.subtitle 换气泡+弹幕')
+  assert.match(body, /petBridge'\)\.subtitle\(\{\s*text:\s*display,\s*skipDm:\s*!!\(rr && rr\.dmHeld\)\s*\}\)/, '译文经 petBridge.subtitle 换气泡；dmHold 路径 skipDm（弹幕已由 dk.say 推过译文，replaceLast 会把切句覆盖成全句=复读假象，0.47.2）')
   assert.match(body, /\[chatter\] 嘀咕字幕/, '命中时留痕')
   // 主动台词同一套（看屏/闹钟/时间观念的出口）
   const sp = src.slice(src.indexOf('async function sayProactive'), src.indexOf('/**\n * 废话通道出口'))
