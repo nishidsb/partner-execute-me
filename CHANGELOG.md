@@ -1,5 +1,16 @@
 # 更新说明（CHANGELOG）
 
+## 0.47.0（2026-11-08）
+
+**陪伴感 2.0：触发源重构（主人 18:1x「陪伴感更多是依靠黏人模式来的，我要的不是这种」，拍板入导读红线 §5.15）**：
+- 阶梯全拆：15min 轻声 / 60min 问在干嘛 / 180min 委屈追问 / 360min 小作文 / 3h 续杯全灭；stageOf 唯一剩 missing（≥6h 没见 + 9:00~23:00 醒着窗口 + missingDay 一天一次），判定单源新模块 attentive.js；welcome 保留
+- attentive.studyCare：陪学满 120min 一句不是催的关心（陪学会话内、rhythm time 通道、复读硬闸、一天一次）；nudge-state.json 落 careStudyDay/missingDay
+- 共同生活的痕迹：projects.echoHint（空仓空串）→ echoBlockOf（+上次话头 4h~7d）→ 回复 echo 段 + 嘀咕回响注入（DECIDE_BODY 规则 7）
+- QQ reach 只随 missing；晚安/排期/闹钟入口不变
+- 顺手修 0.46.77 遗留×2：petBridge 顶层 ipcMain 注册炸纯 node 单测（环境闸）；soliloquy 邻近断言 200→400
+- 测试：fix-04700 ×9 + memory-decay 重写 ×3 + proactive-one-ledger ② 更新；全量 1144/1142 绿 0 失败；镜像隐私全量清洗 48 处 + 守卫词表扩容 + 常驻 scrub 脚本
+
+
 ## 0.46.63（2026-11-06）
 
 **口型照抄参考项目 AgentAtelierR（用户 22:02「0.46.62 还是奇怪，直接抄项目」）**：
