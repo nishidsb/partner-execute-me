@@ -30,7 +30,19 @@ const FORBIDDEN = [
   F('感觉你好寂', '寞啊'),               // 私人情绪对话原句
   F('是不是不该在我', '离开家的时候', '打开你'), // 同上
   F('寂しくな', 'ったら、QQ のほうに行く', 'から'), // 私人约定原句
-  F('11 点半', '说完就', '睡了')          // 作息细节
+  F('11 点半', '说完就', '睡了'),        // 作息细节
+  // 0.47.0 全量清洗清单（scripts/scrub-privacy.cjs）锁死的原句特征碎片：
+  F('睡了刚好', '6小时'),               // 作息细节：真实睡眠时长
+  F('有你定的闹', '钟'),                // 真实安排原句
+  F('暂时可以好好休息', '了莱'),         // 真实约定原句
+  F('休息了莱莎，来一起', '看视频'),      // 同上（时间线缩写）
+  F('熬夜熬到', '两点'),                // 作息细节：真实钟点
+  F('只睡了5个小', '时'),               // 作息细节：真实时长
+  F('最近失眠，烦', '死'),              // 情绪表达
+  F('（つ', 'く）'),                    // 真实语音合成痕迹
+  F('359524', '452'),                  // 主人真实 QQ 号
+  F('2738649', '075'),                 // 机器人真实 QQ 号
+  F('tailde19b1')                      // 本机 tailscale 域名
 ]
 
 // 硬编码用户目录：C:\Users\<name>\ 或 C:/Users/<name>/，
@@ -46,7 +58,8 @@ function* walk (dir) {
       if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist') continue
       yield* walk(p)
     } else if (/\.(js|mjs|cjs|json|md|py|html|css|txt|yaml|yml)$/i.test(e.name)) {
-      if (path.resolve(p) === path.resolve(fileURLToPath(import.meta.url))) continue   // 守卫自身含特征词，跳过
+      // 守卫自身与清洗清单（scripts/scrub-privacy.cjs）必须收录原句特征词才能拦住回退，跳过
+      if ([fileURLToPath(import.meta.url), path.join(ROOT, 'scripts', 'scrub-privacy.cjs')].includes(path.resolve(p))) continue
       yield p
     }
   }

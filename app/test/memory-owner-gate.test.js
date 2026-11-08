@@ -28,7 +28,7 @@ test('记忆闸：群友 @ 她照常回但不记账；主人私聊照记', async
     send: async (ev, text) => { said.push(text) },
     onMemoryTurn: (roleId, u, r, meta) => { calls.push({ u, isOwner: meta && meta.isOwner, group: meta && meta.group }) }
   })
-  b.saveCfg({ enabled: true, privateEnabled: true, ownerAccounts: ['359524452'], groupRate: 100 })
+  b.saveCfg({ enabled: true, privateEnabled: true, ownerAccounts: ['10001'], groupRate: 100 })
 
   // ① 群里别人 @ 她：「我明天考试」——回，但 meta.isOwner=false
   await b.handleEvent({
@@ -38,7 +38,7 @@ test('记忆闸：群友 @ 她照常回但不记账；主人私聊照记', async
   })
   // ② 主人私聊：同一句话——meta.isOwner=true
   await b.handleEvent({
-    post_type: 'message', message_type: 'private', user_id: 359524452, self_id: 42,
+    post_type: 'message', message_type: 'private', user_id: 10001, self_id: 42,
     sender: { nickname: 'Usuchu', card: '' },
     message: [{ type: 'text', data: { text: '我明天考试' } }]
   })

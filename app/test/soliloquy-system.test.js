@@ -150,7 +150,7 @@ test('自主活动自语：解析 + 限频 + 提示词 + 宿主出口', async ()
   assert.ok(/SOLI_PROMPT/.test(sysFree), '完全开放挡的 system 带自语节')
   // 宿主出口：自语走 sayNarration（气泡 + 低频朗读），与本体记忆同源，不转 QQ
   const host = fs.readFileSync(path.join(__dirname, '..', 'src/main/companion/index.js'), 'utf8')
-  assert.ok(/onSoliloquy: async \(line\)[\s\S]{0,200}sayNarration\(t, \{ speech: narrationVoiceOn\(\) \}\)/.test(host), '自语出口接 sayNarration')
+  assert.ok(/onSoliloquy: async \(line\)[\s\S]{0,400}sayNarration\(t, \{ speech: narrationVoiceOn\(\) \}\)/.test(host), '自语出口接 sayNarration')
   assert.ok(/function narrationVoiceOn/.test(host), '朗读判定函数存在')
   // chatter 拿到独白状态与活动素材
   assert.ok(/soliloquy: getSoliloquy\(\)/.test(host), 'chatter 注入独白状态机')

@@ -491,7 +491,28 @@ function create (deps) {
       return out
     },
     reset () { state = null },
-    status () { return statusOf(ensureState()) }
+    status () { return statusOf(ensureState()) },
+    /** 0.47.0 陪伴感 2.0 ③共同生活的痕迹（§5.15）：给对话链一句「项目回响」——
+     *  进行中的项目 + 最新成果，或最近交付的一件。没有就空串（绝不硬提）。
+     *  与 block()（自主活动选题注入）分开：这口气是对主人说的，不是给她自己的。 */
+    echoHint () {
+      ensureState()
+      const base = (p) => String(p || '').split(/[\\/]/).pop()
+      const a = state.active
+      if (a && a.status !== 'paused' && a.title) {
+        const arts = Array.isArray(a.artifacts) ? a.artifacts : []
+        const last = arts.length ? arts[arts.length - 1] : null
+        return '你手头有个小项目《' + a.title + '》' +
+          (last ? '，已经做出了「' + base(last.path) + '」' : '，还没动出东西来') +
+          '——他接得上话时可以自然说说近况，别硬提。'
+      }
+      const done = (state.done || []).filter((x) => x.outcome === 'delivered')
+      const lastDone = done[done.length - 1]
+      if (lastDone && lastDone.title) {
+        return '你最近做成过《' + lastDone.title + '》——接得上话时顺口提一句就好。'
+      }
+      return ''
+    }
   }
 }
 

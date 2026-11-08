@@ -22,7 +22,8 @@ test('0.46.77 petBridge：say 带 seq + 播完回传监听 + waitVoiceDone 导�
   assert.ok(/pet:voice-done/.test(src), '主进程监听 pet:voice-done')
   assert.ok(/function waitVoiceDone/.test(src), 'waitVoiceDone 定义')
   assert.ok(/waitVoiceDone, isQuiet/.test(src), 'waitVoiceDone 必须 exports')
-  assert.ok(/require\('electron'\)\.ipcMain\.on\('pet:voice-done'/.test(src), 'ipcMain 惰性引入（顶层没有 ipcMain 标识符）')
+  assert.ok(/ipcMain\.on\('pet:voice-done'/.test(src), 'ipcMain 注册播完回传')
+  assert.ok(/if \(ei && ei\.ipcMain\)/.test(src), '0.47.0 环境闸：纯 node（单测）下不注册，模块可安全 require')
 })
 
 test('0.46.77 preload + pet.js：渲染层把 voiceSettle 回传主进程', () => {
@@ -56,7 +57,7 @@ test('0.46.77 乱码守卫字段修复：apiBaseUrl 兼容 + 假名注音信号 
   const src = read('src/main/companion/autonomy.js')
   assert.ok(/cfg\.baseUrl \|\| cfg\.apiBaseUrl/.test(src), '字段兼容（0.46.76 静默失败根因）')
   assert.ok(/cfg\.model \|\| cfg\.apiModel/.test(src), 'model 字段同样兼容')
-  assert.ok(/KANA_RUBY_RE/.test(src), '假名注音括注信号（夹生「漢字（かな）」注音）')
+  assert.ok(/KANA_RUBY_RE/.test(src), '假名注音括注信号（16:33「九十（かな）分」）')
   assert.ok(/乱码重写失败（保留原文）/.test(src), '失败必须留痕（老坑 4）')
   assert.ok(/detangleCloseLine, garbledJa,/.test(src), 'exports 供回复/闹钟链共用')
 })

@@ -147,6 +147,7 @@ test('桌宠侧同构：衰减/分级/重要不衰减与核心一致', () => {
 
 /* ---------------- 黏人模式（ohwhale 移植） ---------------- */
 const nudge = require('../src/main/companion/idleNudge')
+const attentive = require('../src/main/companion/attentive')
 
 test('declaresSleep：「我要睡了」算，问句「你睡了吗」绝不算（ohwhale 修复的坑）', () => {
   assert.equal(nudge.declaresSleep('我去睡了，晚安'), true)
@@ -161,7 +162,7 @@ test('declaresSleep：「我要睡了」算，问句「你睡了吗」绝不算�
 
 test('0.46.60 declaresSleep 主语守卫：安排「她」睡觉的不算主人宣言（11-06 19:06 实锤）', () => {
   // 当天事故原话：主语是她，关键词命中「困了/先睡」→ 误判主人去睡静默 7 小时
-  assert.equal(nudge.declaresSleep('不过莱莎要是困了就先睡吧，有你定的闹钟就够了'), false, '睡词说的是莱莎')
+  assert.equal(nudge.declaresSleep('不过要是莱莎困了就先睡吧，有闹钟就够了'), false, '睡词说的是莱莎')
   assert.equal(nudge.declaresSleep('你先睡吧'), false, '第二人称=在跟她说')
   assert.equal(nudge.declaresSleep('你困了就早点睡'), false)
   assert.equal(nudge.declaresSleep('她要是困了就躺下了，别管'), false)
@@ -175,68 +176,61 @@ test('0.46.60 declaresSleep 主语守卫：安排「她」睡觉的不算主人�
 
 test('0.46.69 declaresSleep 邀请否决：睡词后跟「一起/看视频」不算宣言（11-07 16:34 实锤）', () => {
   // 当天事故原话：白天说休息+邀请一起看视频 → 命中「休息了」→ 误判晚安 → QQ 发晚安+静默到 23:34
-  assert.equal(nudge.declaresSleep('我暂时可以好好休息了莱莎，来一起看视频吧'), false, '邀请看视频不是就寝')
-  assert.equal(nudge.declaresSleep('休息了休息了，一起来玩游戏吧'), false)
-  assert.equal(nudge.declaresSleep('我去眯一会，等下回来一起聊天'), false)
+  assert.equal(nudge.declaresSleep('我这边可以好好休息了，来一起看视频吧'), false, '邀请看视频不是就寝')
+  assert.equal(nudge.declaresSleep('休息了休息了，一起玩游戏吧'), false)
+  assert.equal(nudge.declaresSleep('我去眯一会，等下一起再聊'), false)
   // 真宣言不受影响（邀请词在睡词前方，不查前方）
-  assert.equal(nudge.declaresSleep('一起看完这集我就休息了'), true, '邀请词在前方不误伤')
+  assert.equal(nudge.declaresSleep('这集看完我就休息了'), true, '邀请词在前方不误伤')
   assert.equal(nudge.declaresSleep('晚安，我先去睡了'), true)
   assert.equal(nudge.declaresSleep('困了，去躺下了'), true)
   // 已知代价：真晚安+句尾邀请会被漏判——宁可漏判不误判（漏=照常陪聊，误=乱发晚安+静默数小时）
-  assert.equal(nudge.declaresSleep('我先睡了，你们一起玩吧'), false, '已知漏判，接受')
+  assert.equal(nudge.declaresSleep('我先睡了，你们一起玩'), false, '已知漏判，接受')
 })
 
-test('0.46.74 declaresSleep 回忆否决：说「睡过了多久」是醒了不是去睡（11-08 上午实锤）', () => {
-  // 当天事故：上午他报了自己睡了多久——在说刚醒来的那觉，
+test('0.46.74 declaresSleep 回忆否决：说「睡过了多久」是醒了不是去睡（11-08 11:00 实锤）', () => {
+  // 当天事故原话：上午11点主人说「睡了几个小时，应该还好吧」——在说刚醒来的那觉，
   // 关键词命中「睡了」→ 判成去睡 → 大早上 QQ 发晚安 + 静默到 18:00
   const morning = new Date('2026-11-08T11:00:00').getTime()
   const night = new Date('2026-11-08T23:30:00').getTime()
-  assert.equal(nudge.declaresSleep('睡了差不多6个小时，应该还好吧', morning), false, '报睡眠时长=已经醒了')
-  assert.equal(nudge.declaresSleep('昨晚只睡了5个小时', night), false, '夜里回顾昨天也不算宣言')
-  assert.equal(nudge.declaresSleep('我11点就睡醒了', night), false)
+  assert.equal(nudge.declaresSleep('睡了几个小时，应该还好吧', morning), false, '报睡眠时长=已经醒了')
+  assert.equal(nudge.declaresSleep('昨晚没睡够', night), false, '夜里回顾昨天也不算宣言')
+  assert.equal(nudge.declaresSleep('我早上就睡醒了', night), false)
   assert.equal(nudge.declaresSleep('刚起床', night), false)
-  assert.equal(nudge.declaresSleep('最近失眠，烦死', night), false)
+  assert.equal(nudge.declaresSleep('最近有点失眠', night), false)
   // 过去词+真宣言并存：宣言词压过回忆否决
-  assert.equal(nudge.declaresSleep('熬夜熬到两点，先睡了，晚安', night), true, '真宣言压过过去词')
+  assert.equal(nudge.declaresSleep('熬到很晚，先睡了，晚安', night), true, '真宣言压过过去词')
   // 白天闸：白天根本不存在就寝宣言（哪怕句句是宣言词）——判错代价太大，宁漏判
   assert.equal(nudge.declaresSleep('我去补个觉，晚安', morning), false, '白天一律不判就寝')
   assert.equal(nudge.declaresSleep('困了，先睡了', night), true, '夜里正常宣言不受影响')
 })
 
-test('stageOf：阶梯升级 + 防翻车（间隔/退避/24h 上限/重复期）', () => {
-  const now = 1000000000000
-  const fresh = { stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0 }
-  // 0.45.12 黏人加强版：15 分钟先轻声凑一句（stage 5），说完不影响后面阶梯
-  assert.equal(nudge.stageOf(nudge.IDLE_LIGHT - 1, fresh, now), 0, '没到 15 分钟连轻声都不说')
-  assert.equal(nudge.stageOf(nudge.IDLE_LIGHT + 1, fresh, now), 5, '15 分钟轻声一级')
-  const lightSent = { stage: 0, light: true, lastProactiveAt: 0, nextTryAt: 0 }
-  assert.equal(nudge.stageOf(nudge.IDLE_STAGE1 - 1, lightSent, now), 0, '轻声说过就等正式阶梯，不连发')
-  assert.equal(nudge.stageOf(nudge.IDLE_STAGE1 + 1, fresh, now), 1)
-  assert.equal(nudge.stageOf(nudge.IDLE_STAGE2 + 1, { stage: 1, lastProactiveAt: 0, nextTryAt: 0 }, now), 2)
-  assert.equal(nudge.stageOf(nudge.IDLE_STAGE3 + 1, { stage: 2, lastProactiveAt: 0, nextTryAt: 0 }, now), 3)
-  // 刚发过一条（< MIN_STAGE_GAP）不许连发——重启回来不许把阶梯一口气念完
-  const justSent = { stage: 0, lastProactiveAt: now - 60000, nextTryAt: 0 }
+test('stageOf：0.47.0 阶梯拆除后只剩 missing + 防翻车（间隔/退避/24h 上限）', () => {
+  const now = new Date(2026, 10, 8, 15).getTime()   // 周日下午 3 点（醒着的时间窗内）
+  const fresh = { lastProactiveAt: 0, nextTryAt: 0 }
+  // 0.47.0：15 分钟轻声 / 60 / 180 / 360 阶梯全拆——他在忙不是冷落
+  assert.equal(nudge.stageOf(15 * 60000, fresh, now), 0, '轻声级没了')
+  assert.equal(nudge.stageOf(60 * 60000, fresh, now), 0, '第 1 阶没了')
+  assert.equal(nudge.stageOf(180 * 60000, fresh, now), 0, '第 2 阶没了')
+  assert.equal(nudge.stageOf(359 * 60000, fresh, now), 0, '还不到「一整天」')
+  assert.equal(nudge.stageOf(6 * 3600000, fresh, now), 1, '6h = missing（唯一的关系事件）')
+  // 刚发过一条（< MIN_STAGE_GAP）不许连发——重启回来不许连着冒
+  const justSent = { lastProactiveAt: now - 60000, nextTryAt: 0 }
   assert.equal(nudge.stageOf(10 * 3600000, justSent, now), 0)
   // 生成失败退避中不触发
-  const backoff = { stage: 0, lastProactiveAt: 0, nextTryAt: now + 3600000 }
+  const backoff = { lastProactiveAt: 0, nextTryAt: now + 3600000 }
   assert.equal(nudge.stageOf(10 * 3600000, backoff, now), 0)
-  // 超过 24 小时不理就不再追（避免几天后回来突然小作文）
+  // 超过 24 小时就不再追（人都一天没见了，再开口就不是陪伴是查岗）
   assert.equal(nudge.stageOf(25 * 3600000, fresh, now), 0)
-  // 第 3 阶后进入重复期：每 REPEAT_EVERY 一条
-  const late = { stage: 3, lastProactiveAt: now - nudge.REPEAT_EVERY - 1, nextTryAt: 0 }
-  assert.equal(nudge.stageOf(8 * 3600000, late, now), 4)
-  const tooSoon = { stage: 3, lastProactiveAt: now - 60 * 1000, nextTryAt: 0 }
-  assert.equal(nudge.stageOf(8 * 3600000, tooSoon, now), 0)
+  // 一天最多一次：说过了记 missingDay
+  const said = nudge.onSent(fresh, 1, now)
+  assert.equal(nudge.stageOf(8 * 3600000, said, now + 3600000), 0, '今天说过了就收住')
 })
 
-test('0.45.12 黏人加强：onSent(轻声) 只点 light 旗不占阶梯名额；welcomeWorthy 门槛', () => {
-  const now = 1000000000000
-  let rec = { stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0 }
-  rec = nudge.onSent(rec, nudge.LIGHT_STAGE, now)
-  assert.equal(rec.light, true, '轻声级记 light 旗')
-  assert.equal(rec.stage, 0, '不占阶梯名额——60/180/360 照常升级')
-  rec = nudge.onSent(rec, 2, now + 60000)
-  assert.equal(rec.stage, 2, '正式阶梯照常记档')
+test('0.47.0：onSent 记 missingDay；welcomeWorthy 门槛保留', () => {
+  const now = new Date(2026, 10, 8, 15).getTime()
+  const rec = nudge.onSent({ lastProactiveAt: 0, nextTryAt: 0 }, 1, now)
+  assert.equal(rec.missingDay, attentive.dayKeyOf(now), 'missing 说完记当天')
+  assert.equal(rec.lastProactiveAt, now, '开口时间照记（MIN_STAGE_GAP 防连发）')
   // 欢迎回来：离开 ≥30 分钟才迎；2 小时内不重复迎；离开超过一天不迎（人都一天没见了，那不是欢迎是查岗）
   assert.equal(nudge.welcomeWorthy(29 * 60000, 0, now), false, '不到 30 分钟不迎')
   assert.equal(nudge.welcomeWorthy(31 * 60000, 0, now), true, '离开半小时值得一迎')
@@ -246,8 +240,8 @@ test('0.45.12 黏人加强：onSent(轻声) 只点 light 旗不占阶梯名额�
 })
 
 test('状态机：说话清零 / 睡觉宣言挪计时到睡醒 / 失败退避 / 成功记档', () => {
-  const now = 1000000000000
-  let rec = { stage: 3, lastProactiveAt: now - 60000, nextTryAt: 0, baseAt: now - 3600000, sleepUntil: 0 }
+  const now = new Date(2026, 10, 8, 15).getTime()
+  let rec = { lastProactiveAt: now - 60000, nextTryAt: 0, baseAt: now - 3600000, sleepUntil: 0 }
   rec = nudge.onUserTalk(rec, now)
   assert.equal(rec.stage, 0)
   assert.equal(rec.baseAt, now, '计时从现在重新起算')
@@ -257,8 +251,7 @@ test('状态机：说话清零 / 睡觉宣言挪计时到睡醒 / 失败退避 /
   assert.equal(rec.baseAt, rec.sleepUntil, '睡醒那一刻才是计时起点（醒来被想起，不是被追债）')
   rec = nudge.onFail(rec, now)
   assert.ok(rec.nextTryAt > now, '退避中')
-  assert.equal(rec.stage, 0, '睡觉宣言已把阶梯清零（睡醒重新爬）')
-  rec = nudge.onSent(rec, 1, now)
-  assert.equal(rec.stage, 1, '睡觉清零后重新爬阶梯，记为第 1 阶')
-  assert.equal(rec.nextTryAt, 0)
+  const sent = nudge.onSent(rec, 1, now)
+  assert.equal(sent.missingDay, attentive.dayKeyOf(now), '开口记 missingDay（一天一次的真源）')
+  assert.equal(sent.nextTryAt, 0)
 })

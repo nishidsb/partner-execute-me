@@ -35,7 +35,7 @@ class FakeWS {
           this.onmessage({
             data: JSON.stringify({
               action: msg.action, echo: msg.echo, retcode: 0, status: 'ok',
-              data: { user_id: 2738649075, nickname: 'reisa' }
+              data: { user_id: 10002, nickname: 'reisa' }
             })
           })
         }
@@ -58,7 +58,7 @@ test('连上后 status().phase 必须是 ready（曾经永远是 undefined）', 
   const st = c.status()
   assert.equal(st.connected, true, 'state.connected 应为 true')
   assert.equal(st.phase, 'ready', 'phase 必须落进 state，否则判活全废')
-  assert.equal(st.selfId, 2738649075)
+  assert.equal(st.selfId, 10002)
   assert.equal(st.nickname, 'reisa')
   c.disconnect()
 })
@@ -73,11 +73,11 @@ test('搭上 reach 判定：连上后主动找人真的能放行', async () => {
 
   const gate = reach.shouldReach(
     { lastAt: 0, day: '', count: 0 },
-    { reachOn: true, ownerAccounts: ['359524452'] },
+    { reachOn: true, ownerAccounts: ['10001'] },
     { now: NOW, connected }
   )
   assert.equal(gate.ok, true, '连上了就该放行（此前的 bug 在这里被判成 disconnected）')
-  assert.equal(gate.uid, '359524452', '默认发给主人名单第一个')
+  assert.equal(gate.uid, '10001', '默认发给主人名单第一个')
   c.disconnect()
 })
 

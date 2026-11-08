@@ -744,6 +744,11 @@ function systemPrompt (char, userText) {
     if (gb) sections.push({ key: 'goals', priority: 52, text: gb })
     const life = lifeBlocksNow()
     if (life.week) sections.push({ key: 'week', priority: 46, text: life.week })
+    // 0.47.0 共同经历的回响：旧话头 + 她的小项目（素材不是指令，见 echoBlockOf 注释）
+    try {
+      const eb = echoBlockOf()
+      if (eb) sections.push({ key: 'echo', priority: 44, text: eb })
+    } catch { }
   } catch { }
   // 0.20.0 自我层：她自己写的日记 + 最近的状态（每人一份；还没有日记时不注入）
   try {
@@ -1046,7 +1051,7 @@ function togetherBlock () {
     '。这些只是让你心里有数，不必刻意提起，也别每句都提。'
 }
 
-/* 0.45.72 聊天史带时间与来源（用户反馈凌晨聊完的第二天早上记忆错乱：记得他前一晚说完话就睡了，
+/* 0.45.72 聊天史带时间与来源（用户 11-01 反馈「一大早就记忆错乱：我 说完就睡了，
  * 她说的是 10 点多开始」）。
  *
  * 根因不在记忆库，在喂给模型的历史：以前 map 成 {role, content}，at 和 via 全丢。
@@ -1070,6 +1075,30 @@ function stampChat (m) {
   else if (via === 'qq') tag = '（QQ 上说的）'
   else if (via === 'chatter') tag = '（我自言自语）'
   return pre + tag + String((m && m.content) || '')
+}
+
+/** 0.47.0 陪伴感 2.0 ③ 共同生活的回响（§5.15）：
+ *  把「能自然接上的旧线头」递给她——上次聊到的话头（≥4h 前，7 天内）、她手头的小项目。
+ *  红线：陪伴感由共同经历累积，开口自然引用旧线头，不重新起头；没接点就空串，绝不硬提。
+ *  只做素材不做指令：提不提由模型按语境判断，罗列感是这一块最大的死法。 */
+function echoBlockOf () {
+  const parts = []
+  try {
+    const prev = dayflow.loadLast(curWsDir)
+    const gap = prev && prev.at ? Date.now() - prev.at : 0
+    if (prev && prev.text && gap >= 4 * 3600000 && gap < 7 * 86400000) {
+      parts.push('上次你们聊到他说：「' + prev.text + '」')
+    }
+  } catch { }
+  try {
+    const p = getProjects()
+    const t = p ? p.echoHint() : ''
+    if (t) parts.push(t)
+  } catch { }
+  if (!parts.length) return ''
+  return '【共同经历的回响】这些是你们之间真实存在过的线头。有自然接点就顺口接上一句' +
+    '（像「上次你说的那个」那样接，不要从头复述），没有接点就完全别提——绝不硬提、绝不一次全倒出来。\n' +
+    parts.join('\n')
 }
 
 function watchSharedBlock () {
@@ -1347,6 +1376,8 @@ function getChatter () {
     // 0.35.0：碎碎念要接得上现实，否则就是另一个不相干的人
     presence: presenceState,
     sharedBlock: watchSharedBlock,
+    // 0.47.0 共同生活的回响：嘀咕也可以从旧线头里捞一件（素材不是指令，接不上就别提）
+    echoHint: () => { try { const p = getProjects(); return p ? p.echoHint() : '' } catch { return '' } },
     // 0.45.44：把自己最近几句递回去防复读（「配合ノート」连说一晚的教训）
     recentVoices: (n, sinceMs) => { try { return inner.recentVoices(n, sinceMs).join('\n') } catch { return '' } },
     displeasure: () => { try { return inner.displeasure() } catch { return 0 } },
@@ -1458,6 +1489,7 @@ function stopCuriosity () {
  * 「我去睡了」静默 7 小时且计时挪到睡醒那一刻；问句不算睡觉宣言。
  */
 const idleNudge = require('./idleNudge')
+const attentive = require('./attentive')   // 0.47.0 她懂你：状态触发器（§5.15 陪伴感 2.0）
 let nudgeTimer = null
 /* 0.45.91 黏人状态落盘：原来 nudgeRec 只在内存里，一重启 sleepUntil / baseAt 全丢。
  * 用户 11-02 实锤：23:39 她已经判定「静默到明早 06:39」，23:43 部署重启，
@@ -1485,7 +1517,9 @@ function saveNudgeRec () {
       nextTryAt: Number(nudgeRec.nextTryAt) || 0,
       baseAt: Number(nudgeRec.baseAt) || 0,
       sleepUntil: Number(nudgeRec.sleepUntil) || 0,
-      sleepArmed: Number(nudgeRec.sleepArmed) || 0
+      sleepArmed: Number(nudgeRec.sleepArmed) || 0,
+      careStudyDay: String(nudgeRec.careStudyDay || ''),
+      missingDay: String(nudgeRec.missingDay || '')
     }), 'utf8')
   } catch { }
 }
@@ -1511,8 +1545,7 @@ function saveWelcomeRec () {
 let welcomeRec = Object.assign({ lastActiveAt: 0, lastWelcomeAt: 0, prevPresence: '' }, loadWelcomeRec())
 
 /** 阶梯台词：persona + 情境提示，语言跟 replyLang 设置走。
- *  avoid：硬闸判出的「刚说过、别再碰」的那句（重生成时作为禁语递进去） */
-async function nudgeLineByHint (hint, avoid) {
+ *  avoid：硬闸判出的「刚说过、别再碰」的那句（重生成时作为禁语递进去） */async function nudgeLineByHint (hint, avoid) {
   const c = cfg()
   if (!c.apiBaseUrl || !c.apiModel) return ''
   const rl = c.replyLang || 'zh'
@@ -1568,7 +1601,8 @@ const noteProactiveSaid = (text) => proactiveGate.note(text)
 const proactiveRepeat = (text) => proactiveGate.check(text)
 
 function makeNudgeLine (stage, mins, avoid) {
-  const hint = String(idleNudge.STAGE_PROMPTS[stage] || idleNudge.STAGE_PROMPTS[4])
+  // 0.47.0 阶梯没了：只剩 missing（1）一个阶段，兜底也指向它
+  const hint = String(idleNudge.STAGE_PROMPTS[stage] || idleNudge.STAGE_PROMPTS[1])
     .replace('{mins}', String(mins))
   return nudgeLineByHint(hint, avoid)
 }
@@ -1885,9 +1919,9 @@ function statBump (k, n) {
   interactStats[k] += Number(n) || 1
 }
 
-/** QQ 场合的找他台词：阶梯语气 + 「这是手机聊天，说短点」 */
+/** QQ 场合的找他台词：触发源 0.47.0 起只剩「一整天没见」，语气是「我在」不是追问 */
 async function makeReachLine (stage, mins) {
-  const base = String(idleNudge.STAGE_PROMPTS[stage] || idleNudge.STAGE_PROMPTS[4])
+  const base = String(idleNudge.STAGE_PROMPTS[stage] || idleNudge.STAGE_PROMPTS[1])
     .replace('{mins}', String(mins))
   const hint = base + '\n\n【场合变了】主人现在不在电脑前。你要去 QQ 上给他发消息——像随手发的手机消息，短，一两句，别长篇大论。'
   return nudgeLineByHint(hint)
@@ -1918,7 +1952,7 @@ async function tryQqReach (stage, idleMs) {
 
 /* 0.45.72 睡前的那句 QQ（用户 11-01：「qq 上也没有主动找我」）。
  *
- * 她说过「寂寞了就去 QQ 找你」，主人也回「寂寞了就来 qq 找我吧，
+ * 她说「寂しくなったら QQ に行くね」，主人也回「寂寞了就来 qq 找我吧，
  * 我给你设置了特别关注」—— 然后整夜一条也没发。
  * 根因在 nudge tick：`if (sleepUntil) return` 挡在 tryQqReach 前面，而 onSleepDeclared
  * 又把 baseAt 推到他该醒的时刻，于是「去睡了」之后 QQ 通道等于物理断开。
@@ -2093,10 +2127,47 @@ function startNudge () {
     try {
       const c = cfg()
       if (c.idleNudgeOn === false) return
-      // 学习会话期间黏人模式闭嘴：她正盯着学习，不能同时喊「你怎么不理我」
-      if (study.active(studySess)) return
-      const now = Date.now()
+      const now0 = Date.now()
       if (genAbort) return                                  // 正在聊天不打扰
+      /* 0.47.0 她懂你①（§5.15 陪伴感 2.0）：陪学满两小时，一句不是催的关心。
+       * 学习会话内嘀咕全停（0.46.74 静音陪学），但这条不是监工也不是嘀咕——
+       * 是「一直在旁边的人」的口吻，一天最多一次，照走节奏器的 time 通道。 */
+      if (study.active(studySess)) {
+        try {
+          const started = Number(studySess && studySess.startedAt) || 0
+          const mins = started ? Math.floor((now0 - started) / 60000) : 0
+          if (attentive.studyCareDue(mins, nudgeRec, now0)) {
+            const gate = getRhythm().ask('time')
+            const hint = String(attentive.PROMPTS.studyCare).replace('{mins}', String(mins))
+            let text = gate.ok ? await nudgeLineByHint(hint) : ''
+            // 复读硬闸：雷同就点名禁语重生成一次，还雷同就不开口
+            let rep = text ? proactiveRepeat(text) : null
+            if (rep) {
+              log('[attentive] 陪学关心复读闸，换角度重生成')
+              text = await nudgeLineByHint(hint, rep.against)
+              rep = text ? proactiveRepeat(text) : null
+              if (rep) { log('[attentive] 重生成仍雷同，这次收住'); text = '' }
+            }
+            // 说过/决定不说都记今天：这条一天只有一次，不重试（宁缺毋滥）
+            nudgeRec = attentive.noteStudyCare(nudgeRec, now0)
+            if (text) {
+              nudgeRec = Object.assign({}, nudgeRec, { lastProactiveAt: now0 })
+              saveNudgeRec()
+              await sayProactive(text, { kind: 'nudge', mark: false })
+              noteProactiveSaid(text)
+              try { getRhythm().note('time') } catch { }
+              noteSpoke({})   // 两边一本账：桌面说了，QQ 那边也安静
+              try { inner.noteNarration('陪他学了 ' + mins + ' 分钟，我跟他说了句只有旁边的人才看得见的话') } catch { }
+              log('[attentive] 陪学满 ' + mins + ' 分钟，说了句关心的：' + text.slice(0, 30))
+            } else {
+              saveNudgeRec()
+              if (!gate.ok) log('[attentive] 陪学关心没开口（' + gate.why + '）')
+            }
+          }
+        } catch (err) { log('[attentive] 陪学关心异常：' + (err && err.message)) }
+        return
+      }
+      const now = now0
       const st = presenceState()
 
       /* 0.46.56 睡醒等待：静默到期 ≠ 他醒了。他没回到电脑前（还在被窝里/手机上）

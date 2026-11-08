@@ -90,7 +90,7 @@ async function say ({ script, speech, vol, dmHold } = {}) {
   // 0.46.77 播完回传：每句 say 带一个自增 seq，渲染层语音真结束（onended/onerror/
   // 被打断）时回发 pet:voice-done{seq}——多句独白/自语靠它等「真播完」，不再靠
   // estimateSeconds 估时（那只算朗读时长，没算 Fish 合成的 10~30s 网络延迟，
-  // 11-08 实锤独白 1/2 与 2/2 只隔 5s、第一句语音 14s 后才合成完）。
+  // 11-08 16:02 实锤独白 1/2 与 2/2 只隔 5s、第一句语音 14s 后才合成完）。
   const seq = ++saySeq
   bcast('pet:cmd', { kind: 'say', seq, text, lead, inline, speak: speech !== false, dm, vol: Number.isFinite(volN) ? Math.min(1, Math.max(0.05, volN)) : undefined })
   if (dm && text && !holdDm) {
@@ -113,16 +113,25 @@ async function say ({ script, speech, vol, dmHold } = {}) {
 let saySeq = 0
 let voiceDoneSeq = 0
 const voiceDoneWaiters = []
-require('electron').ipcMain.on('pet:voice-done', (_e, p) => {
-  const s = Number(p && p.seq) || 0
-  if (s > voiceDoneSeq) voiceDoneSeq = s
-  for (let i = voiceDoneWaiters.length - 1; i >= 0; i--) {
-    if (voiceDoneWaiters[i].seq <= voiceDoneSeq) {
-      const w = voiceDoneWaiters.splice(i, 1)[0]
-      try { w.res(true) } catch { }
-    }
+/* 0.47.0 注册加环境闸：本模块在主进程被 require 时 electron.ipcMain 一定在；
+ * 但纯 node（单测等）require('electron') 拿到的是 exe 路径字符串，.ipcMain 是
+ * undefined——0.46.77 起顶层注册把 spine-actions 等纯 node 单测整个炸掉。
+ * 测试环境不注册：单测不测 IPC 收发，只要模块能安全加载。 */
+try {
+  const ei = require('electron')
+  if (ei && ei.ipcMain) {
+    ei.ipcMain.on('pet:voice-done', (_e, p) => {
+      const s = Number(p && p.seq) || 0
+      if (s > voiceDoneSeq) voiceDoneSeq = s
+      for (let i = voiceDoneWaiters.length - 1; i >= 0; i--) {
+        if (voiceDoneWaiters[i].seq <= voiceDoneSeq) {
+          const w = voiceDoneWaiters.splice(i, 1)[0]
+          try { w.res(true) } catch { }
+        }
+      }
+    })
   }
-})
+} catch { }
 function waitVoiceDone (seq, falseAfterMs) {
   const s = Number(seq) || 0
   if (!s || s <= voiceDoneSeq) return Promise.resolve(true)

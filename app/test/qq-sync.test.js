@@ -21,7 +21,7 @@ function tmpHome () {
 const OWNER_EV = () => ({
   post_type: 'message',
   message_type: 'private',
-  user_id: 359524452,
+  user_id: 10001,
   self_id: 1,
   message: [{ type: 'text', data: { text: '在吗' } }]
 })
@@ -42,7 +42,7 @@ test('主人私聊：上下文用本体聊天史，回复回写本体，不进 b
     getOwnerHistory: () => desktop,
     onOwnerExchange: (u, r) => exchanged.push([u, r])
   })
-  b.saveCfg({ enabled: true, ownerAccounts: ['359524452'] })
+  b.saveCfg({ enabled: true, ownerAccounts: ['10001'] })
   await b.handleEvent(OWNER_EV())
   assert.equal(seen.length, 1)
   // 上下文里有本体聊天史的内容
@@ -72,7 +72,7 @@ test('非主人私聊：仍走 brain 自己的历史键（行为不变）', asyn
     getOwnerHistory: () => [{ role: 'user', content: '本体的话' }],
     onOwnerExchange: () => { exchangeCalled++ }
   })
-  b.saveCfg({ enabled: true, ownerAccounts: ['359524452'] })
+  b.saveCfg({ enabled: true, ownerAccounts: ['10001'] })
   await b.handleEvent({ post_type: 'message', message_type: 'private', user_id: 777, self_id: 1, message: [{ type: 'text', data: { text: '你好' } }] })
   assert.equal(exchangeCalled, 0, '非主人不回写本体')
   const flat = JSON.stringify(seen[0])
@@ -90,7 +90,7 @@ test('没注入 getOwnerHistory 时主人私聊退回旧行为（向后兼容）
     getContext: () => ({ persona: 'P' }),
     send: async () => { }
   })
-  b.saveCfg({ enabled: true, ownerAccounts: ['359524452'] })
+  b.saveCfg({ enabled: true, ownerAccounts: ['10001'] })
   await b.handleEvent(OWNER_EV())
   const h = b._history
   const k = Object.keys(h)[0]
@@ -103,24 +103,24 @@ const { qqWorldBlock } = require('../src/main/im/brain')
 const read = (p) => fs.readFileSync(path.resolve(__dirname, '..', p), 'utf8')
 
 test('qqWorldBlock：关着/没配主人号不出声', () => {
-  assert.deepEqual(qqWorldBlock({ enabled: false, napcatArgs: '2738649075', ownerAccounts: ['359524452'] }), [])
-  assert.deepEqual(qqWorldBlock({ enabled: true, napcatArgs: '2738649075', ownerAccounts: [] }), [])
+  assert.deepEqual(qqWorldBlock({ enabled: false, napcatArgs: '10002', ownerAccounts: ['10001'] }), [])
+  assert.deepEqual(qqWorldBlock({ enabled: true, napcatArgs: '10002', ownerAccounts: [] }), [])
   assert.deepEqual(qqWorldBlock(null), [])
 })
 
 test('qqWorldBlock：配置齐全时告诉她在 QQ 上有号、[QQ] 标注 = QQ 上的往来（且叫她别自己写）', () => {
-  const r = qqWorldBlock({ enabled: true, napcatArgs: '2738649075', ownerAccounts: ['359524452'] })
+  const r = qqWorldBlock({ enabled: true, napcatArgs: '10002', ownerAccounts: ['10001'] })
   assert.equal(r.length, 1)
   const t = r[0].text
-  assert.ok(t.includes('2738649075'), '带她的号')
-  assert.ok(t.includes('359524452'), '带主人号')
+  assert.ok(t.includes('10002'), '带她的号')
+  assert.ok(t.includes('10001'), '带主人号')
   assert.ok(t.includes('[QQ]'), '交代 [QQ] 标注含义')
   assert.ok(t.includes('自己不要写它'), '0.45.98：标注只是给她看的，不许写进回复')
   assert.ok(t.includes('别说自己看不到'), '硬规则：别说看不到')
 })
 
 test('qqWorldBlock：napcatArgs 非纯数字时不出号码但段落照给', () => {
-  const r = qqWorldBlock({ enabled: true, napcatArgs: '-q 1234 quick', ownerAccounts: ['359524452'] })
+  const r = qqWorldBlock({ enabled: true, napcatArgs: '-q 1234 quick', ownerAccounts: ['10001'] })
   assert.equal(r.length, 1)
   assert.ok(!r[0].text.includes('1234'), '不乱提号')
   assert.ok(r[0].text.includes('你在 QQ 上有自己的账号'), '段落照给')

@@ -24,7 +24,7 @@ const reach = require(path.join(ROOT, 'src', 'main', 'companion', 'reach.js'))
 const nudge = require(path.join(ROOT, 'src', 'main', 'companion', 'idleNudge.js'))
 
 const NOW = 1000000000000
-const ic = { reachOn: true, ownerAccounts: ['359524452'] }
+const ic = { reachOn: true, ownerAccounts: ['10001'] }
 
 test('①桌面陪伴开过口 → QQ 这边算「已经发过了」', () => {
   // 桌面说了一句（sayProactive → noteSpoke → reach.onSent）
@@ -39,13 +39,16 @@ test('①桌面陪伴开过口 → QQ 这边算「已经发过了」', () => {
   assert.equal(reach.shouldReach(rec, ic, { now: later, connected: true }).ok, true)
 })
 
-test('②QQ 开过口 → 黏人阶梯也认得这一笔（回来不会立刻被追问）', () => {
+test('②QQ 开过口 → 黏人账也认得这一笔（回来不会立刻被追问）', () => {
   const sent = NOW
-  const rec = Object.assign({ stage: 1, light: true, nextTryAt: 0, baseAt: 0, sleepUntil: 0 }, { lastProactiveAt: sent })
+  const rec = Object.assign({ nextTryAt: 0, baseAt: 0, sleepUntil: 0 }, { lastProactiveAt: sent })
   // 1 小时没说话，但 5 分钟前刚在 QQ 上说过 → 不开口（MIN_STAGE_GAP 内）
   assert.equal(nudge.stageOf(200 * 60000, rec, sent + 5 * 60000), 0)
-  // 隔够 10 分钟以上，阶梯才有资格继续（200 分钟闲置 → 该升到第 2 阶）
-  assert.equal(nudge.stageOf(200 * 60000, rec, sent + 11 * 60000), 2)
+  // 0.47.0 阶梯拆除：200 分钟闲置只是「他在忙」，不再是第 2 阶的追问
+  assert.equal(nudge.stageOf(200 * 60000, rec, sent + 11 * 60000), 0)
+  // 「一整天没见」（≥6h，醒着的时间窗）才有资格说一次
+  const noon = new Date(sent).setHours(15, 0, 0, 0)
+  assert.equal(nudge.stageOf(7 * 3600000, rec, noon), 1)
 })
 
 test('③两边共用一笔账：任何一边开口都会把 nextAt 往后推（不设条数上限）', () => {

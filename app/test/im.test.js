@@ -703,7 +703,7 @@ test('0.45.28 主人 QQ 会话挂核心工具安全子集，非主人不挂', as
     getContext: () => ({ persona: 'P' }),
     send: async () => { }
   })
-  b.saveCfg({ enabled: true, ownerAccounts: ['359524452'] })
+  b.saveCfg({ enabled: true, ownerAccounts: ['10001'] })
   // 静态保证：白名单在源码里且不含命令行/桌面动作类
   const src = fs.readFileSync(path.resolve(__dirname, '../src/main/im/brain.js'), 'utf8')
   assert.ok(/CORE_TOOL_BRIDGE = new Set\(\[/.test(src), '有桥接白名单')
@@ -747,9 +747,9 @@ test('0.45.28 主人私聊工具循环能真正调到核心工具（remember 记
     getContext: () => ({ persona: 'P' }),
     send: async () => { }
   })
-  b.saveCfg({ enabled: true, ownerAccounts: ['359524452'] })
+  b.saveCfg({ enabled: true, ownerAccounts: ['10001'] })
   await b.handleEvent({
-    post_type: 'message', message_type: 'private', user_id: 359524452, self_id: 1,
+    post_type: 'message', message_type: 'private', user_id: 10001, self_id: 1,
     message: [{ type: 'text', data: { text: '记住：我爱吃拉面' } }]
   })
   assert.ok(calls[0].tools.includes('get_time'), 'get_time 挂上了')
