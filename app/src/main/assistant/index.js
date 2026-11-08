@@ -616,6 +616,10 @@ async function handleSend (_e, text, images) {
     memoryExtract(cfgMod.getConfig().currentRole, t, r.content)
     // 第 1 期 风格 few-shot：真实对话对入池（环形 200 条，注入时取最近几条）
     try { require('../companion').noteExchange(t, r.content) } catch { }
+    // 0.46.75 回复记账（对齐 companion 链 inner.noteReply）：11-08 实锤他连发两条消息，
+    // 第二条回复把第一条的开头内容原样又讲了一遍——回复链的镜子里从来没有她自己的
+    // 回复，因为只有 companion 链记了账。不记账 → recentVoices 照不到 → 复读无人拦。
+    try { require('../companion/inner').noteReply(r.content) } catch { }
     log('[assistant] 回复语言=' + (lang.reply || 'auto') + ' 字幕=' + lang.sub + (display !== r.content ? '（已翻译）' : '') + ' ms=' + r.ms)
     return { ok: true, ...r, display }
   } catch (err) {

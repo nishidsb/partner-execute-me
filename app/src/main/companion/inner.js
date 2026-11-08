@@ -66,7 +66,11 @@ function noteNarration (text) {
 
 /** 0.45.44 最近她主动说过的话（say + narration，最新的在最后），防复读用。
  *  用户 10-31 实锤：nudge 一晚上每句都提「配合ノート」——没有这面镜子，
- *  模型每次都往同一个道具上凑，主动搭话听起来像另一台机器。 */
+ *  模型每次都往同一个道具上凑，主动搭话听起来像另一台机器。
+ *  0.46.75 reply 也入镜：11-08 实锤他连发两条消息，她对第二条的回复把第一条的
+ *  开头和内容几乎原样又讲了一遍——回复链的镜子里从来没有她自己的回复
+ *  （say/narration 60 字截断，回复给 160 字，开头+正文判断都够用）。 */
+const VOICE_SLICE = { default: 60, reply: 160 }
 function recentVoices (n, sinceMs) {
   if (!ctx.wsDir) return []
   try {
@@ -74,10 +78,11 @@ function recentVoices (n, sinceMs) {
     // 事件文件跨天留存，无界取「最近 8 句」在话说得少的下午能横跨几小时
     const since = Number(sinceMs) > 0 ? Date.now() - Number(sinceMs) : 0
     const list = self.readEvents(ctx.wsDir)
-      .filter((e) => e && (e.kind === self.SAY || e.kind === self.NARRATION) && e.text)
+      .filter((e) => e && (e.kind === self.SAY || e.kind === self.NARRATION || e.kind === 'reply') && e.text)
       .filter((e) => !since || (Number(e.t) || 0) >= since)
     const k = Number(n)
-    return (k > 0 ? list.slice(-k) : list).map((e) => String(e.text).replace(/\s+/g, ' ').slice(0, 60))
+    return (k > 0 ? list.slice(-k) : list)
+      .map((e) => String(e.text).replace(/\s+/g, ' ').slice(0, VOICE_SLICE[e.kind] || VOICE_SLICE.default))
   } catch { return [] }
 }
 
