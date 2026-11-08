@@ -87,7 +87,12 @@ async function say ({ script, speech, vol, dmHold } = {}) {
   // true = 这里先不推弹幕，由调用方拿到译文后自己 dk.say（失败/超时兜底推原文）。
   const holdDm = !!(dmHold && dm && text)
   const volN = Number(vol)
-  bcast('pet:cmd', { kind: 'say', text, lead, inline, speak: speech !== false, dm, vol: Number.isFinite(volN) ? Math.min(1, Math.max(0.05, volN)) : undefined })
+  // 0.46.77 播完回传：每句 say 带一个自增 seq，渲染层语音真结束（onended/onerror/
+  // 被打断）时回发 pet:voice-done{seq}——多句独白/自语靠它等「真播完」，不再靠
+  // estimateSeconds 估时（那只算朗读时长，没算 Fish 合成的 10~30s 网络延迟，
+  // 11-08 实锤独白 1/2 与 2/2 只隔 5s、第一句语音 14s 后才合成完）。
+  const seq = ++saySeq
+  bcast('pet:cmd', { kind: 'say', seq, text, lead, inline, speak: speech !== false, dm, vol: Number.isFinite(volN) ? Math.min(1, Math.max(0.05, volN)) : undefined })
   if (dm && text && !holdDm) {
     try { require('./danmaku').say(text) } catch (e) { log('[petBridge] 弹幕推送失败:', e && e.message) }
   }
@@ -96,9 +101,39 @@ async function say ({ script, speech, vol, dmHold } = {}) {
     said: text || undefined,
     actions: lead.concat(inline),
     dmHeld: holdDm || undefined,
+    seq,
     estimateSeconds: secs,
     note: text ? '气泡已显示，停留时长跟着朗读走' : '只播了动作，没有说话'
   }
+}
+
+/* 0.46.77 播完回传（主进程侧）：渲染层 voiceSettle 触发时发 pet:voice-done{seq}，
+ * waitVoiceDone(seq, falseAfterMs) 让调用方等到「那句真播完」。信号没来（语音关、
+ * 合成失败前崩、旧渲染层）→ falseAfter 到点返回 false，调用方退回估时等待。 */
+let saySeq = 0
+let voiceDoneSeq = 0
+const voiceDoneWaiters = []
+require('electron').ipcMain.on('pet:voice-done', (_e, p) => {
+  const s = Number(p && p.seq) || 0
+  if (s > voiceDoneSeq) voiceDoneSeq = s
+  for (let i = voiceDoneWaiters.length - 1; i >= 0; i--) {
+    if (voiceDoneWaiters[i].seq <= voiceDoneSeq) {
+      const w = voiceDoneWaiters.splice(i, 1)[0]
+      try { w.res(true) } catch { }
+    }
+  }
+})
+function waitVoiceDone (seq, falseAfterMs) {
+  const s = Number(seq) || 0
+  if (!s || s <= voiceDoneSeq) return Promise.resolve(true)
+  return new Promise((res) => {
+    const w = { seq: s, res }
+    voiceDoneWaiters.push(w)
+    setTimeout(() => {
+      const i = voiceDoneWaiters.indexOf(w)
+      if (i >= 0) { voiceDoneWaiters.splice(i, 1); try { res(false) } catch { } }
+    }, Math.max(1000, Number(falseAfterMs) || 20000))
+  })
 }
 
 /* ------------------------------------------------------------ pet_ask */
@@ -539,4 +574,4 @@ function registerIpc () {
   })
 }
 
-module.exports = { attach, invoke, registerIpc, answerAsk, pushPetConfig, subtitle, extractInlineAct, isQuiet: () => Date.now() < quietUntil }
+module.exports = { attach, invoke, registerIpc, answerAsk, pushPetConfig, subtitle, extractInlineAct, waitVoiceDone, isQuiet: () => Date.now() < quietUntil }

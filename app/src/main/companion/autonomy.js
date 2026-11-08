@@ -83,31 +83,44 @@ const { biliWatch } = require('./biliWatch') // 0.46.32 她自己看视频（挡
 const projectsParseClose = require('./projects').parseClose // 0.46.64 项目收尾协议解析（纯函数，无环依赖）
 
 /* 0.46.76 收尾自语乱码守卫：11-08 13:59 实锤——收尾协议的 summary 混进简体字形
-   （日文句子里混进了「结论」这类简体字形，语义也跟着碎了一地），还原样进了聊天窗。
-   ja 模式下正文出现简体特有字形 = 生成质量事故信号 → 重写一次；重写失败/仍异常保留原文（宁要原话不要哑）。 */
+   （「実データには触れないって结论も結論として…」），语义也跟着碎了一地，还原样进了聊天窗。
+   0.46.77 两处修正：①字段错配静默失败——原实现读 cfg.baseUrl/cfg.model，宿主传的
+   cfgGet() 是 companion 配置（字段叫 apiBaseUrl/apiModel）→ chatOnce 每次都抛
+   「缺少 baseUrl/model」被 catch 吞掉，守卫在真机上一次都没真正重写过（老坑 4 再现）；
+   ②garble 信号补假名括注——回复里混进「漢字（かな）」式夹生注音括注。
+   ja 模式下正文出现简体特有字形 / 汉字后夹假名注音括注 = 生成质量事故信号 → 重写一次；
+   重写失败/仍异常保留原文（宁要原话不要哑）。 */
 const SIMPLIFIED_ONLY_RE = /[结说们为发还让记该对东业书机电视频语读练钱关听吗问办个时进运连过]/
+const KANA_RUBY_RE = /[一-龠々]（[ぁ-んァ-ン]{1,4}）/
+function garbledJa (t) { return SIMPLIFIED_ONLY_RE.test(t) || KANA_RUBY_RE.test(t) }
 async function detangleCloseLine (text, cfg, log) {
   const t = String(text || '').trim()
   if (!t) return t
   const lang = (cfg && cfg.replyLang) || 'zh'
   if (lang !== 'ja') return t
   if (!/[\u3040-\u30ff]/.test(t)) return t   // 本来就不是日文，别多管
-  if (!SIMPLIFIED_ONLY_RE.test(t)) return t  // 没混简体字形 = 没事
+  if (!garbledJa(t)) return t                // 没混简体字形/夹生注音 = 没事
+  // 0.46.77 字段兼容：companion 配置叫 apiBaseUrl/apiModel，别处可能叫 baseUrl/model
+  const baseUrl = (cfg && (cfg.baseUrl || cfg.apiBaseUrl)) || ''
+  const model = (cfg && (cfg.model || cfg.apiModel)) || ''
   try {
     const out = await require('./llm').chatOnce({
-      baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
+      baseUrl, model, apiKey: cfg && cfg.apiKey,
       messages: [
-        { role: 'system', content: '把这段话用自然、通顺的日语重写一遍：保持原意和语气，修正混入的中文和不通顺的部分。只输出重写后的日语正文，不要解释、不要引号。' },
+        { role: 'system', content: '把这段话用自然、通顺的日语重写一遍：保持原意和语气，修正混入的中文、夹生的假名注音括号（如「漢字（かな）」这类多余标注）和不通顺的部分。只输出重写后的日语正文，不要解释、不要引号。' },
         { role: 'user', content: t.slice(0, 300) }
       ],
       temperature: 0.3, maxTokens: 200, timeoutMs: 20000
     })
     const clean = String(out || '').replace(/【[^】]*】|<[^>]*>/g, '').trim().split('\n')[0]
-    if (clean && !SIMPLIFIED_ONLY_RE.test(clean)) {
-      log('[autonomy] 收尾自语混入简体字（乱码信号），重写一次')
+    if (clean && !garbledJa(clean)) {
+      try { log && log('[autonomy] 乱码句已重写（检出简体字形/夹生注音）') } catch { }
       return clean
     }
-  } catch { }
+  } catch (e) {
+    // 0.46.77 静默失败留痕（老坑 4）：重写失败不能再无声吞掉
+    try { log && log('[autonomy] 乱码重写失败（保留原文）: ' + (e && e.message)) } catch { }
+  }
   return t
 }
 
@@ -1258,8 +1271,24 @@ function soliEmitter (opt, cfg) {
     if (!batch.length) return
     used += batch.length
     last = now
-    for (const line of batch) {
-      try { await opt.onSoliloquy(line) } catch { }
+    for (let i = 0; i < batch.length; i++) {
+      let rr = null
+      try { rr = await opt.onSoliloquy(batch[i]) } catch { }
+      // 0.46.77 多句自语等「真播完」再接下一句：14:58 实锤被打断收场的两句自语
+      // 只隔 1 秒（onSoliloquy 循环零间隔），第二句把第一句的声音顶掉。
+      // rr.seq = 这句 say 的序号，rr.speech = 朗读开着；播完回传 pet:voice-done。
+      if (i < batch.length - 1) {
+        const est = Number(rr && rr.estimateSeconds) || 0
+        const estMs = Math.max(2600, est * 1000 + 1500)
+        if (rr && rr.speech && rr.seq && typeof opt.waitVoiceDone === 'function') {
+          const done = await opt.waitVoiceDone(rr.seq, estMs + 6000)
+          if (!done) await new Promise((res) => setTimeout(res, estMs))
+        } else if (rr && rr.speech) {
+          await new Promise((res) => setTimeout(res, estMs))
+        } else {
+          await new Promise((res) => setTimeout(res, 2600))
+        }
+      }
     }
   }
 }
@@ -1938,6 +1967,8 @@ module.exports = {
   pickRunner, spaceGuard, spaceToolsOf, runSpace, freeToolsOf, runFree, appendJournal,
   /* 0.46.0 活动中的自言自语 */
   SOLI_PROMPT, SOLI_MAX_DEFAULT, SOLI_GAP_MS, extractSoliloquy, soliEmitter,
+  /* 0.46.77 乱码守卫（收尾自语/回复链/闹钟链共用） */
+  detangleCloseLine, garbledJa,
   recentJournalText,
   /* 0.45.8 经历沉淀 */
   memoryEntriesOf,

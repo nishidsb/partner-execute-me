@@ -100,6 +100,9 @@ contextBridge.exposeInMainWorld('aura', {
   // S3：模型控制桌宠（pet_say/pet_ask/pet_act/pet_quiet → pet:cmd）
   onPetCmd: (cb) => ipcRenderer.on('pet:cmd', (_e, d) => cb(d)),
   petAskAnswer: (payload) => ipcRenderer.send('pet:ask-answer', payload || {}),
+  // 0.46.77 语音播完回传：voiceSettle（onended/onerror/被打断）触发时发给主进程，
+  // 多句独白/自语靠它等「真播完」再接下一句（估时不准——没算 Fish 合成延迟）
+  petVoiceDone: (payload) => ipcRenderer.send('pet:voice-done', payload || {}),
   // 0.18.0 第二批：把骨架里的动画名回报给主进程（设置页「动作」用）
   petAnimReport: (d) => ipcRenderer.send('pet:anim-report', d || {}),
   // 形象包（API 2）：主进程把 figure.json 解析成「图层 + 具体色值 + aura:// 贴图地址」

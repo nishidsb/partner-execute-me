@@ -84,11 +84,15 @@ function petBusy () {
 /* ---- 语音播放：全局单实例（新语音开始时打断上一条，杜绝重叠回声） ---- */
 let nowPlaying = null
 let voiceSettle = null // 当前播放的「结束回调」：onended/onerror/被 stopVoice 打断时都触发一次
+let curSaySeq = 0      // 0.46.77 当前这句 say 的序号——播完时随 pet:voice-done 回传主进程
+let voiceSettleSeq = 0 // 0.46.77 voiceSettle 对应那句的 seq（被打断时回传的仍是正在结束的那句）
 function settleVoice () {
   if (!voiceSettle) return
   const fn = voiceSettle
   voiceSettle = null
   try { fn() } catch {}
+  // 0.46.77 播完回传：多句独白/自语等这句真播完再接下一句（主进程 waitVoiceDone）
+  try { if (window.aura.petVoiceDone) window.aura.petVoiceDone({ seq: voiceSettleSeq }) } catch {}
 }
 /** 说话口型：3D 角色在语音播放期间张嘴（VRM expressionManager 的 aa 预设）。
  *  普通 GLB / 立绘没这个能力，内部会自己跳过。
@@ -281,6 +285,7 @@ function playVoice (url, speed, vol, env) {
         resolve()
       }
       voiceSettle = finish
+      voiceSettleSeq = curSaySeq   // 0.46.77 记下这段语音属于哪句 say（被打断/播完都回传它）
       a.onended = finish
       a.onerror = finish
       setTalking(true)
@@ -2323,6 +2328,7 @@ function setupChat () {
       if (!petHosted) return // 只由角色所在的那块屏执行，否则两块屏各说一遍
       switch (cmd.kind) {
         case 'say': {
+          curSaySeq = Number(cmd.seq) || 0   // 0.46.77 记序号：播完时回传，等播完用
           if (askId) askClose() // 新说话会顶掉还没回答的提问（与主进程一致）
           if (cmd.lead && cmd.lead.length) await playActions(cmd.lead)
           // dm=true：这句话已经由弹幕层显示（游戏模式），气泡就不再冒出来挡画面

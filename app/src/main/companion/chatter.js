@@ -112,6 +112,7 @@ function createChatter (deps) {
   const state = deps.state || (() => ({}))
   const isBusy = deps.isBusy || (() => false)
   const say = deps.say // async (text, { speech }) => void，由宿主接到 pet_say
+  const waitVoiceDone = deps.waitVoiceDone || (async () => true) // 0.46.77 等真播完（宿主接 petBridge.waitVoiceDone）
   const note = deps.note || (() => { })
   // 0.35.0：在场判定 / 共享上下文（记忆+最近聊天）/ 整体负反馈
   const presence = deps.presence || (() => 'here')
@@ -351,13 +352,19 @@ function createChatter (deps) {
               let rr = null
               try { rr = await say(keep[i], { speech }) } catch { }
               if (i < keep.length - 1) {
-                // 0.46.74 等这句真念完再接下一句：固定 2.6s 是字幕节奏不是语音节奏，
-                // 朗读一句 8~10s，下一句直接把上一句的声音顶掉（11-08 实锤
-                // 一句没念完下一句就来，连着三四次）。pet_say 按字数
-                // 给了 estimateSeconds，朗读时按它等；不朗读维持 2.6s。
+                // 0.46.74 固定 2.6s 是字幕节奏不是语音节奏；0.46.74 改按 estimateSeconds 等
+                // 仍不够——那只算朗读时长，没算 Fish 合成的 10~30s 网络延迟（11-08 实锤
+                // 实锤独白 1/2→2/2 只隔 5s，第一句语音 14s 后才合成完，第二句照样顶掉）。
+                // 0.46.77 真等播完：渲染层语音结束回发 pet:voice-done，waitVoiceDone 等
+                // 真信号；信号没来（语音关/合成崩/旧渲染层）退回估时等待。
                 const est = Number(rr && rr.estimateSeconds) || 0
-                const gapMs = speech ? Math.max(2600, est * 1000 + 1500) : 2600
-                await new Promise((res) => setTimeout(res, gapMs))
+                const estMs = Math.max(2600, est * 1000 + 1500)
+                if (speech && rr && rr.seq) {
+                  const done = await waitVoiceDone(rr.seq, estMs + 6000)
+                  if (!done) await new Promise((res) => setTimeout(res, estMs))
+                } else {
+                  await new Promise((res) => setTimeout(res, estMs))
+                }
               }
             }
             if (soliloquy) {

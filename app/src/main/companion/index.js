@@ -132,15 +132,17 @@ function lifeBlocksNow () {
   }
   try { const g = getGoals(); if (g) blocks.goals = g.promptBlock() } catch { }
   /* 0.46.74 刚说过镜子（回复链）：复读硬闸只挂在主动开口/chatter 链路，回复链
-     一直没有（链路×2 老坑）。11-08 上午实锤：她主动迎了一句早安问候，几分钟后他
-     回「早上好啊」，回复第一句又是一段几乎同内容的问候——同一段开场 4 分钟内说了两遍。
+     一直没有（链路×2 老坑）。11-08 实锤：10:52 她主动「おはよう、ちゃんと休めた
+     みたいだね…」迎他回来，10:56 他回「早上好啊」，回复第一句还是
+     「おはよう。……よく眠れた？」——同一段问候 4 分钟内说两遍。
      0.46.75 追加：recentVoices 收入 reply（assistant 链同步记账）——同日 13:24/13:25
      他连发两条消息，第二条回复把第一条的开头内容几乎原样又讲了一遍。 */
   try {
     const rv = (inner.recentVoices(4, 30 * 60 * 1000) || []).map((s) => String(s || '').trim()).filter(Boolean)
     if (rv.length) {
       blocks.justsaid = '【你最近几分钟内说过的话——主动搭话、自言自语、和你上一条回复的原文（他就坐在电脑前，全都听到/看到了）】\n' + rv.join('\n') +
-        '\n硬规则：回复的第一句绝对不要再问候（早安/午安/晚安/おはよう），也不要换个说法复述上面任何一句——尤其不许把你上一条回复已经说过的话再讲一遍。他连着发消息就是在跟你连续聊天：每条回复都只接他这条新消息的增量，像接话头，不像重新开场。'
+        '\n硬规则：回复的第一句绝对不要再问候（早安/午安/晚安/おはよう），也不要换个说法复述上面任何一句——尤其不许把你上一条回复已经说过的话再讲一遍。他连着发消息就是在跟你连续聊天：每条回复都只接他这条新消息的增量，像接话头，不像重新开场。' +
+        '\n另外：你问过他、他还没答的问题最多追问一次，别每条回复都追着同一个问题问（11-08 下午实锤同一个问题连问三遍）。问之前先看一眼上面你自己的原话——你说过「还没问过」时，先确认自己是不是其实已经问过了。'
     }
   } catch { }
   const d = new Date(now)
@@ -322,6 +324,8 @@ async function alarmLine (label, a, rl) {
       }
     } catch { }
   }
+  // 0.46.77 乱码守卫铺到闹钟链（同一守卫：自主收尾/回复/闹钟三处共用）
+  try { line = await require('./autonomy').detangleCloseLine(line, cfg(), log) } catch { }
   return line
 }
 
@@ -356,11 +360,14 @@ async function snubLine (saidText, streak, rl) {
     ],
     temperature: 0.9, maxTokens: 100, timeoutMs: 20000
   })
-  return String(txt || '')
+  let out = String(txt || '')
     .replace(/【[^】]*】|<[^>]*>/g, '')
     .replace(/^(?:ご主人様|御主人様|主人|マスター)\s*[、，,！!～~]?\s*/, '')
     .replace(/^[\s"'「『]+|[\s"'」』]+$/g, '')
     .split('\n')[0].trim()
+  // 0.46.77 乱码守卫铺到冷落嘀咕链（同 alarmLine）
+  try { out = await require('./autonomy').detangleCloseLine(out, c, log) } catch { }
+  return out
 }
 
 /** 冷落成立（inner sweepSays 判定回调）：当场自言自语一句——走 narration 通道，
@@ -974,7 +981,8 @@ function systemPrompt (char, userText) {
         key: 'justsaid',
         priority: 80,
         text: '【你最近几分钟内说过的话——主动搭话、自言自语、和你上一条回复的原文（他就坐在电脑前，全都听到/看到了）】\n' + rv.join('\n') +
-          '\n硬规则：回复的第一句绝对不要再问候（早安/午安/晚安/おはよう），也不要换个说法复述上面任何一句——尤其不许把你上一条回复已经说过的话再讲一遍。他连着发消息就是在跟你连续聊天：每条回复都只接他这条新消息的增量，像接话头，不像重新开场。'
+          '\n硬规则：回复的第一句绝对不要再问候（早安/午安/晚安/おはよう），也不要换个说法复述上面任何一句——尤其不许把你上一条回复已经说过的话再讲一遍。他连着发消息就是在跟你连续聊天：每条回复都只接他这条新消息的增量，像接话头，不像重新开场。' +
+        '\n另外：你问过他、他还没答的问题最多追问一次，别每条回复都追着同一个问题问（11-08 下午实锤同一个问题连问三遍）。问之前先看一眼上面你自己的原话——你说过「还没问过」时，先确认自己是不是其实已经问过了。'
       })
     }
   } catch { }
@@ -1300,7 +1308,8 @@ async function sayNarration (text, opts) {
         log('[chatter] 嘀咕字幕：' + display.slice(0, 40))
       }
     }).catch(() => noteLedger(''))
-    return rr
+    // 0.46.77 带 speech 标志回传：多句循环要靠 rr.speech + rr.seq 等真播完
+    return rr ? { ...rr, speech } : rr
   } catch (err) {
     log('[chatter] 出气泡失败: ' + (err && err.message))
     return null
@@ -1344,6 +1353,8 @@ function getChatter () {
     gapScale: rebuke.gapScale,
     rhythm: getRhythm(),
     say: sayNarration,
+    // 0.46.77 多句独白等「真播完」再接下一句（渲染层 voice-done 回传）
+    waitVoiceDone: (seq, ms) => { try { return require('../petBridge').waitVoiceDone(seq, ms) } catch { return Promise.resolve(true) } },
     note: (text) => { try { inner.noteNarration(text) } catch { } },
     // 0.46.50 被吞句变资产：咽回去的话落 suppress 事件（日记「想说说没说」+ 念头池）
     noteSwallowed: (text) => { try { inner.noteSuppress(text) } catch { } },
@@ -2355,8 +2366,11 @@ function startAutonomy () {
       const t = String(line || '').trim()
       if (!t) return
       log('[autonomy] 自语：' + t.slice(0, 40))
-      try { await sayNarration(t, { speech: narrationVoiceOn() }) } catch { }
+      // 0.46.77 回传 rr（含 speech/seq/estimateSeconds）：多句自语等真播完要用
+      try { return await sayNarration(t, { speech: narrationVoiceOn() }) } catch { }
     },
+    // 0.46.77 自语多句连发守用：等渲染层 voice-done（同 chatter）
+    waitVoiceDone: (seq, ms) => { try { return require('../petBridge').waitVoiceDone(seq, ms) } catch { return Promise.resolve(true) } },
     // 0.46.54 听觉：自主活动场里她可以「听一下」（listen 工具的弹药）
     hearDescribe: () => { try { return hear.describe() } catch { return { ok: false, reason: '听觉模块异常' } } }
   })

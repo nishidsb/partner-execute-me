@@ -595,6 +595,28 @@ async function handleSend (_e, text, images) {
         log('[assistant] 正文内嵌动作已接住并播放：' + inl.actions.join('/'))
       }
     } catch { }
+    // 0.46.77 回复链乱码守卫（链路×2）：0.46.76 只装了自主收尾链，16:33 实锤回复里
+    // 也出「漢字（かな）」式夹生注音——同一守卫复用到回复。ja 模式检出简体字形/
+    // 假名注音括注 → 重写一次（守卫内部失败保留原文）。重写要同步回历史，否则回看
+    // 聊天记录还是乱码（对齐上面内嵌动作改历史的做法）。
+    if (lang.reply === 'ja' && r.content) {
+      try {
+        const cc = companionCfg()
+        const clean = await require('../companion/autonomy').detangleCloseLine(
+          r.content,
+          { replyLang: 'ja', apiBaseUrl: cc.apiBaseUrl, apiKey: cc.apiKey, apiModel: cc.apiModel },
+          log
+        )
+        if (clean && clean !== r.content) {
+          r.content = clean
+          const lastMsg = session.history[session.history.length - 1]
+          if (lastMsg && lastMsg.role === 'assistant') {
+            lastMsg.content = clean
+            try { session.saveHistory() } catch { }
+          }
+        }
+      } catch { }
+    }
     // 台词（content，朗读用）与字幕（display，显示用）分流：
     // 回复语言=日语 + 显示字幕=中文 → 说日语、气泡/聊天窗显示中文
     let display = r.content
