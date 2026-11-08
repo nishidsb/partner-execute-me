@@ -68,6 +68,7 @@ test('③duePlan 两个消费端 + 收账闭环', () => {
   const chatter = read('src/main/companion/chatter.js')
   assert.ok(chatter.includes('const duePlan = deps.duePlan ||'), 'chatter 接了 duePlan dep')
   assert.ok(/consumeDuePlan\('decide-speak'\)/.test(chatter), '她开口了 → 约定收账')
+  assert.ok(!chatter.includes('if (dueLine)'), 'tick 作用域里不许引用 decide 局部变量 dueLine（20:31 真机实锤：ReferenceError 被 try 吞，收账永不触发）')
 })
 
 test('④QQ 排期定时器退役 + 旧数据清账', () => {

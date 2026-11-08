@@ -321,8 +321,10 @@ function createChatter (deps) {
           // 0.46.0 沉默是正常选择：不占当日预算，独白保持开着（下次接着想）
           log('[chatter] 她想了想，决定不说')
         } else {
-          // 0.47.1 她开口了 → 到点的约定就算有了着落（不管这句是不是在提它；没提说明不重要）
-          try { if (dueLine) consumeDuePlan('decide-speak') } catch { }
+          // 0.47.1 她开口了 → 到点的约定就算有了着落（不管这句是不是在提它；没提说明不重要）。
+          // 注意：consumeDuePlan 无条件调（clearDuePlan 内部对空约定是 no-op）——
+          // dueLine 是 decide() 的局部变量，这里拿不到；之前写成 if (dueLine) 会 ReferenceError 被 try 吞掉（20:31 真机实锤）。
+          try { consumeDuePlan('decide-speak') } catch { }
           // 0.45.85 复读硬闸：提示词镜子（「别重复」）拦不住同一刺激物的变体修辞——
           // 用户实锤：对屏幕上同一行残留文字，一个半小时里变着花样嘀咕了 6 遍。
           // 生成结果再跟最近说过的话比一次，撞车的句子丢掉。
