@@ -63,11 +63,33 @@ const OTHER_SUBJECT_WORDS = ('莱莎,ライザ,りぜ,リーゼ,莉莎,你,妳,�
     （乱发晚安+静默几小时）。 */
 const INVITE_VETO_WORDS = '一起,视频,电影,游戏,聊天,陪我,看番,看剧,打牌'.split(',')
 
+/** 0.46.74 回忆否决：睡词说的是「过去睡过的一觉」= 他已经醒了，不是要去睡。
+    11-08 上午实锤：主人报了自己睡了几小时——上午报睡眠时长
+    是在说刚醒来的事，关键词命中「睡了」→ 判成去睡 → 大早上 QQ 发晚安 +
+    静默到 18:00（他 11:20 开始的学习全程被静默盖住）。睡醒/起床/失眠同理。
+    「熬夜到两点，先睡了，晚安」这种过去词+真宣言并存的句子，由
+    STRONG_DECLARE_RE 压过回忆否决（宣言词是明确的将来动作）。 */
+const WAKE_VETO_RE = /睡[了过].{0,4}?[0-9０-９一二两三四五六七八九十半几]+\s*(个)?\s*(小时|钟头|钟|分钟)|睡[了过]刚好|睡醒|睡过头|睡够|睡饱|没睡好|没睡够|起床|起来了|失眠/
+const STRONG_DECLARE_RE = /晚安|先睡[了下]|去睡[了下]|要睡[了]|睡下了|躺下了|上床了|おやすみ/
+
+/** 0.46.74 白天闸：白天（5:00~16:59）根本不存在「就寝宣言」这回事。
+    上午说睡词十有八九在说刚醒来的那一觉；判错了代价巨大（QQ 晚安 + 静默 7 小时），
+    判漏了代价只是她照常陪聊——宁漏判不误判，白天一律不判。
+    只在调用方显式传了 now 才生效（旧测试不传 now 只测文本形状，不受挂钟影响）。 */
+const DAY_GATE_FROM = 5
+const DAY_GATE_TO = 17
+
 /** 这句是「我要睡了」还是「你睡了吗」——问句一律不算宣言（参考 declaresSleep 修复） */
-function declaresSleep (text) {
+function declaresSleep (text, now) {
   const s = String(text || '')
   if (!s) return false
   if (QUESTION_WORDS.some((q) => s.includes(q))) return false
+  const strong = STRONG_DECLARE_RE.test(s)
+  if (WAKE_VETO_RE.test(s) && !strong) return false
+  if (now != null) {
+    const h = new Date(Number(now)).getHours()
+    if (h >= DAY_GATE_FROM && h < DAY_GATE_TO) return false
+  }
   for (const w of SLEEP_WORDS) {
     let i = s.indexOf(w)
     while (i >= 0) {

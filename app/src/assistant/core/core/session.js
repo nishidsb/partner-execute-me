@@ -364,6 +364,8 @@ export class Session {
       if (life.days) parts.push(String(life.days))
       if (life.goals) parts.push(String(life.goals))
       if (life.week) parts.push(String(life.week))
+      // 0.46.74 刚说过镜子：几分钟内她主动说过的话+「第一句别再问候/复述」的硬规则
+      if (life.justsaid) parts.push(String(life.justsaid))
     }
     const hits = this.worldHits(userText)
     if (hits.length) parts.push('【世界观资料】\n' + hits.join('\n'))

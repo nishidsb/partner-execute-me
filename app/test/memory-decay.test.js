@@ -186,6 +186,23 @@ test('0.46.69 declaresSleep 邀请否决：睡词后跟「一起/看视频」不
   assert.equal(nudge.declaresSleep('我先睡了，你们一起玩吧'), false, '已知漏判，接受')
 })
 
+test('0.46.74 declaresSleep 回忆否决：说「睡过了多久」是醒了不是去睡（11-08 上午实锤）', () => {
+  // 当天事故：上午他报了自己睡了多久——在说刚醒来的那觉，
+  // 关键词命中「睡了」→ 判成去睡 → 大早上 QQ 发晚安 + 静默到 18:00
+  const morning = new Date('2026-11-08T11:00:00').getTime()
+  const night = new Date('2026-11-08T23:30:00').getTime()
+  assert.equal(nudge.declaresSleep('睡了差不多6个小时，应该还好吧', morning), false, '报睡眠时长=已经醒了')
+  assert.equal(nudge.declaresSleep('昨晚只睡了5个小时', night), false, '夜里回顾昨天也不算宣言')
+  assert.equal(nudge.declaresSleep('我11点就睡醒了', night), false)
+  assert.equal(nudge.declaresSleep('刚起床', night), false)
+  assert.equal(nudge.declaresSleep('最近失眠，烦死', night), false)
+  // 过去词+真宣言并存：宣言词压过回忆否决
+  assert.equal(nudge.declaresSleep('熬夜熬到两点，先睡了，晚安', night), true, '真宣言压过过去词')
+  // 白天闸：白天根本不存在就寝宣言（哪怕句句是宣言词）——判错代价太大，宁漏判
+  assert.equal(nudge.declaresSleep('我去补个觉，晚安', morning), false, '白天一律不判就寝')
+  assert.equal(nudge.declaresSleep('困了，先睡了', night), true, '夜里正常宣言不受影响')
+})
+
 test('stageOf：阶梯升级 + 防翻车（间隔/退避/24h 上限/重复期）', () => {
   const now = 1000000000000
   const fresh = { stage: 0, light: false, lastProactiveAt: 0, nextTryAt: 0 }

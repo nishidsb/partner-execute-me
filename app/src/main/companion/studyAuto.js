@@ -31,8 +31,11 @@ const STUDY_APP_PATTERNS = [
   { re: /anki|quizlet|anki程序/i, label: '背卡片' }
 ]
 
-/** 浏览器里也可能是学习：标题命中课程关键词才算（刷视频也是浏览器，不能算） */
-const COURSE_TITLE_RE = /(coursera|mooc|学堂在线|中国大学|b站课堂|课程|网课| lecture |tutorial|教程|习题|真题|考研|备考|lec\s?\d+|第\s?\d+\s*讲)/i
+/** 浏览器里也可能是学习：标题命中课程关键词才算（刷视频也是浏览器，不能算）
+ *  0.46.74 补公考词：11-08 实锤他上午在浏览器做题两小时，自动陪学全程没进
+ * （旧词表只认「课程/网课/教程」这类上课词，做题页面标题全是「资料分析/行测/套卷」），
+ * 她就一路自言自语。这些是他真实在用的备考词，命中就算学习场景。 */
+const COURSE_TITLE_RE = /(coursera|mooc|学堂在线|中国大学|b站课堂|课程|网课| lecture |tutorial|教程|习题|真题|考研|备考|lec\s?\d+|第\s?\d+\s*讲|行测|申论|资料分析|数量关系|判断推理|言语理解|常识判断|套卷|模考|粉笔|公考)/i
 
 /** 游戏/娱乐：命中就永远不算学习场景（优先级最高） */
 const FUN_RE = /(game|steam|epic|minecraft|原神|genshin|崩坏|星穹|honkai|league|lol客户端|valorant|csgo|cs2|dota|ffxiv|ff14|最终幻想|哔哩哔哩|bilibili|youtube|netflix|抖音|douyin|爱奇艺|腾讯视频)/i

@@ -129,6 +129,10 @@ function createChatter (deps) {
   // 「我本来想说但没说」）；② decide 时把最近的念头池递回去，她可以把憋着的
   // 念头换个说法漏出来。都不算「说过的话」（不进 recentVoices 镜子）。
   const noteSwallowed = deps.noteSwallowed || null
+  // 0.46.74 学习模式闸：陪学=静音陪（studyAuto.js 的原话），嘀咕全停。
+  // 11-08 实锤：他做资料分析的两小时里她每隔几分钟嘀咕一轮——学习场景
+  // 检测没进（浏览器做题标题没有课程词），但只要学习会话真开着就必须闭嘴。
+  const studyActive = deps.studyActive || (() => false)
   const swallowedRecent = deps.swallowedRecent || (() => [])
   // 0.46.51 情绪残余：被打断自主活动的扫兴残量（needs.deflated），影响语气
   const mood = deps.mood || null
@@ -281,9 +285,11 @@ function createChatter (deps) {
       // 整体负反馈高时，连自言自语都收着（不是只在看屏那条路上拦）
       let d = 0
       try { d = Number(displeasure()) || 0 } catch { }
-      const quietNow = justTalked || count >= dailyMaxOf(cfgGet()) || hour < WAKE_HOUR || hour >= SLEEP_HOUR || q >= 0.6 || isBusy() || away || d >= 0.7
+      // 0.46.74 陪学静音：学习会话开着就嘀咕全停（静音陪学的「静音」以前只管音量没管嘴）
+      const studying = !!studyActive()
+      const quietNow = justTalked || count >= dailyMaxOf(cfgGet()) || hour < WAKE_HOUR || hour >= SLEEP_HOUR || q >= 0.6 || isBusy() || away || d >= 0.7 || studying
       // 0.42.0：本地条件都满足之后，再去问节奏器（它管的是「现在这个时刻该不该开口」）
-      let gate = { ok: !quietNow, why: quietNow ? (justTalked ? 'just-talked' : 'local') : 'free' }
+      let gate = { ok: !quietNow, why: quietNow ? (studying ? 'study' : (justTalked ? 'just-talked' : 'local')) : 'free' }
       if (quietNow) {} else if (rhythm) { try { gate = rhythm.ask('talk') } catch { gate = { ok: true } } }
       if (!gate.ok) {
         // 只在「卡住的原因变了」时留一行：既方便调（为什么她一直不说话），又不会每几分钟刷一遍日志
@@ -307,7 +313,7 @@ function createChatter (deps) {
           const voiceList = mirror ? mirror.split('\n').map((s) => s.trim()).filter(Boolean) : []
           const escape = swallowStreak >= SWALLOW_ESCAPE
           if (escape) log('[chatter] 连续咽回去 ' + swallowStreak + ' 句，泄压放行一轮（近似原句照拦）')
-          const keep = r.lines.filter((line) => {
+          let passed = r.lines.filter((line) => {
             const rep = voiceList.length ? voicesim.isRepeat(line, voiceList) : null
             // 泄压时只拦最像的变体（score ≥ SWALLOW_ESC_SCORE），话题相近但内容不同的放行
             if (rep && rep.repeat && !(escape && rep.score < SWALLOW_ESC_SCORE)) {
@@ -321,6 +327,14 @@ function createChatter (deps) {
             }
             return true
           })
+          // 0.46.74 泄压只放一句：11-08 实锤泄压轮三句 4 秒内连出（11:46:41/43/46、
+          // 12:01:14/15/18），一句没念完下一句就把声音顶掉。泄压的目的是让憋着的
+          // 念头漏一口气，一轮漏一句足够——其余这轮收回去（不进念头池，下轮再说）。
+          if (escape && passed.length > 1) {
+            log('[chatter] 泄压只放一句，余下 ' + (passed.length - 1) + ' 句收住：' + passed.slice(1).join('／').slice(0, 40))
+            passed = passed.slice(0, 1)
+          }
+          const keep = passed
           if (keep.length) swallowStreak = 0
           if (!keep.length) {
             count++   // 全撞车：照样占当日预算，防止下一个 tick 再撞
@@ -334,8 +348,17 @@ function createChatter (deps) {
               count++
               note(keep[i])
               log((mono ? '独白' : '自言自语') + (keep.length > 1 ? '（' + (i + 1) + '/' + keep.length + '）' : '') + '：' + keep[i])
-              try { await say(keep[i], { speech }) } catch { }
-              if (i < keep.length - 1) await new Promise((res) => setTimeout(res, 2600))
+              let rr = null
+              try { rr = await say(keep[i], { speech }) } catch { }
+              if (i < keep.length - 1) {
+                // 0.46.74 等这句真念完再接下一句：固定 2.6s 是字幕节奏不是语音节奏，
+                // 朗读一句 8~10s，下一句直接把上一句的声音顶掉（11-08 实锤
+                // 一句没念完下一句就来，连着三四次）。pet_say 按字数
+                // 给了 estimateSeconds，朗读时按它等；不朗读维持 2.6s。
+                const est = Number(rr && rr.estimateSeconds) || 0
+                const gapMs = speech ? Math.max(2600, est * 1000 + 1500) : 2600
+                await new Promise((res) => setTimeout(res, gapMs))
+              }
             }
             if (soliloquy) {
               try {

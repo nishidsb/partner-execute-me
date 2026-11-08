@@ -131,6 +131,17 @@ function lifeBlocksNow () {
         : '')
   }
   try { const g = getGoals(); if (g) blocks.goals = g.promptBlock() } catch { }
+  /* 0.46.74 刚说过镜子（回复链）：复读硬闸只挂在主动开口/chatter 链路，回复链
+     一直没有（链路×2 老坑）。11-08 上午实锤：她主动迎了一句早安问候，几分钟后他回了声早安，
+     回复的第一句又是一段几乎同内容的问候——同一段开场 4 分钟内说了两遍。
+     把最近半小时主动说过的话递进去 + 硬规则：第一句不许再问候/复述。 */
+  try {
+    const rv = (inner.recentVoices(4, 30 * 60 * 1000) || []).map((s) => String(s || '').trim()).filter(Boolean)
+    if (rv.length) {
+      blocks.justsaid = '【你最近几分钟内主动说过的话（他就坐在电脑前，全都听到/看到了）】\n' + rv.join('\n') +
+        '\n硬规则：回复的第一句绝对不要再问候（早安/午安/晚安/おはよう），也不要换个说法复述上面任何一句——他知道你说过了。直接回应他这条新消息本身，像接话头，不像重新开场。'
+    }
+  } catch { }
   const d = new Date(now)
   if (d.getDay() === 0) {
     try {
@@ -926,6 +937,21 @@ function systemPrompt (char, userText) {
     const board = screenText.render()
     if (board) sections.push({ key: 'screentext', text: board, priority: 25 })
   } catch { }
+  /* 0.46.74 刚说过镜子（回复链）：复读硬闸只挂在主动开口/chatter 链路，回复链
+     一直没有（链路×2 老坑第 N 次）。11-08 上午实锤：她主动迎了一句早安问候，几分钟后他回了声早安，
+     回复的第一句又是一段几乎同内容的问候——同一段开场 4 分钟内说了两遍。
+     把最近半小时主动说过的话递进去 + 硬规则：第一句不许再问候、不许换说法复述。 */
+  try {
+    const rv = (inner.recentVoices(4, 30 * 60 * 1000) || []).filter(Boolean)
+    if (rv.length) {
+      sections.push({
+        key: 'justsaid',
+        priority: 80,
+        text: '【你最近几分钟内主动说过的话（他就坐在电脑前，全都听到/看到了）】\n' + rv.join('\n') +
+          '\n硬规则：回复的第一句绝对不要再问候（早安/午安/晚安/おはよう），也不要换个说法复述上面任何一句——他知道你说过了。直接回应他这条新消息本身，像接话头，不像重新开场。'
+      })
+    }
+  } catch { }
   const out = ctxBudget.assemble(sections, SYSTEM_BUDGET)
   if (c.diagContext === true) {
     const d = ctxBudget.digest(sections)
@@ -986,7 +1012,7 @@ function togetherBlock () {
     '。这些只是让你心里有数，不必刻意提起，也别每句都提。'
 }
 
-/* 0.45.72 聊天史带时间与来源（用户 11-01 反馈「一大早就记忆错乱：我 11 点半说完就睡了，
+/* 0.45.72 聊天史带时间与来源（用户反馈凌晨聊完的第二天早上记忆错乱：记得他前一晚说完话就睡了，
  * 她说的是 10 点多开始」）。
  *
  * 根因不在记忆库，在喂给模型的历史：以前 map 成 {role, content}，at 和 via 全丢。
@@ -1280,6 +1306,8 @@ function getChatter () {
     log,
     state: () => inner.state(),
     isBusy: () => !!genAbort,
+    // 0.46.74 学习会话开着=静音陪学，嘀咕全停（以前只挡查岗没挡嘴）
+    studyActive: () => { try { return !!study.active(studySess) } catch { return false } },
     persona: () => { try { return (character.get() || {}).persona || '' } catch { return '' } },
     // 0.35.0：碎碎念要接得上现实，否则就是另一个不相干的人
     presence: presenceState,
@@ -1853,7 +1881,7 @@ async function tryQqReach (stage, idleMs) {
 
 /* 0.45.72 睡前的那句 QQ（用户 11-01：「qq 上也没有主动找我」）。
  *
- * 她说「寂しくなったら、QQ のほうに行くから」，主人也回「寂寞了就来 qq 找我吧，
+ * 她说过「寂寞了就去 QQ 找你」，主人也回「寂寞了就来 qq 找我吧，
  * 我给你设置了特别关注」—— 然后整夜一条也没发。
  * 根因在 nudge tick：`if (sleepUntil) return` 挡在 tryQqReach 前面，而 onSleepDeclared
  * 又把 baseAt 推到他该醒的时刻，于是「去睡了」之后 QQ 通道等于物理断开。
@@ -1932,7 +1960,7 @@ function desktopHistoryTail (n) {
 
 /** 主人开口：黏人计时清零；宣告睡觉则静默（生成期间说话由 tick 里 baseAt 变化兜底） */
 function nudgeOnUser (text) {
-  if (idleNudge.declaresSleep(text)) {
+  if (idleNudge.declaresSleep(text, Date.now())) {
     nudgeRec = idleNudge.onSleepDeclared(nudgeRec)
     saveNudgeRec()   // 0.45.91 静默承诺必须跨重启活着
     log('[nudge] 主人去睡了，静默到 ' + new Date(nudgeRec.sleepUntil).toLocaleString('zh-CN', { hour12: false }))
@@ -1961,7 +1989,7 @@ function onUserSpoke (text) {
     inner.judgeUser(text, { presence: getPresence(), context: recentTurns() }).catch(() => { })
   } catch { }
   // 睡前做梦触发：主人说「去睡了」→ 记时刻，安静满 10 分钟后做一次梦（dream timer 判定）
-  try { if (idleNudge.declaresSleep(text)) sleepWantedAt = Date.now() } catch { }
+  try { if (idleNudge.declaresSleep(text, Date.now())) sleepWantedAt = Date.now() } catch { }
   // 0.45.18 主人开口聊天 = 想分享泄压（攒的话有机会讲了/已经讲了）
   try { getNeeds().discharge('chat') } catch { }
   // 0.45.19 连续时间：记下主人最后说的话（隔了几小时再见面，她能自然接上）
