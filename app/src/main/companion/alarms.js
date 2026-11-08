@@ -186,6 +186,22 @@ function createAlarms ({ home, now = () => Date.now(), onFire = () => { }, log =
     }
     const cur = load()
     if (cur.length >= MAX_ALARMS) return { ok: false, error: `最多 ${MAX_ALARMS} 个闹钟` }
+    // 0.46.76 同窗去重：11-08 实锤——11:09 自主活动立了 13:45「午後の练习の準備」，
+    // 13:25 聊天里又立了 13:55「休憩おわり。14時から通し演習」——同一个 14 点的事
+    // 被两个闹钟各催一次（13:45/13:55 内容几乎一样的两连催，加上 13:25 回复里说过的那遍=三连）。
+    // 已有启用中、且下次触发时间落在新闹钟 ±15 分钟内的一次性闹钟 → 不再加第二个。
+    // （每天的闹钟不去重——「7:00 叫一次 7:10 再叫一次」是合理用法；一次性闹钟撞窗才是同一件事立两个提醒。）
+    const DUP_WINDOW_MS = 15 * 60 * 1000
+    const dup = (daily === false) && cur.find((a) => a && a.enabled !== false && !a.daily && Number(a.nextAt) > 0 &&
+      Math.abs(Number(a.nextAt) - nextAt) <= DUP_WINDOW_MS)
+    if (dup) {
+      return {
+        ok: false,
+        duplicate: true,
+        error: '已有 ' + (dup.date ? dup.date + ' ' : '') + dup.time + ' 的闹钟' +
+          (dup.label ? '「' + dup.label + '」' : '') + '，和新闹钟相隔不到 15 分钟——同一件事不用两个提醒；要改时间就先取消旧的再加'
+      }
+    }
     const alarm = {
       id: makeId(),
       time: fmtTime(t),

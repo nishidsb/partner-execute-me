@@ -281,23 +281,48 @@ async function alarmLine (label, a, rl) {
       : `闹钟「${label}」到点了（${when}）。用你自己的口吻跟他说一句话提醒他。`
   let persona = ''
   try { persona = String((character.get() || {}).persona || '') } catch { }
-  const txt = await llm.chatOnce({
-    baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
-    messages: [
-      { role: 'system', content: String(persona).slice(0, 900) +
-        '\n\n【这次的任务】闹钟到点了，说一句话提醒他。只输出台词本身：一句话、口语、有你自己的性格和此刻的心情；' +
-        '不要引号、不要【】<>动作标记、不要解释；用' + langName + '说。' +
-        '不要用「ご主人様／主人」这类称呼开口——他明确说过不喜欢（这是最高优先级，压过人设里的旧称呼）。' },
-      { role: 'user', content: ask }
-    ],
-    temperature: 0.9, maxTokens: 120, timeoutMs: 20000
-  })
-  return String(txt || '')
-    .replace(/【[^】]*】|<[^>]*>/g, '')
-    // 0.46.24 称呼保险：他明确说过不要叫主人——生成侧万一还是带了，剥掉开头称呼
-    .replace(/^(?:ご主人様|御主人様|主人|マスター)\s*[、，,！!～~]?\s*/, '')
-    .replace(/^[\s"'「『]+|[\s"'」』]+$/g, '')
-    .split('\n')[0].trim()
+  /* 0.46.76 刚说过镜子（闹钟链）：11-08 实锤两个闹钟（13:45/13:55）催同一个 14 点的安排，
+     两句几乎一样的催促；且「あ、」开头连着三句。生成时把她最近说过的话递进去：
+     同一件事已经催过就换角度，开头语气词也别和最近几句重样。 */
+  let recent = []
+  try { recent = (inner.recentVoices(6, 30 * 60 * 1000) || []).filter(Boolean) } catch { }
+  const mirror = recent.length
+    ? '\n\n【你最近半小时说过的话（他都听到了）】\n' + recent.join('\n') +
+      '\n硬规则：如果上面已经提醒过这同一件事，这次绝不再重复同样的催促——换成一句明显不同的跟进（比如只说时间到了、或提醒他收尾手头的事），或者从别的角度说。另外开头语气词不要和你最近几句相同（别连着用「あ、」开场）。'
+    : ''
+  const genOnce = async (avoid) => {
+    const txt = await llm.chatOnce({
+      baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
+      messages: [
+        { role: 'system', content: String(persona).slice(0, 900) +
+          '\n\n【这次的任务】闹钟到点了，说一句话提醒他。只输出台词本身：一句话、口语、有你自己的性格和此刻的心情；' +
+          '不要引号、不要【】<>动作标记、不要解释；用' + langName + '说。' +
+          '不要用「ご主人様／主人」这类称呼开口——他明确说过不喜欢（这是最高优先级，压过人设里的旧称呼）。' +
+          mirror +
+          (avoid ? '\n\n【禁语·最高优先级】这句你刚刚已经说过几乎一样的话了：' + String(avoid).slice(0, 60) + '——换一个完全不同的说法。' : '') },
+        { role: 'user', content: ask }
+      ],
+      temperature: 0.9, maxTokens: 120, timeoutMs: 20000
+    })
+    return String(txt || '')
+      .replace(/【[^】]*】|<[^>]*>/g, '')
+      // 0.46.24 称呼保险：他明确说过不要叫主人——生成侧万一还是带了，剥掉开头称呼
+      .replace(/^(?:ご主人様|御主人様|主人|マスター)\s*[、，,！!～~]?\s*/, '')
+      .replace(/^[\s"'「『]+|[\s"'」』]+$/g, '')
+      .split('\n')[0].trim()
+  }
+  let line = await genOnce()
+  // 0.46.76 撞车重生成（对齐 0.45.91 硬闸模式）：镜子没拦住时，把撞上的原句点名当禁语再来一次
+  if (line && recent.length) {
+    try {
+      const rep = voicesim.isRepeat(line, recent)
+      if (rep && rep.repeat) {
+        log('[alarms] 台词跟最近说过的话撞车（' + String(rep.against || '').slice(0, 20) + '），重生成一次')
+        line = await genOnce(rep.against || line)
+      }
+    } catch { }
+  }
+  return line
 }
 
 /* ---------- 0.46.33 冷落感知：他人在电脑前却晾着她的话 ---------- */

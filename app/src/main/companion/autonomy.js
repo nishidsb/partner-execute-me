@@ -82,6 +82,35 @@ const { monologueLangBlock, browseMurmurs } = require('../../shared/lang-req') /
 const { biliWatch } = require('./biliWatch') // 0.46.32 她自己看视频（挡1的B站场/挡2挡3的 watch_video 工具）
 const projectsParseClose = require('./projects').parseClose // 0.46.64 项目收尾协议解析（纯函数，无环依赖）
 
+/* 0.46.76 收尾自语乱码守卫：11-08 13:59 实锤——收尾协议的 summary 混进简体字形
+   （日文句子里混进了「结论」这类简体字形，语义也跟着碎了一地），还原样进了聊天窗。
+   ja 模式下正文出现简体特有字形 = 生成质量事故信号 → 重写一次；重写失败/仍异常保留原文（宁要原话不要哑）。 */
+const SIMPLIFIED_ONLY_RE = /[结说们为发还让记该对东业书机电视频语读练钱关听吗问办个时进运连过]/
+async function detangleCloseLine (text, cfg, log) {
+  const t = String(text || '').trim()
+  if (!t) return t
+  const lang = (cfg && cfg.replyLang) || 'zh'
+  if (lang !== 'ja') return t
+  if (!/[\u3040-\u30ff]/.test(t)) return t   // 本来就不是日文，别多管
+  if (!SIMPLIFIED_ONLY_RE.test(t)) return t  // 没混简体字形 = 没事
+  try {
+    const out = await require('./llm').chatOnce({
+      baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
+      messages: [
+        { role: 'system', content: '把这段话用自然、通顺的日语重写一遍：保持原意和语气，修正混入的中文和不通顺的部分。只输出重写后的日语正文，不要解释、不要引号。' },
+        { role: 'user', content: t.slice(0, 300) }
+      ],
+      temperature: 0.3, maxTokens: 200, timeoutMs: 20000
+    })
+    const clean = String(out || '').replace(/【[^】]*】|<[^>]*>/g, '').trim().split('\n')[0]
+    if (clean && !SIMPLIFIED_ONLY_RE.test(clean)) {
+      log('[autonomy] 收尾自语混入简体字（乱码信号），重写一次')
+      return clean
+    }
+  } catch { }
+  return t
+}
+
 /* ------------------------------------------------------------ 挡 2：她的地盘 */
 
 /** 路径守卫：解析后必须还在 dir 里面（符号链接/.. 都逃不出去）。
@@ -1814,6 +1843,7 @@ function create (deps) {
         if (prj && line) {
           const pc = projectsParseClose(line)
           said = pc.clean || line
+          said = await detangleCloseLine(said, cfgGet(), log)   // 0.46.76 乱码守卫
           const rr = prj.record(said, pc, { spaceDir: spDir })
           if (rr.finished) log('[autonomy] 项目收尾：《' + rr.finished.title + '》 ' + (rr.finished.summary || '').slice(0, 60))
         }
