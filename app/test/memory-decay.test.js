@@ -179,8 +179,9 @@ test('0.46.69 declaresSleep 邀请否决：睡词后跟「一起/看视频」不
   assert.equal(nudge.declaresSleep('我这边可以好好休息了，来一起看视频吧'), false, '邀请看视频不是就寝')
   assert.equal(nudge.declaresSleep('休息了休息了，一起玩游戏吧'), false)
   assert.equal(nudge.declaresSleep('我去眯一会，等下一起再聊'), false)
-  // 真宣言不受影响（邀请词在睡词前方，不查前方）
-  assert.equal(nudge.declaresSleep('这集看完我就休息了'), true, '邀请词在前方不误伤')
+  // 0.47.3 延后宣言否决后，「看完…就休息」属将来时 → 改判否决（宁漏判不误判；
+  // 0.46.69 时代曾判 true 理由是「邀请词在前方不误伤」，延后结构比邀请词位置更本质）
+  assert.equal(nudge.declaresSleep('这集看完我就休息了'), false, '延后宣言（看完…就休息）不算现在睡')
   assert.equal(nudge.declaresSleep('晚安，我先去睡了'), true)
   assert.equal(nudge.declaresSleep('困了，去躺下了'), true)
   // 已知代价：真晚安+句尾邀请会被漏判——宁可漏判不误判（漏=照常陪聊，误=乱发晚安+静默数小时）

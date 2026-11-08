@@ -13,6 +13,19 @@ const test = require('node:test')
 const assert = require('node:assert')
 const path = require('node:path')
 
+/** 0.47.3 修时间依赖脆弱：chatter tick 有清醒时段闸（9~23 点外一律闭嘴），
+ *  本文件 22 点多写完当晚能过，0 点后跑必挂。桩一个白天挂钟（15:00），跑完还原。 */
+const FIXED_MS = new Date('2026-11-08T15:00:00+08:00').getTime()
+function freezeDaytimeClock () {
+  const RealDate = global.Date
+  class FrozenDate extends RealDate {
+    constructor (...args) { args.length ? super(...args) : super(FIXED_MS) }
+    static now () { return FIXED_MS }
+  }
+  global.Date = FrozenDate
+  return () => { global.Date = RealDate }
+}
+
 test('24h 一字不差闸：90 分钟窗外说过的原句再生成会被咽回去，新句正常通过', async () => {
   const said2hAgo = '手元はもう別の画面。切り替えの速さが、少し羨ましい。'
   const brandNew = '勝ち筋を数える指が、今日は少し躊躇ってる。'
@@ -46,11 +59,13 @@ test('24h 一字不差闸：90 分钟窗外说过的原句再生成会被咽回�
   const origST = global.setTimeout
   let tickFn = null
   global.setTimeout = (fn, ms) => { if (!tickFn) tickFn = fn; return { unref: () => { } } }
+  const unfreeze = freezeDaytimeClock()
   try {
     inst.start()
     assert.ok(tickFn, 'start 后应当挂了 tick 定时器')
     await tickFn()
   } finally {
+    unfreeze()
     global.setTimeout = origST
     inst.stop()
     llm.chatStream = origChat
@@ -89,10 +104,12 @@ test('对照组：内容真正不同的新句不被 24h 闸误伤', async () => 
   const origST = global.setTimeout
   let tickFn = null
   global.setTimeout = (fn, ms) => { if (!tickFn) tickFn = fn; return { unref: () => { } } }
+  const unfreeze = freezeDaytimeClock()
   try {
     inst.start()
     await tickFn()
   } finally {
+    unfreeze()
     global.setTimeout = origST
     inst.stop()
     llm.chatStream = origChat
