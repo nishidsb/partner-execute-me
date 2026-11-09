@@ -236,6 +236,20 @@ function embedFromPcm (samples, sr) {
  * 验声纹。samples = Float32Array（-1~1）或 Int16Array，sr = 采样率。
  * 返回 { ok:true, speaker:'owner'|'maybe'|'other', sim, via } 或 { ok:false, reason }。
  */
+/**
+ * 模板质心：各段嵌入逐维平均。0.48.11 实锤需要它——2 秒短句的嵌入噪声大，
+ * 三段互相只有 0.52~0.62，max 匹配下主人真声只得 0.66（maybe）；各段对质心
+ * 却有 0.82~0.88（噪声互相抵消）。质心作为额外参考项，owner 得分实质抬升，
+ * 陌生人不受影响（质心仍是同一张嘴的声音）。
+ */
+function centroidOf (embs) {
+  if (!embs || !embs.length) return null
+  const dim = embs[0].length
+  const c = new Array(dim).fill(0)
+  for (const e of embs) { for (let i = 0; i < dim; i++) c[i] += e[i] / embs.length }
+  return c
+}
+
 function verifyPcm (samples, sr, via) {
   if (!cfg.on) return { ok: false, reason: '声纹开关没开' }
   lastEvent = null
@@ -246,8 +260,11 @@ function verifyPcm (samples, sr, via) {
   if (!tmpl) {
     return { ok: false, reason: '还没注册声纹模板（config global.companion.voiceprintEnroll: true 后对麦说几句即可注册）', dim: e.dim }
   }
+  // 0.48.11 质心参考项：单段匹配 + 质心匹配取最高
+  const refs = tmpl.embs.slice()
+  if (tmpl.embs.length > 1) refs.push(centroidOf(tmpl.embs))
   let best = -1
-  for (const ref of tmpl.embs) {
+  for (const ref of refs) {
     const c = cosine(e.emb, ref)
     if (c > best) best = c
   }
@@ -306,7 +323,7 @@ function pcmFromB64 (b64) {
 
 module.exports = {
   configure, status, resetForTest, ensureEngine,
-  cosine, judge, resampleLinear, trimSilence,
+  cosine, judge, resampleLinear, trimSilence, centroidOf,
   embedFromPcm, verifyPcm, pcmFromB64, deleteTemplate, block,
   _setExtractor,
   TARGET_SR, MIN_SEC, SAME_DEFAULT, MAYBE_DEFAULT

@@ -208,3 +208,27 @@ test('0.48.3 pcmFromB64：base64 解码不许产出空数组（15:57 真机「�
   assert.ok(!main.includes('Int16Array.from(Buffer.from'), '坏解码写法已清除')
   assert.ok(main.includes('voiceprint.pcmFromB64(pcmB64)'), 'transcribe 用单测固化的解码函数')
 })
+
+test('0.48.11 质心参考项：sim 取「单段 max」与「质心」的较高者（0.66 maybe 实锤的修正）', () => {
+  vp.resetForTest()
+  const dir = tmpDir()
+  vp.configure({ templatePath: path.join(dir, 'template.json'), modelPath: 'x', enroll: true })
+  const E_A = [1, 0, 0, 0, 0, 0, 0, 0]
+  const E_A2 = [0.9, 0.1, 0, 0, 0, 0, 0, 0]
+  let current = E_A
+  vp._setExtractor(fakeExtractor(() => current))
+  const pcm = voicePcm(2) // 2 秒有声（全零会被静音闸拒）
+  vp.verifyPcm(pcm, 16000, 'mic')
+  current = E_A2
+  vp.verifyPcm(pcm, 16000, 'mic')
+  // 重开验证模式（enroll 自动收闸）
+  vp.configure({ templatePath: path.join(dir, 'template.json'), modelPath: 'x' })
+  // 现在喂「两段的平均」：对单段最高 0.9987，对质心=1.0——只有质心参与才能 >0.999
+  current = [0.95, 0.05, 0, 0, 0, 0, 0, 0]
+  const v = vp.verifyPcm(pcm, 16000, 'mic')
+  assert.equal(v.ok, true)
+  assert.ok(v.sim > 0.999, '质心参考项应把 sim 抬到 1.0（只对单段最高只有 0.9987），实际 ' + v.sim)
+  // centroidOf 单元：两向量的归一化前平均
+  const c = vp.centroidOf([[2, 0], [0, 2]])
+  assert.deepEqual(c, [1, 1])
+})
