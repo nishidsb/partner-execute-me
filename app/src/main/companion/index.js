@@ -3606,12 +3606,15 @@ async function handleMessage (char, userText) {
 
 /* ---------------- ASR 转发（Whisper 兼容） ---------------- */
 
-async function transcribe (base64, mime, pcmB64) {
+async function transcribe (base64, mime, pcmB64, via) {
   const c = cfg()
   // 0.48.0 声纹：PCM 到了就验「是谁在说」（与转写互相独立——ASR 失败声纹照样算）。
   // 只认 global.companion.voiceprintOn !== false；enroll 模式下顺带把样本收进模板。
   let vp = null
-  if (pcmB64 && String(pcmB64).length > 64 && c.voiceprintOn !== false) {
+  const vpVia = String(via || 'mic')
+  if (!pcmB64 || String(pcmB64).length <= 64) {
+    log('[voiceprint] 这句没带 PCM（口=' + vpVia + '，该口没采集或采集失败）')
+  } else if (c.voiceprintOn !== false) {
     try {
       voiceprint.configure({
         on: true,
@@ -3619,8 +3622,13 @@ async function transcribe (base64, mime, pcmB64) {
         same: c.voiceprintSame, maybe: c.voiceprintMaybe
       })
       const f32 = voiceprint.pcmFromB64(pcmB64)
-      const r = voiceprint.verifyPcm(f32, voiceprint.TARGET_SR, 'mic')
-      if (r.ok) vp = { speaker: r.speaker, sim: r.sim, samples: r.samples, enrolled: r.enrolled }
+      const r = voiceprint.verifyPcm(f32, voiceprint.TARGET_SR, vpVia)
+      if (r.ok) {
+        vp = { speaker: r.speaker, sim: r.sim, samples: r.samples, enrolled: r.enrolled }
+        // 0.48.5：成功路径也留痕（0.48.4 真机零日志无法判断判定分支是否真跑）
+        if (r.enrolled) log('[voiceprint] 样本收下 ' + r.samples + '/3（口=' + vpVia + '）')
+        else log('[voiceprint] 判定：' + r.speaker + ' sim=' + Number(r.sim).toFixed(2) + '（口=' + vpVia + '）')
+      }
       else log('[voiceprint] 跳过：' + (r.reason || '未知原因'))
       // 注册模式：攒满 3 段自动收闸（config 置回 false，下次启动不会一直收样本）
       if (r.ok && r.enrolled && r.samples >= 3) {
@@ -3633,7 +3641,8 @@ async function transcribe (base64, mime, pcmB64) {
     }
   }
   const r = await transcribeBase(base64, mime)
-  if (vp && r && r.ok) { r.speaker = vp.speaker; r.sim = vp.sim; if (vp.enrolled) { r.enrolled = true; r.samples = vp.samples } }
+  // 0.48.5：ASR 失败也要回传声纹判定（两者互相独立，别让转写失败吞掉「是谁在说」）
+  if (vp && r) { r.speaker = vp.speaker; r.sim = vp.sim; if (vp.enrolled) { r.enrolled = true; r.samples = vp.samples } }
   return r
 }
 
@@ -3698,9 +3707,9 @@ let asrBusy = false
 const asrQueue = []
 const ASR_QUEUE_MAX = 3
 
-function transcribeQueued (base64, mime, pcmB64) {
+function transcribeQueued (base64, mime, pcmB64, via) {
   return new Promise((resolve) => {
-    asrQueue.push({ base64, mime, pcm: pcmB64, resolve })
+    asrQueue.push({ base64, mime, pcm: pcmB64, via, resolve })
     pumpAsr()
   })
 }
@@ -3711,7 +3720,7 @@ function pumpAsr () {
   if (!job) return
   asrBusy = true
   Promise.resolve()
-    .then(() => transcribe(job.base64, job.mime, job.pcm))
+    .then(() => transcribe(job.base64, job.mime, job.pcm, job.via))
     .then(
       (r) => job.resolve(r),
       (e) => job.resolve({ ok: false, message: String((e && e.message) || e) })
@@ -4568,14 +4577,14 @@ function registerIpc () {
     }
   })
 
-  ipcMain.handle('companion:transcribe', async (_e, base64, mime, pcmB64) => {
+  ipcMain.handle('companion:transcribe', async (_e, base64, mime, pcmB64, via) => {
     const t0 = Date.now()
     if (asrQueue.length >= ASR_QUEUE_MAX) {
       log('[asr] 队列已满（' + asrQueue.length + ' 句在等），丢弃最新一段')
       return { ok: false, message: '还在识别前面的话，等我说完再讲' }
     }
     const queued = asrQueue.length + (asrBusy ? 1 : 0)
-    const r = await transcribeQueued(base64, mime, pcmB64)
+    const r = await transcribeQueued(base64, mime, pcmB64, via)
     const ms = Date.now() - t0
     // 说话识别失败以前只弹气泡不落日志，用户报「识别失败」时无从查起 → 成败都记一行
     try {

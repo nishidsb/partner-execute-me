@@ -2526,7 +2526,7 @@ function setupChat () {
       // 录音刚结束就要给反馈：本地 whisper 冷启动要 2~4 秒，什么都不显示会被当成卡死
       bubbleShow('… 听到了，正在识别')
       bubbleKeep(20000)
-      const r = await window.aura.petTranscribe(b64, 'audio/webm', pcmB64)
+      const r = await window.aura.petTranscribe(b64, 'audio/webm', pcmB64, 'pet')
       if (r && r.ok && r.text) {
         // 0.38.0 识别结果过滤：常开麦会对着静音/空调声断句，出来的「嗯。」「그.」
         // 直接进对话就是她莫名其妙回一句。只拦明显不对的，不猜内容。

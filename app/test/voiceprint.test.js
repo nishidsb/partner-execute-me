@@ -114,7 +114,7 @@ test('0.48.0 注册→验证全链：模板落盘可重载，owner/maybe/other �
 test('0.48.0 接线锁死：transcribe 带 PCM 验声纹、chatter/reply 两处注入、注册满 3 段收闸', () => {
   const fs2 = require('node:fs')
   const src = fs2.readFileSync(path.join(__dirname, '../src/main/companion/index.js'), 'utf8')
-  assert.ok(src.includes('async function transcribe (base64, mime, pcmB64)'), 'transcribe 收第三个参数 PCM')
+  assert.ok(src.includes('async function transcribe (base64, mime, pcmB64, via)'), 'transcribe 收 PCM + via 第四参（0.48.5 口来源）')
   assert.ok(src.includes('voiceprint.verifyPcm(f32, voiceprint.TARGET_SR'), 'PCM 转 Float32 后验声纹')
   assert.ok(src.includes("voice: () => { try { return voiceprint.block()"), 'chatter deps 注入 voice')
   assert.ok(src.includes("key: 'voice', priority: 50"), '回复 sections 注入 voice 段')
@@ -123,21 +123,27 @@ test('0.48.0 接线锁死：transcribe 带 PCM 验声纹、chatter/reply 两处�
   assert.ok(chat.includes('const voice = deps.voice || (() => \'\')'), 'chatter 接收 voice dep')
   assert.ok(chat.includes('voiceLine ? [{ role: \'system\''), 'decide 注入声纹判定段')
   const pet = fs2.readFileSync(path.join(__dirname, '../src/renderer/overlay/pet.js'), 'utf8')
-  assert.ok(pet.includes('petTranscribe(b64, \'audio/webm\', pcmB64)'), '渲染层 PCM 伴随 webm 上送')
+  assert.ok(pet.includes("petTranscribe(b64, 'audio/webm', pcmB64, 'pet')"), '渲染层 PCM 伴随 webm 上送（via=pet）')
   assert.ok(pet.includes('function vpAttach ()'), 'ScriptProcessor 连续采集挂载')
   const pre = fs2.readFileSync(path.join(__dirname, '../src/preload/overlay.js'), 'utf8')
-  assert.ok(pre.includes('(b64, mime, pcmB64)'), 'preload 透传 PCM 参数')
+  assert.ok(pre.includes('(b64, mime, pcmB64, via)'), 'preload 透传 PCM + via 参数')
   // 0.48.1 面板按键说话同款接线（15:32 主人走面板说话零声纹日志的缺口）
   const panel = fs2.readFileSync(path.join(__dirname, '../src/renderer/companion/app.js'), 'utf8')
-  assert.ok(panel.includes("transcribe(b64, 'audio/webm', pcmB64)"), '面板 transcribe 也带 PCM')
+  assert.ok(panel.includes("transcribe(b64, 'audio/webm', pcmB64, 'panel')"), '面板 transcribe 也带 PCM（via=panel）')
   assert.ok(panel.includes('createScriptProcessor'), '面板也有 ScriptProcessor 采集')
   assert.ok(panel.includes('✓ 他的声音'), '面板展示声纹判定（诚实显示）')
   // 0.48.2 主进程链透传：handle 收第三参、队列 job 带 pcm、pump 喂 transcribe
   // （0.48.1 真机实锤：preload 传了、transcribe 也收，但 handle/队列两层都丢参，声纹零日志）
   const main = fs2.readFileSync(path.join(__dirname, '../src/main/companion/index.js'), 'utf8')
-  assert.ok(main.includes("async (_e, base64, mime, pcmB64)"), 'handle 透传 PCM 第三参')
-  assert.ok(main.includes('transcribeQueued(base64, mime, pcmB64)'), 'handle → 队列带 PCM')
-  assert.ok(main.includes('transcribe(job.base64, job.mime, job.pcm)'), 'pump → transcribe 带 PCM')
+  assert.ok(main.includes("async (_e, base64, mime, pcmB64, via)"), 'handle 透传 PCM + via')
+  assert.ok(main.includes('transcribeQueued(base64, mime, pcmB64, via)'), 'handle → 队列带 PCM + via')
+  assert.ok(main.includes('transcribe(job.base64, job.mime, job.pcm, job.via)'), 'pump → transcribe 带 PCM + via')
+  assert.ok(main.includes('pcm: pcmB64, via,'), '队列 job 存 via（0.48.5 中间层丢参教训锁死）')
+  assert.ok(main.includes("判定：' + r.speaker"), '判定成功也留痕（0.48.4 真机零日志教训）')
+  assert.ok(main.includes('这句没带 PCM'), 'PCM 缺失提示（静默跳过=无法诊断）')
+  // 0.48.5 口来源区分：桌宠 pet / 面板 panel，日志可分诊
+  assert.ok(pet.includes("pcmB64, 'pet')"), '桌宠口 via=pet')
+  assert.ok(panel.includes("pcmB64, 'panel')"), '面板口 via=panel')
 })
 
 test('0.48.0 隐私红线：模板只存嵌入向量，不存任何音频字节', () => {

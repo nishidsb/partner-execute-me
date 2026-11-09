@@ -1,5 +1,10 @@
 # 更新说明（CHANGELOG）
 
+## 0.48.5（2026-11-09）
+
+- **声纹注册真机成功实锤**：16:39 主人三句话全部入模板（「对。」「喂,能好好听到吗?」×2），External buffer 修复在真 Electron 下验证通过，voiceprintEnroll 自动收闸。
+- 可观测性修复（判定成功路径此前完全静默，真机零日志无法分诊）：①判定成功也留痕（speaker+sim+口来源）；②PCM 缺失不再静默跳过，打「这句没带 PCM」提示；③via 口来源全链透传（桌宠=pet / 面板=panel），七节点锁死（handle/队列/pump/preload×2/渲染层×2）——pump 内层 transcribe(job...) 是静态断言抓到的漏改节点；④ASR 失败不再吞掉声纹判定（两者互相独立）。
+
 ## 0.48.4（2026-11-09）
 
 - 声纹嵌入计算在 Electron 下必败修复：真机 PCM 全链打通后卡在最后一步——`嵌入计算失败：External buffers are not allowed`。根因：Electron ≥21 的 V8 内存笼拒绝 native 层分配的 external buffer（纯 Node 下没事，所以单测全绿、真机必炸）。修法按 sherpa-onnx 官方 FAQ：`extractor.compute(st, false)`（第二参 false = 结果拷进 V8 cage）。测试假引擎同步锁死：compute 丢第二参直接抛 Electron 同款错误，防回归。

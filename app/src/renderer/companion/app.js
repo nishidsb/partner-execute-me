@@ -363,7 +363,7 @@ $('btnMic').addEventListener('pointerdown', async () => {
       if (blob.size < 1200) return
       const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())))
       addMsg('', t('mic.doing'), 'syserr')
-      const r = await window.companion.transcribe(b64, 'audio/webm', pcmB64)
+      const r = await window.companion.transcribe(b64, 'audio/webm', pcmB64, 'panel')
       const last = $('chat').lastChild
       if (last && last.textContent === t('mic.doing')) last.remove()
       // 0.48.0 声纹：诚实显示「是谁在说」（不拦话——判错宁可漏不误）
