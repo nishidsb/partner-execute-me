@@ -2501,6 +2501,7 @@ function setupChat () {
   const KEY = 'auraPetMicOn'
   const KEY_MODE = 'auraPetMicMode'
   const KEY_SEEN = 'auraPetMicSeen' // 0.48.6 一次性迁移标记
+  const KEY_SEEN2 = 'auraPetMicSeen2' // 0.48.10 第二次迁移标记（声纹注册中途被误点关）
   let micMode = localStorage.getItem(KEY_MODE) || 'always'
   let interruptOn = false
 
@@ -2724,20 +2725,48 @@ function setupChat () {
   let hearTimer = null
   let hearFailAt = 0
   let hearSrcTag = ''
+  let hearZeroRun = 0 // 连续「数字静音」秒数（真房间永远有底噪，全零=聋流）
+  let hearReopens = 0 // 聋流自愈重开次数（防循环：一小时最多 3 次）
+  let hearReopenAt = 0
   async function hearOpenStream (get, srcTag) {
     try {
       hearStream = await get()
       hearCtx = new AudioContext()
+      // 0.48.9 AudioContext 可能被自动播放策略挂起——挂起的 ctx 分析器永远读 128（数字静音）
+      if (hearCtx.state === 'suspended') {
+        try { await hearCtx.resume() } catch { }
+        try { window.aura.reportError('hear', '听觉 AudioContext 是 suspended，已尝试 resume → ' + hearCtx.state, '') } catch { }
+      }
       hearAn = hearCtx.createAnalyser()
       hearAn.fftSize = 1024
       hearCtx.createMediaStreamSource(hearStream).connect(hearAn)
       hearSrcTag = srcTag
+      hearZeroRun = 0
       const hb = new Uint8Array(hearAn.fftSize)
       hearTimer = setInterval(() => {
         if (!hearAn || !hearCtx) return
         hearAn.getByteTimeDomainData(hb)
         let sum = 0
         for (let i = 0; i < hb.length; i++) { const v = (hb[i] - 128) / 128; sum += v * v }
+        // 0.48.9 聋流看门狗：8-bit 采样的量化底噪 ≈ ±1/128，真麦克风不可能连续全零。
+        // 连续 10 秒全零=这条流是哑的（17:33 真机实锤：hear 流恒 0 而语音麦同设备能听到说话），
+        // 撕掉重开一次；一小时最多 3 次，防「设备真坏了」时疯狂循环。
+        if (sum === 0) {
+          hearZeroRun++
+          if (hearZeroRun >= 10) {
+            const now = Date.now()
+            if (hearReopens < 3 || now - hearReopenAt > 60 * 60 * 1000) {
+              hearReopens += (now - hearReopenAt > 60 * 60 * 1000) ? -(hearReopens) : 0
+              hearReopens++
+              hearReopenAt = now
+              hearZeroRun = 0
+              try { window.aura.reportError('hear', '听觉流连续 10 秒数字静音（聋流），重开第 ' + hearReopens + ' 次（src=' + srcTag + '）', '') } catch { }
+              hearMicStop()
+              hearMicEnsure()
+              return
+            }
+          }
+        } else hearZeroRun = 0
         hearSampleFrom(hearAn, hearCtx, Math.sqrt(sum / hb.length))
       }, 1000)
       // 留痕：真机日志能看见耳朵何时竖起、竖的是哪只（失败也留痕）
@@ -2815,15 +2844,18 @@ function setupChat () {
     mic.classList.remove('on')
     clearInterval(vadTimer)
     vadTimer = null
-    hearMicEnsure() // 语音麦让位：听觉换回自己的轻量流（hearOn 开着才有）
     if (recorder && recorder.state === 'recording') { try { recorder.stop() } catch {} }
     recorder = null
     speaking = false
     vpDetach() // 0.48.0 声纹采集摘除
+    // 0.48.9 先把自己的流放干净，再让 hear 接管——以前 hear 抢在 getUserMedia
+    // 时旧 vp 流还在设备上，Windows 设备交接时序下可能拿到一条哑流（17:33 实锤：
+    // hear 流恒数字静音、每分钟报「很安静」，语音麦同设备却听得到说话）
     if (stream) stream.getTracks().forEach((t) => t.stop())
     stream = null
     if (audioCtx) { try { audioCtx.close() } catch {} }
     audioCtx = null
+    hearMicEnsure() // 语音麦让位：听觉换回自己的轻量流（hearOn 开着才有）
   }
   /* 麦克风：用户意图（micDesired）与「当前是否真在录」（on）分开——
    * 角色被拖到别的屏时，旧屏关麦、新屏接管，但用户的开麦设置保持不变。
@@ -2838,6 +2870,13 @@ function setupChat () {
     localStorage.setItem(KEY, '1')
     localStorage.setItem(KEY_SEEN, '1')
   }
+  // 0.48.10 第二次迁移：17:33:32 声纹注册收到 1/3 后 30 秒麦被点击关掉——注册中途
+  // 不可能主动关，是想「让她听」的点成了切换。清掉这次误存的「关」（只跑一次，
+  // 之后显式关闭仍被尊重；vp-mic-click 留痕以后能对账每次点击）。
+  if (!localStorage.getItem(KEY_SEEN2)) {
+    localStorage.setItem(KEY, '1')
+    localStorage.setItem(KEY_SEEN2, '1')
+  }
   let micDesired = localStorage.getItem(KEY) != null
     ? localStorage.getItem(KEY) === '1'
     : (localStorage.setItem(KEY, '1'), true)
@@ -2850,6 +2889,8 @@ function setupChat () {
   }
   hostHooks.push(applyMic)
   mic.addEventListener('click', () => {
+    // 0.48.9 点击留痕：17:30/17:33 两次 desired 变 false 无从对账，先实锤是谁点的
+    petDiagOnce('vp-mic-click', '麦克风按钮被点击：desired ' + micDesired + '→' + (!on) + '（mode=' + micMode + '）')
     if (micMode === 'toggle') {
       if (!on) { micDesired = true; micOn() }
       else { micDesired = false; flushRecording(); micOff() }

@@ -149,3 +149,22 @@ test('0.46.55 系统声兜底：src=sys 时听感明说「电脑自己发出的�
   const d2 = hear.describe()
   assert.ok(!/电脑自己发出/.test(d2.text))
 })
+
+test('0.48.9 聋流自愈：看门狗在、micOff 先放流再让位（真机 17:33 实锤哑流）', () => {
+  const fs2 = require('node:fs')
+  const path = require('node:path')
+  const src = fs2.readFileSync(path.join(__dirname, '../src/renderer/overlay/pet.js'), 'utf8')
+  // 聋流看门狗：连续全零计数 + 重开上限
+  assert.ok(src.includes('hearZeroRun'), '看门狗计数器存在')
+  assert.ok(src.includes('数字静音（聋流）'), '聋流重开有留痕')
+  assert.ok(/hearReopens < 3/.test(src), '重开有次数上限（防设备真坏时循环）')
+  // AudioContext 挂起自愈
+  assert.ok(src.includes("hearCtx.state === 'suspended'"), '开流时检查并 resume 挂起的 AudioContext')
+  // micOff 顺序：先放 vp 流，再 hearMicEnsure（设备交接竞态）
+  const offIdx = src.indexOf('function micOff ()')
+  const stopIdx = src.indexOf('t.stop()', offIdx)
+  const ensureIdx = src.indexOf('hearMicEnsure()', offIdx)
+  assert.ok(stopIdx > 0 && ensureIdx > stopIdx, 'micOff 内 t.stop() 必须先于 hearMicEnsure()')
+  // 点击留痕
+  assert.ok(src.includes('vp-mic-click'), '麦克风按钮点击有留痕')
+})
