@@ -99,9 +99,17 @@ function describe () {
   const win = buf.filter((x) => x.t >= now - CUR_MS)
   const cur = win.length ? win : buf.slice(-8)
   const med = median(cur.map((x) => x.rms))
-  const level = LEVELS.find((l) => med < l.max) || LEVELS[LEVELS.length - 1]
+  // 0.49.1 峰值口径：说话是断续的（说两秒停八秒），12 秒窗的中位数会被静音拉成
+  // 「很安静」——她就说「现在也依然很安静，只有文字传过来」（20:45 主人实锤，
+  // 同一时刻声纹侧 rms=0.077 的人声正在进来）。中位数管环境底色，峰值管「有没有动静」：
+  // 中位数安静但峰值有 >=0.04 的起伏 = 有人在旁边断续说话，如实说出来。
+  const peak = Math.max(...cur.map((x) => x.rms))
+  let level = LEVELS.find((l) => med < l.max) || LEVELS[LEVELS.length - 1]
+  const sparseSpeech = level.key === 'quiet' && peak >= 0.04
+  if (sparseSpeech) level = { max: 0.04, key: 'ambient', text: '有些声响' }
 
   const tags = []
+  if (sparseSpeech) tags.push('有断续的人声动静（像有人在旁边说话）')
   const low = avg(cur.map((x) => x.low))
   const mid = avg(cur.map((x) => x.mid))
   const high = avg(cur.map((x) => x.high))

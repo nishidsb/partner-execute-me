@@ -168,3 +168,21 @@ test('0.48.9 聋流自愈：看门狗在、micOff 先放流再让位（真机 17
   // 点击留痕
   assert.ok(src.includes('vp-mic-click'), '麦克风按钮点击有留痕')
 })
+
+test('0.49.1 峰值口径：断续说话（中位数安静+峰值有人声）不再报「很安静」', () => {
+  reset()
+  // 真机 20:45 实锤的形状：说两秒停八秒——12 秒窗里大多 rms≈0.005，偶有人声 0.08
+  for (let i = 0; i < 11; i++) { feed({ rms: 0.005 }); now += 1000 }
+  feed({ rms: 0.08, mid: 0.6, low: 0.2, high: 0.2, onsets: 2 })
+  const d = hear.describe()
+  assert.equal(d.ok, true)
+  assert.notEqual(d.level, 'quiet', '峰值有人声就不该判 quiet')
+  assert.ok(d.tags.some((t) => /人声|说话/.test(t)), '要说出「有人在旁边说话」，实际 tags：' + d.tags.join('/'))
+  assert.ok(hear.block().length > 0, 'block() 不再因为 quiet 吞掉这段感知')
+  // 对照：真安静（峰值也低）维持原判
+  reset()
+  for (let i = 0; i < 12; i++) { feed({ rms: 0.005 }); now += 1000 }
+  const d2 = hear.describe()
+  assert.equal(d2.level, 'quiet', '峰值也没动静才是真安静')
+  assert.equal(hear.block(), '', '真安静仍然不浪费注入预算')
+})

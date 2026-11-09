@@ -232,3 +232,19 @@ test('0.48.11 质心参考项：sim 取「单段 max」与「质心」的较高�
   const c = vp.centroidOf([[2, 0], [0, 2]])
   assert.deepEqual(c, [1, 1])
 })
+
+test('0.49.1 查询侧门槛 0.7s：0.9 秒短句不再被扔（注册侧 1.2 闸不动）', () => {
+  vp.resetForTest()
+  vp.configure({ templatePath: path.join(tmpDir(), 'template.json'), modelPath: 'x' })
+  vp._setExtractor(fakeExtractor(() => new Array(8).fill(0.1)))
+  // 查询：0.9 秒（真机 20:40 实锤被 1.2 拦掉刷屏的形状）→ 过门槛，走到「没模板」
+  const r = vp.verifyPcm(voicePcm(0.9), 16000, 'mic')
+  assert.equal(r.ok, false)
+  assert.ok(!/太短/.test(r.reason), '0.9s 查询不该再报太短，实际：' + r.reason)
+  assert.match(r.reason, /没.*注册|模板/)
+  // 注册：同样 0.9 秒仍被模板质量闸拦（注册样本必须 ≥1.5s 有效语音）
+  vp.configure({ enroll: true })
+  const r2 = vp.verifyPcm(voicePcm(0.9), 16000, 'mic')
+  assert.equal(r2.ok, false)
+  assert.ok(/太短|注册/.test(r2.reason), '注册闸保持 1.2/1.5，实际：' + r2.reason)
+})

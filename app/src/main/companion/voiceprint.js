@@ -28,6 +28,8 @@ const path = require('path')
 
 const TARGET_SR = 16000
 const MIN_SEC = 1.2 // 0.48.8：1.0 → 1.2（0.29~0.53 全 other 的教训：短语音嵌入方差大到同人都能算出 0.4）
+const QUERY_MIN_SEC = 0.7 // 0.49.1：1.2 的模板质量闸把查询侧也拦了——20:40 实锤「音频太短（0.9 秒 < 1.2 秒）」刷屏，
+// 主人说的短句大部分被扔掉。查询侧降回 0.7（判定=样本+质心取最高，噪声扛得住）；注册侧仍 1.2/1.5 不动。
 const ENROLL_MIN_SEC = 1.5 // 注册样本修剪后最少有效语音
 const ENROLL_COHESIVE = 0.45 // 注册样本与已有模板段的最低余弦（自洽闸）
 const SAME_DEFAULT = 0.72
@@ -205,17 +207,18 @@ function trimSilence (samples, rate) {
   return { samples: out, sec: out.length / rate, trimmedSec: (n - out.length) / rate }
 }
 
-function embedFromPcm (samples, sr) {
+function embedFromPcm (samples, sr, minSec) {
   if (!samples || !samples.length) return { ok: false, reason: '没有音频' }
   const rate = Number(sr) || TARGET_SR
+  const min = Number(minSec) || MIN_SEC
   const sec = samples.length / rate
-  if (sec < MIN_SEC) return { ok: false, reason: '音频太短（' + sec.toFixed(1) + ' 秒 < ' + MIN_SEC + ' 秒）' }
+  if (sec < min) return { ok: false, reason: '音频太短（' + sec.toFixed(1) + ' 秒 < ' + min + ' 秒）' }
   if (!extractor) return { ok: false, reason: '声纹引擎没就绪' }
   const w0 = rate === TARGET_SR ? samples : resampleLinear(samples, rate, TARGET_SR)
   const tr = trimSilence(w0, TARGET_SR)
   const w = tr.samples
   const validSec = tr.sec
-  if (validSec < MIN_SEC) return { ok: false, reason: '有效语音太短（' + validSec.toFixed(1) + ' 秒，静音剪掉 ' + tr.trimmedSec.toFixed(1) + ' 秒）' }
+  if (validSec < min) return { ok: false, reason: '有效语音太短（' + validSec.toFixed(1) + ' 秒，静音剪掉 ' + tr.trimmedSec.toFixed(1) + ' 秒）' }
   try {
     const st = extractor.createStream()
     st.acceptWaveform({ sampleRate: TARGET_SR, samples: w })
@@ -257,7 +260,8 @@ function centroidOf (embs) {
 function verifyPcm (samples, sr, via) {
   if (!cfg.on) return { ok: false, reason: '声纹开关没开' }
   lastEvent = null
-  const e = embedFromPcm(samples, sr)
+  // 注册用模板质量闸（1.2s），查询用宽松闸（0.7s，0.49.1）——0.9 秒短句不再被扔
+  const e = embedFromPcm(samples, sr, cfg.enroll ? MIN_SEC : QUERY_MIN_SEC)
   if (!e.ok) return e
   // 注册模式优先：enroll 开着时每段声音都收进模板（攒满 3 段由宿主收闸）
   if (cfg.enroll) return _enrollEmb(e)
@@ -336,5 +340,5 @@ module.exports = {
   cosine, judge, resampleLinear, trimSilence, centroidOf,
   embedFromPcm, verifyPcm, pcmFromB64, deleteTemplate, block,
   _setExtractor,
-  TARGET_SR, MIN_SEC, SAME_DEFAULT, MAYBE_DEFAULT
+  TARGET_SR, MIN_SEC, QUERY_MIN_SEC, SAME_DEFAULT, MAYBE_DEFAULT
 }
