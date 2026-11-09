@@ -3640,10 +3640,42 @@ async function transcribe (base64, mime, pcmB64, via) {
       log('[voiceprint] 验证异常：' + (e && e.message))
     }
   }
+  // 0.49.2 背景响度闸：21:02~21:03 实锤五连幻觉回复——Whisper 对着 rms 0.004~0.025 的
+  // 环境噪音幻觉出「中文字幕组」「我没有声音，多少次」这种字，全进了对话，她认真回了
+  // 每一句（主人：「我没有说这些话呢」）。真人在旁边不会回应背景噪音。你说话是
+  // 0.077~0.19，3 倍以上间距，闸不打到真人。p90 口径与 pet.js startVad 的说话判定
+  //（rms>0.045）同一标准：VAD 都不认为是说话的响度，不该变成「他说的」。顺带治了
+  // 幻觉段把 whisper 队列堵出 55 秒延迟的病。注册模式豁免（收样本永远不拦）。
+  if (pcmB64 && String(pcmB64).length > 64 && c.voiceprintEnroll !== true) {
+    try {
+      const lvl = speakLevel(voiceprint.pcmFromB64(pcmB64))
+      if (lvl < 0.045) {
+        log('[voice] 背景响度（p90 rms=' + lvl.toFixed(3) + ' < 0.045，口=' + vpVia + '）——不进 ASR 不进对话')
+        return { ok: true, text: '', quiet: true, speaker: vp && vp.speaker, sim: vp && vp.sim }
+      }
+    } catch (e) { log('[voice] 响度闸异常：' + (e && e.message)) }
+  }
   const r = await transcribeBase(base64, mime)
   // 0.48.5：ASR 失败也要回传声纹判定（两者互相独立，别让转写失败吞掉「是谁在说」）
   if (vp && r) { r.speaker = vp.speaker; r.sim = vp.sim; if (vp.enrolled) { r.enrolled = true; r.samples = vp.samples } }
   return r
+}
+
+/* 0.49.2 分段响度（p90）：把 PCM 切 100ms 帧，取第 90 百分位的帧 rms——
+ * 说话是断续的，整段均值会被停顿拉低；p90 抓的是「最响的那些帧」，
+ * 稳稳区分开说话（≥0.077）与环境噪音（≤0.025）。 */
+function speakLevel (f32) {
+  const n = f32.length
+  const frame = 1600 // 100ms @16k
+  const lv = []
+  for (let i = 0; i + frame <= n; i += frame) {
+    let s = 0
+    for (let j = i; j < i + frame; j++) s += f32[j] * f32[j]
+    lv.push(Math.sqrt(s / frame))
+  }
+  if (!lv.length) return n ? Math.abs(f32[0]) : 0
+  lv.sort((a, b) => a - b)
+  return lv[Math.min(lv.length - 1, Math.floor(lv.length * 0.9))]
 }
 
 async function transcribeBase (base64, mime) {

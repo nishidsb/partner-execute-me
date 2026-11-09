@@ -2537,7 +2537,12 @@ function setupChat () {
       // 全走 reportError 留痕，不再冒「没听清再说一遍」这类系统气泡。
       // 安静本身也是一种回应——真人在旁边听，没听清多半是笑笑就过去了。
       const r = await window.aura.petTranscribe(b64, 'audio/webm', pcmB64, 'pet')
-      if (r && r.ok && r.text) {
+      if (r && r.quiet) {
+        // 0.49.2 背景响度闸（主进程判定）：环境噪音连 ASR 都不进——Whisper 对着
+        // 噪音会幻觉出「中文字幕组」这种字，她莫名其妙回一句（21:02~03 实锤五连）
+        try { window.aura.reportError('voice', '背景响度，不进对话（p90<0.045）', '') } catch { }
+        return
+      } else if (r && r.ok && r.text) {
         // 0.38.0 识别结果过滤：常开麦会对着静音/空调声断句，出来的「嗯。」「그.」
         // 直接进对话就是她莫名其妙回一句。只拦明显不对的，不猜内容。
         const verdict = window.speechFilter ? window.speechFilter.looksLikeSpeech(r.text) : { ok: true, text: r.text }
