@@ -5,8 +5,8 @@
  * 为什么要有它：到 0.36.0 为止，她所有的主动行为都是**被逼出来的**——
  * 黏人模式（你不理她）、碎碎念（随机到点）、做梦（睡前）、陪看（你开了刷 B 站）。
  * 没有一条是「她自己想干点什么」。她像一个只在被按到时才有反应的东西。
- * 设计动机（来自真实使用反馈）：希望她不只是被按到才反应，也能
- * 自己找点感兴趣的事做。」
+ * 用户 2026-10-29 18:36 的原话：「你明明可以自己呆着，看看电脑中有什么
+ * 感兴趣的可以自己玩。」
  *
  * 她真的能动的东西只有这些：读屏幕上的字（0.34.0 的 OCR 白板）、知道自己
  * 前台在跑什么程序、能翻自己的日记/喜好/记过的事。所以「玩」只能是**看与想**，
@@ -206,7 +206,7 @@ function createCuriosity (deps) {
     if (!c.apiBaseUrl || !c.apiModel) return null
     const p = buildPrompt(Object.assign({}, mat, { now: Date.now() }))
     try {
-      const res = await llm.chatStream({
+      const res = await (llm.chatStreamAuto || llm.chatStream)({
         baseUrl: c.apiBaseUrl,
         apiKey: c.apiKey,
         model: c.apiModel,

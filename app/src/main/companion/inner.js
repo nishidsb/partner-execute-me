@@ -453,7 +453,7 @@ async function writeDayDiary (date) {
   writing = true
   try {
     const sys = (ctx.persona ? '你叫' + (ctx.personaName || '你自己') + '。你的人设：\n' + ctx.persona + '\n\n' : '') + DAY_PROMPT
-    const res = await llm.chatStream({
+    const res = await (llm.chatStreamAuto || llm.chatStream)({
       baseUrl: ctx.llmCfg.baseUrl,
       apiKey: ctx.llmCfg.apiKey,
       model: ctx.llmCfg.model,
@@ -531,7 +531,7 @@ async function distill () {
   if (days.length < 3) return { ok: false, error: 'not-enough-days' }
   const corpus = days.map((d) => '【' + d.date + '】\n' + d.text).join('\n\n')
   try {
-    const res = await llm.chatStream({
+    const res = await (llm.chatStreamAuto || llm.chatStream)({
       baseUrl: ctx.llmCfg.baseUrl,
       apiKey: ctx.llmCfg.apiKey,
       model: ctx.llmCfg.model,

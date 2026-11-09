@@ -87,7 +87,7 @@ const projectsParseClose = require('./projects').parseClose // 0.46.64 项目收
    0.46.77 两处修正：①字段错配静默失败——原实现读 cfg.baseUrl/cfg.model，宿主传的
    cfgGet() 是 companion 配置（字段叫 apiBaseUrl/apiModel）→ chatOnce 每次都抛
    「缺少 baseUrl/model」被 catch 吞掉，守卫在真机上一次都没真正重写过（老坑 4 再现）；
-   ②garble 信号补假名括注——回复里混进「漢字（かな）」式夹生注音括注。
+   ②garble 信号补假名括注——16:33 回复「九十（かな）分」混进夹生的注音括注。
    ja 模式下正文出现简体特有字形 / 汉字后夹假名注音括注 = 生成质量事故信号 → 重写一次；
    重写失败/仍异常保留原文（宁要原话不要哑）。 */
 const SIMPLIFIED_ONLY_RE = /[结说们为发还让记该对东业书机电视频语读练钱关听吗问办个时进运连过]/
@@ -594,7 +594,7 @@ async function runSpace (o) {
   const t0 = Date.now()
   let content = ''
   try {
-    const r = await llm.chatStream({
+    const r = await (llm.chatStreamAuto || llm.chatStream)({
       baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
       temperature: 0.9,
       signal: ctrl ? ctrl.signal : undefined,
@@ -1157,7 +1157,7 @@ async function runFree (o) {
   let planPushed = 0
   try {
     for (let pass = 0; pass < 8; pass++) {
-      const r = await llm.chatStream({
+      const r = await (llm.chatStreamAuto || llm.chatStream)({
         baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
         temperature: 0.9,
         signal: ctrl ? ctrl.signal : undefined,

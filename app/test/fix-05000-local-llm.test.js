@@ -117,7 +117,7 @@ test('0.50.0 全链静态接线：companion/assistant/preload/UI 五处', () => 
   const idx = R('../src/main/companion/index.js')
   assert.ok(idx.includes("require('./localLlm')"), 'companion 引路由模块')
   assert.ok(idx.includes('function applyLocalLlm'), '配置同步函数')
-  assert.ok(idx.includes("llm.setRouter({ side: () => localLlm.pick(), fallback: () => localLlm.pick() })"), '路由注入 llm')
+  assert.ok(/llm\.setRouter\(\{[\s\S]*?side: \(\) => localLlm\.pick\('side'\)[\s\S]*?fallback: \(\) => localLlm\.pick\('fallback'\)[\s\S]*?auto: \(\) => localLlm\.pick\('auto'\)/.test(idx), '路由注入 llm（0.50.1 三钩子）')
   assert.ok(idx.includes('patch.localLlmOn !== undefined'), 'patchCfg 监听配置变化')
   assert.ok(idx.includes('companion:local-llm-probe'), 'IPC 探测口')
   assert.ok(idx.includes('applyLocalLlm()\n    localLlm.probe()'), 'registerIpc 启动接线+首探')

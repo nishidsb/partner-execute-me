@@ -22,7 +22,11 @@ const localLlm = require('./localLlm')
 function applyLocalLlm () {
   const c = cfg()
   localLlm.configure({ on: c.localLlmOn !== false, url: c.localLlmUrl, model: c.localLlmModel })
-  llm.setRouter({ side: () => localLlm.pick(), fallback: () => localLlm.pick() })
+  llm.setRouter({
+    side: () => localLlm.pick('side'),       // 判读/记忆提炼：最小模型求快（8s 超时）
+    fallback: () => localLlm.pick('fallback'), // 云端失败顶上主对话：最大模型求质量
+    auto: () => localLlm.pick('auto')         // 0.50.1 挂机活动：最大模型求质量
+  })
 }
 const tools = require('./tools')
 /* 0.45.69 学习账本：学习期间的一切（抽查明细、补时、字数、时长）当场落盘。
@@ -1566,7 +1570,7 @@ let welcomeRec = Object.assign({ lastActiveAt: 0, lastWelcomeAt: 0, prevPresence
     ? [{ role: 'system', content: '【这句你刚说过，绝对不许再用同样的开头、同样的道具、同样的句式】\n' + String(avoid).slice(0, 80) + '\n换一个完全不同的场景/动作/话题来开口。' }]
     : []
   try {
-    const res = await llm.chatStream({
+    const res = await (llm.chatStreamAuto || llm.chatStream)({
       baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
       messages: [
         { role: 'system', content: String((character.get() || {}).persona || '').slice(0, 900) },
@@ -2550,7 +2554,7 @@ async function dreamRun (reason) {
       evLines.join('\n'),
       days.map((d) => '【日记 ' + d.date + '】\n' + d.text).join('\n\n')
     ])
-    const res = await llm.chatStream({
+    const res = await (llm.chatStreamAuto || llm.chatStream)({
       baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
       messages: [
         { role: 'system', content: dream.DREAM_PROMPT },
@@ -2680,7 +2684,7 @@ async function makeStudyLine (kind, st) {
     ? '用与角色平时说话相同的语言。'
     : '只使用' + ({ zh: '中文', en: '英文', ja: '日文' }[rl] || '中文') + '。'
   try {
-    const res = await llm.chatStream({
+    const res = await (llm.chatStreamAuto || llm.chatStream)({
       baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
       messages: [
         { role: 'system', content: String((character.get() || {}).persona || '').slice(0, 900) },
@@ -3085,7 +3089,7 @@ async function makeWatchLine (kind, st, attempt) {
   } catch { }
 
   try {
-    const res = await llm.chatStream({
+    const res = await (llm.chatStreamAuto || llm.chatStream)({
       baseUrl: c.apiBaseUrl, apiKey: c.apiKey, model: c.apiModel,
       messages: [
         {

@@ -257,7 +257,7 @@ function createChatter (deps) {
         '。接着这往下说下一句（最多 ' + MONO_MAX_LINES + ' 句），想通了就正常收尾；没兴趣了输出 [沉默]，这件事就先放着。'
       : ''
     try {
-      const res = await llm.chatStream({
+      const res = await (llm.chatStreamAuto || llm.chatStream)({
         baseUrl: c.apiBaseUrl,
         apiKey: c.apiKey,
         model: c.apiModel,

@@ -14,11 +14,13 @@ const RETRY_DELAYS_MS = [2000, 6000, 15000]
 
 function wait (ms) { return new Promise((r) => setTimeout(r, ms)) }
 
-/* 0.50.0 本地大模型自动路由（主人拍板：副手+备胎）。
+/* 0.50.0 本地大模型自动路由（主人拍板：副手+备胎）。0.50.1 加挂机位。
  * ROUTER 由 companion/index.js 注入（localLlm.pick）：本地在线才给参数，不在线 null。
  *  - side：旁路小活（chatOnce=判读/记忆提炼）本地优先，本地失败回落云端；
  *  - fallback：主对话（chatStream=她的声音）云主本地备——云端失败且流没吐过字才切
- *    （吐过字再切=同一句话说两遍；主人主动中断也绝不切）。 */
+ *    （吐过字再切=同一句话说两遍；主人主动中断也绝不切）；
+ *  - auto：挂机活动（chatStreamAuto=自主活动/嘀咕/日记/做梦/自语台词）本地优先，
+ *    本地失败回落云端——她一个人的时候不烧云端 token。 */
 let ROUTER = null
 function setRouter (r) { ROUTER = r || null }
 
@@ -179,6 +181,24 @@ async function chatStream (args) {
   }
 }
 
+/** 0.50.1 挂机位（主人 11-09 拍板：晚上挂机/早上用电脑前/挂机不动时都走本地）。
+ *  她一个人活动（自主活动/嘀咕/好奇心/日记/做梦/各类自语台词）不该烧云端 token——
+ *  本地在线直接走本地，本地失败回落云端；主人主动中断（signal.aborted）不回落。
+ *  与 chatStream（云主本地备，主对话质量优先）互补；字幕翻译不走这里（实时+质量敏感）。 */
+async function chatStreamAuto (args) {
+  const side = ROUTER && typeof ROUTER.auto === 'function' ? ROUTER.auto() : null
+  if (side) {
+    try {
+      log('[llm] 挂机活动走本地模型（' + side.model + '）')
+      return await chatStreamImpl({ ...args, baseUrl: side.baseUrl, apiKey: side.apiKey, model: side.model })
+    } catch (err) {
+      if (args.signal && args.signal.aborted) throw err
+      log('[llm] 本地挂机活动失败（' + String(err && err.message || err).slice(0, 90) + '）→ 回落云端')
+    }
+  }
+  return chatStreamImpl(args)
+}
+
 /**
  * 一次性短问答（非流式）。
  *
@@ -265,4 +285,4 @@ async function listModels ({ baseUrl, apiKey }) {
   }
 }
 
-module.exports = { chatStream, chatOnce, chatStreamImpl, chatOnceImpl, setRouter, listModels, RETRY_DELAYS_MS }
+module.exports = { chatStream, chatStreamAuto, chatOnce, chatStreamImpl, chatOnceImpl, setRouter, listModels, RETRY_DELAYS_MS }
