@@ -2502,6 +2502,7 @@ function setupChat () {
   const KEY_MODE = 'auraPetMicMode'
   const KEY_SEEN = 'auraPetMicSeen' // 0.48.6 一次性迁移标记
   const KEY_SEEN2 = 'auraPetMicSeen2' // 0.48.10 第二次迁移标记（声纹注册中途被误点关）
+  const KEY_SEEN3 = 'auraPetMicSeen3' // 0.48.13 第三次迁移标记（最后一次，此后点击有气泡反馈）
   let micMode = localStorage.getItem(KEY_MODE) || 'always'
   let interruptOn = false
 
@@ -2877,6 +2878,12 @@ function setupChat () {
     localStorage.setItem(KEY, '1')
     localStorage.setItem(KEY_SEEN2, '1')
   }
+  // 0.48.13 第三次迁移：19:40:52 判定 other 后点麦克风想「让她重新听」，又存了一次关。
+  // 这是今天第 4 次误关——0.48.13 起点击有气泡反馈，这是最后一次清。
+  if (!localStorage.getItem(KEY_SEEN3)) {
+    localStorage.setItem(KEY, '1')
+    localStorage.setItem(KEY_SEEN3, '1')
+  }
   let micDesired = localStorage.getItem(KEY) != null
     ? localStorage.getItem(KEY) === '1'
     : (localStorage.setItem(KEY, '1'), true)
@@ -2899,6 +2906,10 @@ function setupChat () {
     micDesired = !on
     localStorage.setItem(KEY, micDesired ? '1' : '0')
     applyMic()
+    // 0.48.13 显式气泡反馈：11-09 日志实锤 4 次误关（17:30/17:33/19:40 都是想「让她听」
+    // 点成了切换关）——切换式按钮必须让点击结果一目了然
+    bubbleShow(micDesired ? '👂 开始听你说话' : '🔇 不听你说话了（想让我听就再点一下）')
+    bubbleKeep()
   })
   // hold：按住说，松手识别（press 期间 VAD 起作用，松手立刻收尾）
   mic.addEventListener('pointerdown', () => {

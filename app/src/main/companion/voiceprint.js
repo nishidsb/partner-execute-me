@@ -224,7 +224,11 @@ function embedFromPcm (samples, sr) {
     const emb = extractor.compute(st, false)
     if (!emb || !emb.length) return { ok: false, reason: '嵌入提取为空' }
     const norm = Math.sqrt(emb.reduce((s, x) => s + x * x, 0))
-    return { ok: true, emb: Array.from(emb), dim: emb.length, sec, validSec, norm }
+    // 查询侧响度：和注册样本对口径（注册 norm=29.5/33.0；查询侧异常小=采集音量变了）
+    let se = 0
+    for (let i = 0; i < w.length; i++) se += w[i] * w[i]
+    const rms = Math.sqrt(se / Math.max(1, w.length))
+    return { ok: true, emb: Array.from(emb), dim: emb.length, sec, validSec, norm, rms }
   } catch (e) {
     return { ok: false, reason: '嵌入计算失败：' + (e && e.message).slice(0, 80) }
   }
@@ -264,13 +268,19 @@ function verifyPcm (samples, sr, via) {
   const refs = tmpl.embs.slice()
   if (tmpl.embs.length > 1) refs.push(centroidOf(tmpl.embs))
   let best = -1
-  for (const ref of refs) {
-    const c = cosine(e.emb, ref)
-    if (c > best) best = c
+  let bestRef = -1
+  for (let i = 0; i < refs.length; i++) {
+    const c = cosine(e.emb, refs[i])
+    if (c > best) { best = c; bestRef = i }
   }
+  const refTag = bestRef >= tmpl.embs.length ? '质心' : '段' + (bestRef + 1)
   const label = judge(best)
   lastEvent = { label, sim: best, at: Date.now(), via: via || 'mic' }
-  log('[voiceprint] ' + (via || 'mic') + ' → ' + label + '（相似度 ' + best.toFixed(3) + '，阈值 ' + cfg.same + '/' + cfg.maybe + '）')
+  // 0.48.12 查询侧诊断：有效时长/响度/嵌入范数和注册时对口径，判定暴跌时能定位是
+  // 采集问题（norm/rms 异常）还是特征问题
+  log('[voiceprint] ' + (via || 'mic') + ' → ' + label + '（相似度 ' + best.toFixed(3) + ' 靠' + refTag +
+    '，阈值 ' + cfg.same + '/' + cfg.maybe + '；有效 ' + (e.validSec || e.sec).toFixed(1) + 's rms=' +
+    (e.rms || 0).toFixed(3) + ' norm=' + (e.norm || 0).toFixed(1) + '）')
   return { ok: true, speaker: label, sim: best, via: via || 'mic' }
 }
 
