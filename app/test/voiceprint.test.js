@@ -128,6 +128,12 @@ test('0.48.0 接线锁死：transcribe 带 PCM 验声纹、chatter/reply 两处�
   assert.ok(panel.includes("transcribe(b64, 'audio/webm', pcmB64)"), '面板 transcribe 也带 PCM')
   assert.ok(panel.includes('createScriptProcessor'), '面板也有 ScriptProcessor 采集')
   assert.ok(panel.includes('✓ 他的声音'), '面板展示声纹判定（诚实显示）')
+  // 0.48.2 主进程链透传：handle 收第三参、队列 job 带 pcm、pump 喂 transcribe
+  // （0.48.1 真机实锤：preload 传了、transcribe 也收，但 handle/队列两层都丢参，声纹零日志）
+  const main = fs2.readFileSync(path.join(__dirname, '../src/main/companion/index.js'), 'utf8')
+  assert.ok(main.includes("async (_e, base64, mime, pcmB64)"), 'handle 透传 PCM 第三参')
+  assert.ok(main.includes('transcribeQueued(base64, mime, pcmB64)'), 'handle → 队列带 PCM')
+  assert.ok(main.includes('transcribe(job.base64, job.mime, job.pcm)'), 'pump → transcribe 带 PCM')
 })
 
 test('0.48.0 隐私红线：模板只存嵌入向量，不存任何音频字节', () => {

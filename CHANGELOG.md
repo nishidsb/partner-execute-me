@@ -1,5 +1,10 @@
 # 更新说明（CHANGELOG）
 
+## 0.48.2（2026-11-09）
+
+- 声纹链路透传修复：真机开麦后转写正常但声纹零日志——PCM 死在 ipcMain.handle（只收 base64/mime）和 transcribeQueued/pumpAsr 队列（不带 pcm）中间两层。三层全部透传，voiceprint.test.js 加防回归断言。
+- 附带发现：旧实例退出时会把启动后外部写入的 config 改动用缓存盖掉（voiceprintEnroll 曾被冲回 undefined）——外部改配置要在她退出后写或写完立刻重启。
+
 ## 0.48.1（2026-11-09）
 
 - 声纹补口：companion 面板按键说话也验声纹。此前只有 pet 悬浮窗常驻倾听那条口带 PCM，走面板说话零声纹日志（主人 15:32 实测踩到）。

@@ -3699,9 +3699,9 @@ let asrBusy = false
 const asrQueue = []
 const ASR_QUEUE_MAX = 3
 
-function transcribeQueued (base64, mime) {
+function transcribeQueued (base64, mime, pcmB64) {
   return new Promise((resolve) => {
-    asrQueue.push({ base64, mime, resolve })
+    asrQueue.push({ base64, mime, pcm: pcmB64, resolve })
     pumpAsr()
   })
 }
@@ -3712,7 +3712,7 @@ function pumpAsr () {
   if (!job) return
   asrBusy = true
   Promise.resolve()
-    .then(() => transcribe(job.base64, job.mime))
+    .then(() => transcribe(job.base64, job.mime, job.pcm))
     .then(
       (r) => job.resolve(r),
       (e) => job.resolve({ ok: false, message: String((e && e.message) || e) })
@@ -4569,14 +4569,14 @@ function registerIpc () {
     }
   })
 
-  ipcMain.handle('companion:transcribe', async (_e, base64, mime) => {
+  ipcMain.handle('companion:transcribe', async (_e, base64, mime, pcmB64) => {
     const t0 = Date.now()
     if (asrQueue.length >= ASR_QUEUE_MAX) {
       log('[asr] 队列已满（' + asrQueue.length + ' 句在等），丢弃最新一段')
       return { ok: false, message: '还在识别前面的话，等我说完再讲' }
     }
     const queued = asrQueue.length + (asrBusy ? 1 : 0)
-    const r = await transcribeQueued(base64, mime)
+    const r = await transcribeQueued(base64, mime, pcmB64)
     const ms = Date.now() - t0
     // 说话识别失败以前只弹气泡不落日志，用户报「识别失败」时无从查起 → 成败都记一行
     try {
