@@ -23,6 +23,22 @@
   // 日语长音拖长（「えー」「あーー」）：识别引擎在静音时最爱输出这个
   const KANA_FILLER = /^[えあうんおー]{1,4}$/
 
+  /* 0.49.0 纯应声判定：听见了，但不值得接话。
+   * 真人在旁边听人说话，语气词只是「嗯、哦、哈哈」这种存在感——不是问句也不是
+   * 请求，接了反而像「只要有声音就回应」的机器。这里只收「非词汇」的应声：
+   * 嗯/哦/啊/呃/噢/喔/诶/欸/嘿/哈/嘻/呵/呜/呀/哟 的叠字（嗯嗯、哦哦、哈哈哈），
+   * 加少数固定词。谢/好/对 这类有实义的应答不拦——那是真的在跟你说话。 */
+  const FILLER_CHARS = '嗯哦啊呃噢喔诶欸嘿哈嘻呵呜呀哟'
+  const FILLER = new RegExp(
+    '^([' + FILLER_CHARS + '])\\1{1,4}$' + // 叠字：嗯嗯 / 哦哦 / 哈哈哈…
+    '|^(?:嗯呐|嗯哼|嗯呢|哦豁|啊这|诶嘿|欸嘿|噢耶|哇哦)$'
+  )
+  function isFiller (text) {
+    const c = core(text)
+    if (!c || c.length > 8) return false
+    return FILLER.test(c)
+  }
+
   /** 去掉标点、符号、空白，只留「实字」 */
   function core (s) {
     return String(s || '')
@@ -55,7 +71,7 @@
     return { ok: true, text: raw }
   }
 
-  const api = { looksLikeSpeech, core }
+  const api = { looksLikeSpeech, isFiller, core }
   root.speechFilter = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api
 })(typeof window !== 'undefined' ? window : globalThis)

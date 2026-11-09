@@ -64,7 +64,8 @@ contextBridge.exposeInMainWorld('aura', {
   onHotLost: (cb) => ipcRenderer.on('overlay:hot-lost', () => cb()),
   petSettings: () => ipcRenderer.invoke('companion:settings'),
   // 气泡聊天走助手核心（assistant:send），回复经 assistant:delta/done 回流到气泡
-  petChatSend: (text) => ipcRenderer.invoke('assistant:send', text),
+  // 0.49.0 第三参 voice：语音消息标记（她在旁边听到的），模型可据此判断需不需要回应
+  petChatSend: (text, voice) => ipcRenderer.invoke('assistant:send', text, null, voice),
   // 聊天记录：桌宠面板显示最近对话（与助手聊天窗同源，都是会话历史）
   petHistory: () => ipcRenderer.invoke('assistant:history'),
   petClearHistory: () => ipcRenderer.invoke('assistant:clear-history'),

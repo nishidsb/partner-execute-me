@@ -538,13 +538,14 @@ function langSettings () {
   } catch { return { reply: '', sub: 'off' } }
 }
 
-async function handleSend (_e, text, images) {
+async function handleSend (_e, text, images, voice) {
   if (!ready) return { ok: false, error: '助手核心未就绪' }
   const t = String(text || '').trim()
   const imgs = (Array.isArray(images) ? images : [])
     .filter((u) => typeof u === 'string' && /^data:image\/(png|jpeg|gif|webp);base64,/.test(u) && u.length <= 11 * 1024 * 1024)
     .slice(0, 8) // 1.10：≤8 张，dataURL 本体 ≤11MB（原图约 8MB）
   if (!t && !imgs.length) return { ok: false, error: '内容为空' }
+  const isVoice = voice === true // 0.49.0 语音消息：她在旁边听到的，不是打字
   // 安静回应模式下，攒着的互动在主人开口这一刻先注入，让她「一起回应」
   try { if (touchBuf.length) flushTouch() } catch { }
   // 0.22.0 补丁⑦：主人开口 → 黏人计时清零 + 自我层事件（不调用会在她眼里永远是「主人没理我」）
@@ -556,6 +557,16 @@ async function handleSend (_e, text, images) {
     const act = require('../companion/pet').describeActivity()
     if (act) session.pushNotice('（你此刻的状态：' + act + '）')
   } catch { }
+  if (isVoice) {
+    // 0.49.0 语音场景（主人拍板「不是有声音就回应」）：她在旁边听人说话，
+    // 不是每句都要接。判定权给她自己——只把场面的性质讲清楚。
+    session.pushNotice(
+      '（这句是你在他旁边直接听到的话，不是打字。真人听人说话不是每句都接：' +
+      '随口的语气词、自言自语、明显不需要你接的话——只输出 <listen>，别的什么都不要写；' +
+      '只需要一点反应的就回一个很短的字（如「嗯」「哦？」）；' +
+      '正经问你、叫你、托你做事的，才像平时一样回话。）'
+    )
+  }
   const lang = langSettings()
   const perm = permSettings()
   const comp = companionCfg()
@@ -593,11 +604,15 @@ async function handleSend (_e, text, images) {
         log('[assistant] 正文内嵌动作已接住并播放：' + inl.actions.join('/'))
       }
     } catch { }
+    // 0.49.0 <listen> 协议：语音消息她决定不接话。历史里保留原样（她的选择要留在
+    // 镜子里），但广播带 silent 标记，气泡/朗读侧安静跳过；记账也跳（没有回复可记）。
+    const silentReply = isVoice && String(r.content || '').trim() === '<listen>'
+    if (silentReply) log('[assistant] 语音消息她决定不接话（<listen>）：' + t.slice(0, 30))
     // 0.46.77 回复链乱码守卫（链路×2）：0.46.76 只装了自主收尾链，16:33 实锤回复里
     // 也出「九十（かな）分」这种夹生注音——同一守卫复用到回复。ja 模式检出简体字形/
     // 假名注音括注 → 重写一次（守卫内部失败保留原文）。重写要同步回历史，否则回看
     // 聊天记录还是乱码（对齐上面内嵌动作改历史的做法）。
-    if (lang.reply === 'ja' && r.content) {
+    if (!silentReply && lang.reply === 'ja' && r.content) {
       try {
         const cc = companionCfg()
         const clean = await require('../companion/autonomy').detangleCloseLine(
@@ -619,7 +634,7 @@ async function handleSend (_e, text, images) {
     // 回复语言=日语 + 显示字幕=中文 → 说日语、气泡/聊天窗显示中文
     let display = r.content
     const subName = LANG_NAME[lang.sub]
-    if (subName && r.content && langMismatch && langMismatch(r.content, lang.sub)) {
+    if (!silentReply && subName && r.content && langMismatch && langMismatch(r.content, lang.sub)) {
       const tr = await session.translate(r.content, subName)
       if (tr) {
         display = tr
@@ -631,15 +646,18 @@ async function handleSend (_e, text, images) {
         }
       }
     }
-    bcastAll('assistant:done', { seq, content: r.content, display, toolResults: r.toolResults, ms: r.ms })
+    bcastAll('assistant:done', { seq, content: silentReply ? '' : r.content, display: silentReply ? '' : display, silent: silentReply, toolResults: r.toolResults, ms: r.ms })
     // 长期记忆：每轮完整回复后本地提取 + 攒轮次（每 4 轮 LLM 整理，对齐参考 memory_framework）
-    memoryExtract(cfgMod.getConfig().currentRole, t, r.content)
-    // 第 1 期 风格 few-shot：真实对话对入池（环形 200 条，注入时取最近几条）
-    try { require('../companion').noteExchange(t, r.content) } catch { }
-    // 0.46.75 回复记账（对齐 companion 链 inner.noteReply）：11-08 实锤他连发两条消息，
-    // 第二条回复把第一条的开头内容原样又讲了一遍——回复链的镜子里从来没有她自己的
-    // 回复，因为只有 companion 链记了账。不记账 → recentVoices 照不到 → 复读无人拦。
-    try { require('../companion/inner').noteReply(r.content) } catch { }
+    // 0.49.0 静默轮（<listen>）没有回复可记，记账三件全跳
+    if (!silentReply) {
+      memoryExtract(cfgMod.getConfig().currentRole, t, r.content)
+      // 第 1 期 风格 few-shot：真实对话对入池（环形 200 条，注入时取最近几条）
+      try { require('../companion').noteExchange(t, r.content) } catch { }
+      // 0.46.75 回复记账（对齐 companion 链 inner.noteReply）：11-08 实锤他连发两条消息，
+      // 第二条回复把第一条的开头内容原样又讲了一遍——回复链的镜子里从来没有她自己的
+      // 回复，因为只有 companion 链记了账。不记账 → recentVoices 照不到 → 复读无人拦。
+      try { require('../companion/inner').noteReply(r.content) } catch { }
+    }
     log('[assistant] 回复语言=' + (lang.reply || 'auto') + ' 字幕=' + lang.sub + (display !== r.content ? '（已翻译）' : '') + ' ms=' + r.ms)
     return { ok: true, ...r, display }
   } catch (err) {

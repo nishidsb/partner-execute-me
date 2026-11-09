@@ -2195,8 +2195,7 @@ function setupChat () {
     generating = true
     // 发送新消息即打断正在播的语音（对齐参考 _cancelSpeechPlayback）
     stopVoice()
-    // 回复只走角色头顶的气泡（桌面不放缩小版聊天框）
-    bubbleShow('…')
+    // 0.49.0 等待期什么都不显示（主人拍板：气泡只留她说话的）——她开口才出现气泡
     window.aura.petChatSend(t)
   }
   sendBtn.addEventListener('click', send)
@@ -2206,25 +2205,33 @@ function setupChat () {
   /* ---- 助手核心联动：对话统一由 assistant:* 回流到头顶气泡 ---- */
   if (window.aura.onAssistantDelta) {
     let asstSeq = null
+    let asstBuf = ''
     window.aura.onAssistantDelta(({ seq, text, reset }) => {
       if (reset || seq !== asstSeq) {
         asstSeq = seq
+        asstBuf = String(text || '')
         statusSet('think')
-        bubbleShow(String(text || '') || '…')
+        // 0.49.0 等待期不显示「…」；<listen>（她决定不接话）也不显示
+        if (asstBuf.trim() === '<listen>') { bubbleKeep(1); return }
+        if (asstBuf) bubbleShow(asstBuf)
         return
       }
+      asstBuf += String(text || '')
+      if (asstBuf.trim() === '<listen>') { bubbleKeep(1); return } // 0.49.0 她决定不接话
       bubbleShow((bubble.textContent === '…' ? '' : bubble.textContent) + text)
     })
     // 工具调用 → 状态气泡按 kind 显示（不再直接贴工具名）
     window.aura.onAssistantTool(({ name }) => {
       statusSet(TOOL_KIND[name] || 'work', name)
     })
-    window.aura.onAssistantDone(({ content, display, external }) => {
+    window.aura.onAssistantDone(({ content, display, external, silent }) => {
       // 主动台词（看屏陪伴/时间观念/闹钟）已经由 pet_say 播过气泡与朗读，
       // 这里再渲染一遍就是同一句话念两次（双声道）——只让聊天窗记账
       if (external) return
       generating = false
       statusClear()
+      // 0.49.0 她决定不接话（模型回 <listen>）：不显示不朗读，安静地听着
+      if (silent) return
       // 台词（content，日语等）用于朗读；字幕（display，如中文）用于气泡显示
       const line = String(content || '')
       const txt = display || line || '（空回复）'
@@ -2237,9 +2244,9 @@ function setupChat () {
     window.aura.onAssistantError(({ message }) => {
       generating = false
       statusClear()
-      const msg = '⚠ ' + String(message || '出错了').replace(/\s+/g, ' ').slice(0, 140)
-      bubbleShow(msg)
-      bubbleKeep()
+      // 0.49.0 错误也从说话气泡退场：状态气泡短显 + 主进程日志已有 [assistant] send 失败留痕
+      statusSet('work', '出错了')
+      try { window.aura.reportError('voice', 'assistant 出错：' + String(message || '').slice(0, 140), '') } catch { }
     })
   }
 
@@ -2526,41 +2533,50 @@ function setupChat () {
     if (blob.size < 2000) return // 太短，视为噪声
     try {
       const b64 = await blobToB64(blob)
-      // 录音刚结束就要给反馈：本地 whisper 冷启动要 2~4 秒，什么都不显示会被当成卡死
-      bubbleShow('… 听到了，正在识别')
-      bubbleKeep(20000)
+      // 0.49.0 气泡只留她说话的（主人拍板）：等待期什么都不显示，识别失败/没听清
+      // 全走 reportError 留痕，不再冒「没听清再说一遍」这类系统气泡。
+      // 安静本身也是一种回应——真人在旁边听，没听清多半是笑笑就过去了。
       const r = await window.aura.petTranscribe(b64, 'audio/webm', pcmB64, 'pet')
       if (r && r.ok && r.text) {
         // 0.38.0 识别结果过滤：常开麦会对着静音/空调声断句，出来的「嗯。」「그.」
         // 直接进对话就是她莫名其妙回一句。只拦明显不对的，不猜内容。
         const verdict = window.speechFilter ? window.speechFilter.looksLikeSpeech(r.text) : { ok: true, text: r.text }
         if (!verdict.ok) {
-          bubbleShow('没听清，再说一遍？')
-          bubbleKeep(3000)
+          try { window.aura.reportError('voice', '没过话感过滤（' + (verdict.reason || '?') + '）：' + String(r.text).slice(0, 40), '') } catch { }
+          return // 安静，不接话
+        }
+        // 0.49.0 层 1：纯应声不进对话——真人听人说话，语气词只是「听见了」，不是接话
+        if (window.speechFilter && window.speechFilter.isFiller && window.speechFilter.isFiller(verdict.text)) {
+          try { console.warn('[voice] 纯应声不接话：' + verdict.text) } catch { }
+          softAck() // 偶尔轻轻应一声，让她像真的在听
           return
         }
-        // 0.48.0 声纹结果：诚实显示「是谁在说」，主人一眼可见（不拦话——判错宁可漏不误）
-        if (r.enrolled && r.samples >= 3) bubbleShow('✓ 声纹注册完成（3 段样本）')
-        else if (r.enrolled) bubbleShow('✓ 声纹样本已收下（' + r.samples + '/3）')
-        else if (r.speaker === 'owner') bubbleShow('✓ 他的声音（' + Number(r.sim).toFixed(2) + '）')
-        else if (r.speaker === 'maybe') bubbleShow('? 像是他的声音（' + Number(r.sim).toFixed(2) + '）')
-        else if (r.speaker === 'other') bubbleShow('⚠ 不是他的声音（' + Number(r.sim).toFixed(2) + '）')
-        if (r.speaker) {
-          bubbleKeep(1500)
-          setTimeout(() => { try { bubbleShow('…'); bubbleKeep(20000) } catch { } }, 1500)
-        }
         generating = true
-        if (!r.speaker) bubbleShow('…')
-        window.aura.petChatSend(verdict.text || r.text)
+        // 0.49.0 语音消息带 voice 标记：模型可以自己判断这句话需不需要回应（<listen> 协议）
+        window.aura.petChatSend(verdict.text || r.text, true)
       } else if (r && r.ok) {
-        // 识别通了但没文字：多半是太轻/太短/纯噪音，别静默吞掉
-        bubbleShow('没听清，再说一遍？')
-        bubbleKeep(4000)
+        // 识别通了但没文字：多半是太轻/太短/纯噪音，留痕不冒泡
+        try { window.aura.reportError('voice', '识别通了但没文字（太轻/太短/纯噪音）', '') } catch { }
       } else if (r && r.message && !/未知|empty/i.test(r.message)) {
-        bubbleShow('⚠ 语音识别失败：' + r.message)
-        bubbleKeep(8000)
+        try { window.aura.reportError('voice', '语音识别失败：' + r.message, '') } catch { }
       }
-    } catch (e) { bubbleShow('⚠ 语音识别异常: ' + e.message); bubbleKeep(8000) }
+    } catch (e) { try { window.aura.reportError('voice', '语音识别异常: ' + e.message, '') } catch { } }
+  }
+
+  /* 0.49.0 轻应声：听见了，偶尔轻轻应一声。真人在旁边听人说话不会句句都接，
+   * 但一个字也不出又像没在听——低频率（90s 冷却 + 35% 概率）+ 随机延迟，
+   * 她正忙着（生成中/说话中）就不插嘴。 */
+  let softAckAt = 0
+  function softAck () {
+    const now = Date.now()
+    if (now - softAckAt < 90000) return
+    if (Math.random() > 0.35) return
+    softAckAt = now
+    setTimeout(() => {
+      if (generating || (typeof nowPlaying !== 'undefined' && nowPlaying)) return
+      bubbleShow('嗯')
+      bubbleHoldVoice('嗯')
+    }, 400 + Math.random() * 600)
   }
 
   function startVad () {
@@ -2582,6 +2598,9 @@ function setupChat () {
         }
       }
       if (rms > 0.045) {
+        // 0.49.0 注视锁：你说话期间她一直看着你（视线保持不松）——真人听人说话
+        // 眼睛是跟着人走的，不是转头看别处等你闭嘴。光标在哪，注意力就在哪。
+        cursorMoveAt = performance.now()
         if (!speaking) {
           speaking = true
           chunks = []
@@ -2906,10 +2925,9 @@ function setupChat () {
     micDesired = !on
     localStorage.setItem(KEY, micDesired ? '1' : '0')
     applyMic()
-    // 0.48.13 显式气泡反馈：11-09 日志实锤 4 次误关（17:30/17:33/19:40 都是想「让她听」
-    // 点成了切换关）——切换式按钮必须让点击结果一目了然
-    bubbleShow(micDesired ? '👂 开始听你说话' : '🔇 不听你说话了（想让我听就再点一下）')
-    bubbleKeep()
+    // 0.49.0 反馈从说话气泡挪到状态气泡（主人拍板：说话气泡只留她说的话）；
+    // 误关警示仍然要有（11-09 日志实锤 4 次误关），只是不再用她「说话」的气泡
+    statusSet('work', micDesired ? '在听' : '不听')
   })
   // hold：按住说，松手识别（press 期间 VAD 起作用，松手立刻收尾）
   mic.addEventListener('pointerdown', () => {
@@ -2962,7 +2980,7 @@ function setupMenu (chat) {
       petPaused = !petPaused
       syncPauseLabel()
       try { window.aura.petSetPaused(petPaused) } catch { }
-      chat?.bubble(petPaused ? '⏸ 先歇一会儿' : '▶ 我回来啦')
+      statusSet('work', petPaused ? '歇一会' : '回来了')
       chat?.keep(1800)
     } else if (act === 'chat') {
       if (petInputBubble) chat.show()
@@ -2975,7 +2993,7 @@ function setupMenu (chat) {
       try { window.aura.petCfgPatch({ petTheme: next }) } catch { }
     } else if (act === 'sound') {
       try { window.aura.petCfgPatch({ petSound: !petSound }) } catch { }
-      chat?.bubble(petSound ? '🔊 音效已关' : '🔊 音效已开')
+      statusSet('work', petSound ? '音效关' : '音效开')
       chat?.keep(1800)
     } else if (act === 'dress') {
       try {
