@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #stage {
+    width: 372px; height: 292px;
+    border-radius: 14px;
+    background: rgba(24, 26, 34, 0.82);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    transition: opacity .6s ease;
+    color: #e8e6f0;
+  }
+  #stage.dim { opacity: .55; }
+  /* 顶栏：她在干嘛 */
+  #head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px 6px;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex: none;
+  }
+  #dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #9f8cff;
+    animation: pulse 2s ease-in-out infinite;
+    flex: none;
+  }
+  @keyframes pulse { 0%,100% { opacity: .4 } 50% { opacity: 1 } }
+  #what { font-weight: 600; flex: none; }
+  #think { opacity: .7; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 内容区 */
+  #body { flex: 1; overflow: hidden; padding: 8px 12px; font-size: 12px; position: relative; }
+  .kind { display: none; height: 100%; }
+  .kind.on { display: block; }
+  /* bili */
+  #bili-list { height: 100%; overflow: hidden; }
+  .vrow {
+    display: flex; gap: 8px; padding: 5px 6px; border-radius: 6px;
+    align-items: center; transition: background .3s;
+  }
+  .vrow.sel { background: rgba(159, 140, 255, .22); }
+  .vrow .thumb {
+    width: 52px; height: 30px; border-radius: 4px; flex: none;
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+  }
+  .vrow .vt { flex: 1; min-width: 0; }
+  .vrow .vtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .vrow .vmeta { font-size: 10px; opacity: .55; margin-top: 2px; }
+  /* files */
+  #files-list .frow { display: flex; gap: 8px; padding: 4px 6px; border-radius: 6px; align-items: baseline; }
+  #files-list .frow.sel { background: rgba(159, 140, 255, .22); }
+  #files-list .fname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #files-list .fsize { font-size: 10px; opacity: .55; flex: none; }
+  #file-view {
+    position: absolute; inset: 8px 12px; background: rgba(24,26,34,.95); border-radius: 8px;
+    padding: 10px; overflow: hidden; display: none;
+  }
+  #file-view.on { display: block; }
+  #file-view .fv-name { font-size: 11px; opacity: .75; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,.1); padding-bottom: 4px; }
+  #file-view .fv-body { font-size: 11px; line-height: 1.65; opacity: .9; max-height: 200px; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
+  /* write */
+  #paper {
+    height: 100%; border-radius: 8px; padding: 10px 12px;
+    background: rgba(250, 246, 235, .92); color: #3a3548;
+    font-size: 12px; line-height: 1.75; overflow: hidden;
+    white-space: pre-wrap; word-break: break-all;
+    box-shadow: inset 0 0 24px rgba(180, 160, 120, .15);
+  }
+  /* daze */
+  #daze { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; opacity: .9; }
+  #daze .dz-icon { font-size: 34px; animation: breathe 3.5s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { transform: scale(1); opacity: .7 } 50% { transform: scale(1.12); opacity: 1 } }
+  #daze .dz-text { font-size: 12px; opacity: .75; }
+  /* 底栏：她刚说的话 */
+  #foot {
+    flex: none; padding: 6px 12px 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 11px; line-height: 1.5; color: #cfc8ff;
+    min-height: 30px; max-height: 52px; overflow: hidden;
+  }
+  #foot:empty { display: none; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="head">
+      <div id="dot"></div>
+      <div id="what">莱莎的小屏幕</div>
+      <div id="think"></div>
+    </div>
+    <div id="body">
+      <div class="kind" id="k-bili"><div id="bili-list"></div></div>
+      <div class="kind" id="k-files">
+        <div id="files-list"></div>
+        <div id="file-view"><div class="fv-name"></div><div class="fv-body"></div></div>
+      </div>
+      <div class="kind" id="k-write"><div id="paper"></div></div>
+      <div class="kind" id="k-daze"><div class="dz-icon">💤</div><div class="dz-text">趴着打盹…</div></div>
+    </div>
+    <div id="foot"></div>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id)
+    const KINDS = ['bili', 'files', 'write', 'daze']
+    const PALETTE = ['#8ea7ff', '#ffb7c5', '#ffd59e', '#a8e6cf', '#c9b1ff', '#ffe0ac']
+
+    function showKind (k) {
+      for (const it of KINDS) $('k-' + it).classList.toggle('on', it === k)
+    }
+
+    window.stg.onScene((sc) => {
+      if (!sc) return
+      $('what').textContent = sc.title || '莱莎的小屏幕'
+      $('think').textContent = ''
+      $('foot').textContent = ''
+      $('stage').classList.remove('dim')
+      showKind(sc.kind)
+      if (sc.kind === 'bili') {
+        const list = $('bili-list')
+        list.innerHTML = ''
+        for (const v of (sc.items || [])) {
+          const row = document.createElement('div')
+          row.className = 'vrow' + (v.sel ? ' sel' : '')
+          row.dataset.bvid = v.bvid || ''
+          const th = document.createElement('div')
+          th.className = 'thumb'
+          th.style.background = PALETTE[(v.i || 0) % PALETTE.length] + '55'
+          th.textContent = '▶'
+          const vt = document.createElement('div')
+          vt.className = 'vt'
+          const t1 = document.createElement('div')
+          t1.className = 'vtitle'
+          t1.textContent = v.title || ''
+          const t2 = document.createElement('div')
+          t2.className = 'vmeta'
+          t2.textContent = v.meta || ''
+          vt.append(t1, t2)
+          row.append(th, vt)
+          list.appendChild(row)
+        }
+      } else if (sc.kind === 'files') {
+        const list = $('files-list')
+        list.innerHTML = ''
+        $('file-view').classList.remove('on')
+        for (const f of (sc.items || [])) {
+          const row = document.createElement('div')
+          row.className = 'frow'
+          const n = document.createElement('div')
+          n.className = 'fname'
+          n.textContent = (f.dir ? '📁 ' : '📄 ') + (f.name || '')
+          const s = document.createElement('div')
+          s.className = 'fsize'
+          s.textContent = f.size || ''
+          row.append(n, s)
+          list.appendChild(row)
+        }
+      } else if (sc.kind === 'write') {
+        $('paper').textContent = ''
+      } else if (sc.kind === 'daze') {
+        $('daze').querySelector('.dz-text').textContent = sc.text || '趴着打盹…'
+      }
+    })
+
+    window.stg.onThinking((t) => { $('think').textContent = t || '' })
+
+    window.stg.onAppend((t) => {
+      const p = $('paper')
+      p.textContent += t || ''
+      p.scrollTop = p.scrollHeight
+    })
+
+    window.stg.onFileView((fv) => {
+      if (!fv) return
+      $('file-view').querySelector('.fv-name').textContent = fv.name || ''
+      $('file-view').querySelector('.fv-body').textContent = fv.body || ''
+      $('file-view').classList.add('on')
+    })
+
+    window.stg.onLine((t) => { $('foot').textContent = t || '' })
+
+    window.stg.onDone(() => { $('stage').classList.add('dim'); $('think').textContent = '' })
+  </script>
+</body>
+</html>

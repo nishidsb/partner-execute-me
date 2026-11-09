@@ -386,6 +386,8 @@ window.AuraI18n.STRINGS.en = {
     autonomyCount: 'Max sessions per day',
     autonomyMax: 'Safety cap (minutes): only a runaway guard — she gets a heads-up before it hits; she should finish what she set out to do',
     autoRun: 'Let her run once now (just sit and watch; the result stays below when done)',
+    stage: 'Her little screen (on by default: a small panel that never steals focus and is always click-through. While you are away or gaming, she browses real Bilibili trends, flips through her own files, writes short notes, or naps inside it — real content, 100% of control stays with you)',
+    stageVoice: 'Murmur aloud while active (off = she only writes on the screen, no voice)',
     scan: 'Collect now',
     view: 'See what she sees',
     eye: 'See how she sees you',

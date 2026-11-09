@@ -1350,6 +1350,9 @@ async function renderCpSettings () {
   // 0.44.0 键盘与输入内容
   if ($('cpKeyOn')) $('cpKeyOn').checked = cs.keyLogOn === true
   if ($('cpAuto')) $('cpAuto').checked = cs.autonomyOn === true
+  // 0.51.0 她的小屏幕
+  if ($('cpStageOn')) $('cpStageOn').checked = cs.stageOn !== false
+  if ($('cpStageVoice')) $('cpStageVoice').checked = cs.stageVoiceOn !== false
   // 0.45.0 自主活动三挡位
   pcSyncAutoLevels(cs)
   if ($('cpAutoDir')) $('cpAutoDir').value = String(cs.autonomyDir || '')
@@ -1910,6 +1913,9 @@ const cpGather = () => ({
   pcProfileOn: $('cpPcOn') ? $('cpPcOn').checked : false,
   keyLogOn: $('cpKeyOn') ? $('cpKeyOn').checked : false,
   autonomyOn: $('cpAuto') ? $('cpAuto').checked : false,
+  // 0.51.0 她的小屏幕
+  stageOn: $('cpStageOn') ? $('cpStageOn').checked : true,
+  stageVoiceOn: $('cpStageVoice') ? $('cpStageVoice').checked : true,
   autonomyLevel: (() => {
     const el = document.querySelector('input[name="cpAutoLevel"]:checked')
     return el ? Number(el.value) || 1 : 1

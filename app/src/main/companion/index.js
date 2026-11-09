@@ -19,6 +19,9 @@ const llm = require('./llm')
  * 路由钩子只在调用瞬间读缓存（localLlm.pick），不阻塞；配置在 registerIpc 与
  * patchCfg 两处同步。 */
 const localLlm = require('./localLlm')
+/* 0.51.0 她的小屏幕（主人拍板「两者共存」）：她的可见活动走这块零控制权的小屏幕，
+ * autonomy（真开浏览器/动键鼠）保留但默认关。stage.js 在 main/ 层（窗口基建）。 */
+const stage = require('../stage')
 function applyLocalLlm () {
   const c = cfg()
   localLlm.configure({ on: c.localLlmOn !== false, url: c.localLlmUrl, model: c.localLlmModel })
@@ -446,6 +449,10 @@ function patchCfg (patch) {
   // 0.50.0 本地大模型配置变化即时生效
   if (patch.localLlmOn !== undefined || patch.localLlmUrl !== undefined || patch.localLlmModel !== undefined) {
     try { applyLocalLlm() } catch (e) { log('[localLlm] 重配失败：' + (e && e.message)) }
+  }
+  // 0.51.0 她的小屏幕开关即时生效（开=建窗/关=拆窗；嘀咕声只是配置，读侧生效）
+  if (patch.stageOn !== undefined) {
+    try { stage.configure({ stageOn: patch.stageOn }) } catch (e) { log('[stage] 重配失败：' + (e && e.message)) }
   }
   /* 0.45.66：换了模型或接口就重新试一次「能不能看图」。
    * visionNoImage 是上次真机发图被 400 之后落的盘，跟着旧模型走的；不清掉的话
@@ -2344,6 +2351,34 @@ function stopAutonomy () {
   try { if (autonomyInst) autonomyInst.stop() } catch { }
 }
 
+/* 0.51.0 她的小屏幕调度（主人拍板「两者共存」：stage 是默认活动形态——
+ * 真实数据、零控制权、全屏游戏上也可见；autonomy 保留但默认关）。
+ * 嘀咕统一走 sayNarration（一本账：气泡+低音量+字幕+账本同源）。 */
+let stageInst = null
+function startStage () {
+  if (stageInst) return stageInst
+  stageInst = require('./stageRunner').create({
+    cfgGet: () => cfg(),
+    log,
+    stage,
+    llm,
+    llmCfg: () => ({ baseUrl: cfg().apiBaseUrl, apiKey: cfg().apiKey, model: cfg().apiModel, replyLang: cfg().replyLang || 'zh' }),
+    wsDir: () => curWsDir,
+    spaceDir: () => {
+      const custom = String(cfg().autonomyDir || '').trim()
+      return custom || (curWsDir ? require('node:path').join(curWsDir, 'her-space') : '')
+    },
+    tastes: () => { try { return self.getTastes(curWsDir) } catch { return [] } },
+    isBusy: () => !!genAbort,
+    sleepQuiet: () => !!(nudgeRec.sleepUntil && Date.now() < Number(nudgeRec.sleepUntil)),
+    autonomyBusy: () => !!(autonomyInst && autonomyInst.status && autonomyInst.status().running),
+    say: sayNarration,
+    waitVoiceDone: (seq, ms) => { try { return require('../petBridge').waitVoiceDone(seq, ms) } catch { return Promise.resolve(true) } }
+  })
+  stageInst.start()
+  return stageInst
+}
+
 /* 0.45.8 自主活动的经历沉淀 → 0.45.12 泛化为 distillExperience：
    「所有功能都必须默认写进记忆」——不只是自主活动，陪学/好奇心/欢迎回来的经历
    都走同一条管线（做梦式解析 → 审查册 → dreamAutoApprove 时直接进长期记忆）。
@@ -4002,6 +4037,9 @@ function settingsView () {
     keyLogOn: c.keyLogOn === true,
     // 0.43.0 没人的时候她自己用电脑（默认关：这是真的会动键鼠的功能）
     autonomyOn: c.autonomyOn === true,
+    // 0.51.0 她的小屏幕（默认开：零控制权的可见活动，B站/翻文件/写字/打盹）
+    stageOn: c.stageOn !== false,
+    stageVoiceOn: c.stageVoiceOn !== false,
     // 0.45.0 三挡位：1 只看看 / 2 我的地盘（指定目录随意读写）/ 3 完全开放
     autonomyLevel: Math.min(3, Math.max(1, Number(c.autonomyLevel) || 1)),
     autonomyDir: String(c.autonomyDir || ''),
@@ -4896,6 +4934,11 @@ function bootPet () {
   // 0.45.12 自动学习模式：她发现他在学，就自己安静地陪（不是开关，是她的自觉）
   try { startStudyAuto() } catch (err) { log('[study] 自动模式启动失败: ' + (err && err.message)) }
   try { startAutonomy() } catch (err) { log('[autonomy] 启动失败: ' + (err && err.message)) }
+  // 0.51.0 她的小屏幕：stage 默认开（stageOn !== false），窗口与调度一起起
+  try {
+    startStage()
+    if (cfg().stageOn !== false) stage.start()
+  } catch (err) { log('[stage] 启动失败: ' + (err && err.message)) }
   // 她自己待着（0.37.0）：没人跟她说话时，她自己找点事做并记下来
   try { startCuriosity() } catch (err) { log('[curiosity] 启动失败: ' + (err && err.message)) }
   if (!g.global.companion || g.global.companion.petOn !== false) pet.show()
