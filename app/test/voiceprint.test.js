@@ -123,6 +123,11 @@ test('0.48.0 接线锁死：transcribe 带 PCM 验声纹、chatter/reply 两处�
   assert.ok(pet.includes('function vpAttach ()'), 'ScriptProcessor 连续采集挂载')
   const pre = fs2.readFileSync(path.join(__dirname, '../src/preload/overlay.js'), 'utf8')
   assert.ok(pre.includes('(b64, mime, pcmB64)'), 'preload 透传 PCM 参数')
+  // 0.48.1 面板按键说话同款接线（15:32 主人走面板说话零声纹日志的缺口）
+  const panel = fs2.readFileSync(path.join(__dirname, '../src/renderer/companion/app.js'), 'utf8')
+  assert.ok(panel.includes("transcribe(b64, 'audio/webm', pcmB64)"), '面板 transcribe 也带 PCM')
+  assert.ok(panel.includes('createScriptProcessor'), '面板也有 ScriptProcessor 采集')
+  assert.ok(panel.includes('✓ 他的声音'), '面板展示声纹判定（诚实显示）')
 })
 
 test('0.48.0 隐私红线：模板只存嵌入向量，不存任何音频字节', () => {

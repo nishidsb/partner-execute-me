@@ -286,23 +286,91 @@ setInterval(ctxRingRefresh, 6000)
 /* ---------------- 语音输入（Whisper 兼容端点） ---------------- */
 let recorder = null
 let chunks = []
+// 0.48.0 声纹：与 pet.js 同款 PCM 采集（面板按键说话这条口也要能「认人」）。
+// 实现说明见 pet.js vpAttach 注释——ScriptProcessor 连续采，与 MediaRecorder 同一括号。
+let vpCtx = null
+let vpProcessor = null
+let vpSink = null
+let vpPcm = []
+function vpAttach (ctx, stream) {
+  try {
+    vpCtx = ctx
+    vpPcm = []
+    vpProcessor = ctx.createScriptProcessor(4096, 1, 1)
+    vpProcessor.onaudioprocess = (e) => {
+      if (recorder) vpPcm.push(new Float32Array(e.inputBuffer.getChannelData(0)))
+    }
+    ctx.createMediaStreamSource(stream).connect(vpProcessor)
+    vpSink = ctx.createGain()
+    vpSink.gain.value = 0 // 不出声，只让回调跑起来
+    vpProcessor.connect(vpSink)
+    vpSink.connect(ctx.destination)
+  } catch (e) {
+    vpProcessor = null
+  }
+}
+function vpDetach () {
+  if (vpProcessor) { try { vpProcessor.disconnect() } catch { } vpProcessor.onaudioprocess = null; vpProcessor = null }
+  if (vpSink) { try { vpSink.disconnect() } catch { } vpSink = null }
+  vpPcm = []
+}
+/** 攒到的原始 PCM → 16k Int16 base64（与 pet.js vpTakePcm 同实现） */
+function vpTakePcm () {
+  if (!vpPcm.length || !vpCtx) { vpPcm = []; return '' }
+  const sr = vpCtx.sampleRate
+  let total = 0
+  for (const c of vpPcm) total += c.length
+  const raw = new Float32Array(total)
+  let o = 0
+  for (const c of vpPcm) { raw.set(c, o); o += c.length }
+  vpPcm = []
+  const n = Math.max(1, Math.floor(raw.length * 16000 / sr))
+  const out = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const p = i * (raw.length - 1) / Math.max(1, n - 1)
+    const i0 = Math.floor(p)
+    const i1 = Math.min(raw.length - 1, i0 + 1)
+    out[i] = raw[i0] + (raw[i1] - raw[i0]) * (p - i0)
+  }
+  const i16 = new Int16Array(n)
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, out[i]))
+    i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff
+  }
+  const bytes = new Uint8Array(i16.buffer)
+  let s = ''
+  const CH = 0x8000
+  for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH))
+  return btoa(s)
+}
 $('btnMic').addEventListener('pointerdown', async () => {
   if (recorder) return
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    vpCtx = new (window.AudioContext || window.webkitAudioContext)()
+    vpAttach(vpCtx, stream)
     chunks = []
     recorder = new MediaRecorder(stream)
     recorder.ondataavailable = (e) => chunks.push(e.data)
     recorder.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop())
+      const pcmB64 = vpTakePcm()
+      vpDetach()
+      try { vpCtx.close() } catch { }
+      vpCtx = null
       $('btnMic').classList.remove('rec')
       const blob = new Blob(chunks, { type: 'audio/webm' })
       if (blob.size < 1200) return
       const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())))
       addMsg('', t('mic.doing'), 'syserr')
-      const r = await window.companion.transcribe(b64, 'audio/webm')
+      const r = await window.companion.transcribe(b64, 'audio/webm', pcmB64)
       const last = $('chat').lastChild
       if (last && last.textContent === t('mic.doing')) last.remove()
+      // 0.48.0 声纹：诚实显示「是谁在说」（不拦话——判错宁可漏不误）
+      if (r.speaker === 'owner') addMsg('', '✓ 他的声音（' + Number(r.sim).toFixed(2) + '）', 'sys')
+      else if (r.speaker === 'maybe') addMsg('', '? 像是他的声音（' + Number(r.sim).toFixed(2) + '）', 'sys')
+      else if (r.speaker === 'other') addMsg('', '⚠ 不是他的声音（' + Number(r.sim).toFixed(2) + '）', 'syserr')
+      else if (r.enrolled) addMsg('', '✓ 声纹样本已收下（' + r.samples + '/3）', 'sys')
       if (r.ok && r.text) {
         // 0.38.0：同一套「像不像话」过滤，别把「嗯。」「그.」当一句话发出去
         const v = window.speechFilter ? window.speechFilter.looksLikeSpeech(r.text) : { ok: true, text: r.text }
