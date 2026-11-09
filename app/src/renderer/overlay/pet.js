@@ -2540,7 +2540,12 @@ function setupChat () {
       if (r && r.quiet) {
         // 0.49.2 背景响度闸（主进程判定）：环境噪音连 ASR 都不进——Whisper 对着
         // 噪音会幻觉出「中文字幕组」这种字，她莫名其妙回一句（21:02~03 实锤五连）
-        try { window.aura.reportError('voice', '背景响度，不进对话（p90<0.045）', '') } catch { }
+        // 0.49.5 陌生声纹闸：很响的视频外放响度过闸，但声纹 sim<0.30 的强 other
+        //（崩坏3歌词「我会在你身边」/署名「词曲 李宗盛」23:02~05 实锤）也连 ASR 都不进
+        const why = r.gate === 'stranger'
+          ? '不是他的声音（声纹 sim=' + Number(r.sim).toFixed(2) + '）——不进对话'
+          : '背景响度，不进对话（p90<0.045）'
+        try { window.aura.reportError('voice', why, '') } catch { }
         return
       } else if (r && r.ok && r.text) {
         // 0.38.0 识别结果过滤：常开麦会对着静音/空调声断句，出来的「嗯。」「그.」

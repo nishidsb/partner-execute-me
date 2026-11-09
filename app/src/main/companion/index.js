@@ -3655,6 +3655,17 @@ async function transcribe (base64, mime, pcmB64, via) {
       }
     } catch (e) { log('[voice] 响度闸异常：' + (e && e.message)) }
   }
+  // 0.49.5 陌生声纹闸：23:02~23:05 实锤视频外放变成「他说的话」——崩坏3歌词
+  // 「我会在你身边，你会在我身边。」和署名字幕「词曲 李宗盛」被 Whisper 转出来
+  // 进了对话，她认真回了（主人：「是不是把视频声音也当成我说的话了啊」）。
+  // 响度闸只拦得住安静的噪音，拦不住很响的外放。声纹数据已齐：外放/他人声
+  // sim 0.01~0.23，主人真声最差被判错的一次也有 0.49（0.72/0.55 阈），中间
+  // 空档干净——sim<0.30 的强 other 连 ASR 都不进（顺带给 whisper 队列卸压）。
+  // 真声远场误伤风险待观察，留痕齐全随时回调。注册模式豁免。
+  if (vp && vp.speaker === 'other' && Number(vp.sim) < 0.30 && c.voiceprintEnroll !== true) {
+    log('[voice] 陌生声纹（sim=' + Number(vp.sim).toFixed(2) + ' < 0.30，口=' + vpVia + '）——不进 ASR 不进对话')
+    return { ok: true, text: '', quiet: true, gate: 'stranger', speaker: vp.speaker, sim: vp.sim }
+  }
   const r = await transcribeBase(base64, mime)
   // 0.48.5：ASR 失败也要回传声纹判定（两者互相独立，别让转写失败吞掉「是谁在说」）
   if (vp && r) { r.speaker = vp.speaker; r.sim = vp.sim; if (vp.enrolled) { r.enrolled = true; r.samples = vp.samples } }

@@ -92,3 +92,27 @@ test('0.49.4 startVad 聋流看门狗：连续全零→恢复+reportError，有�
   const hearTickAt = src.indexOf('hearTick(rms)')
   assert.ok(watchdogAt > 0 && hearTickAt > watchdogAt, '看门狗与 hearTick 同 tick（感知同源同护）')
 })
+
+/* 0.49.5 陌生声纹闸：23:02~23:05 实锤视频外放变成「他说的话」——崩坏3歌词
+ * 「我会在你身边，你会在我身边。」和署名「词曲 李宗盛」被 Whisper 转出来进对话。
+ * 响度闸只拦安静的噪音，拦不住很响的外放；声纹数据空档干净：外放 sim 0.01~0.23，
+ * 主人真声最差误判 0.49——sim<0.30 强 other 连 ASR 都不进（注册模式豁免）。 */
+test('0.49.5 陌生声纹闸：sim<0.30 强 other 在 ASR 前掉落，注册模式豁免', () => {
+  const src = R('../src/main/companion/index.js')
+  assert.ok(src.includes("vp.speaker === 'other'"), '强 other 判定')
+  assert.ok(src.includes('Number(vp.sim) < 0.30'), 'sim<0.30 闸值（真声最差误判 0.49 在闸上）')
+  assert.ok(src.includes('陌生声纹'), '掉落留痕')
+  assert.ok(src.includes("gate: 'stranger'"), '返回带 gate 标记')
+  assert.ok(src.includes('c.voiceprintEnroll !== true'), '注册模式豁免')
+  // 闸必须在 ASR 之前（连转写都不进，顺带卸 whisper 队列压力）
+  const gateAt = src.indexOf("gate: 'stranger'")
+  const asrAt = src.indexOf('const r = await transcribeBase(base64, mime)')
+  assert.ok(gateAt > 0 && asrAt > gateAt, '陌生声纹闸在 ASR 之前')
+})
+
+test('0.49.5 渲染层：quiet 分支区分响度闸与陌生声纹闸', () => {
+  const src = R('../src/renderer/overlay/pet.js')
+  assert.ok(src.includes("r.gate === 'stranger'"), '按 gate 分流')
+  assert.ok(src.includes('不是他的声音'), '声纹掉落留痕可分诊')
+  assert.ok(src.includes('背景响度，不进对话（p90<0.045）'), '响度闸留痕保留')
+})
