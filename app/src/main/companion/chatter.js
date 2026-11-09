@@ -340,8 +340,13 @@ function createChatter (deps) {
           try { mirror = String(recentVoices(8, voicesim.REPEAT_WINDOW_MS) || '') } catch { }
           const voiceList = mirror ? mirror.split('\n').map((s) => s.trim()).filter(Boolean) : []
           // 0.47.2 长期镜：24h 内说过的全部话（事件文件跨重启留存），只用来拦一字不差
+          // 0.47.4 兼容两种形状：companion 的依赖实现返回 join('\n') 字符串（90min 镜按字符串消费），
+          // 测试桩返回数组——11-09 真机实锤字符串直接 .some 抛 TypeError 崩整个 tick
           let longList = []
-          try { longList = recentVoices(0, VERBATIM_WINDOW_MS) || [] } catch { }
+          try {
+            const lv = recentVoices(0, VERBATIM_WINDOW_MS)
+            longList = Array.isArray(lv) ? lv : String(lv || '').split('\n').map((s) => s.trim()).filter(Boolean)
+          } catch { }
           const escape = swallowStreak >= SWALLOW_ESCAPE
           if (escape) log('[chatter] 连续咽回去 ' + swallowStreak + ' 句，泄压放行一轮（近似原句照拦）')
           let passed = r.lines.filter((line) => {

@@ -75,6 +75,49 @@ test('24h 一字不差闸：90 分钟窗外说过的原句再生成会被咽回�
   assert.ok(swallowed[0].includes('別の画面'), '咽回去的正是那句复读')
 })
 
+test('0.47.4 依赖返回字符串形状（真机接线）也要能拦：11-09 实锤字符串 .some 崩 tick', async () => {
+  const said2hAgo = '手元はもう別の画面。切り替えの速さが、少し羨ましい。'
+  const llm = require('../src/main/companion/llm')
+  const origChat = llm.chatStream
+  llm.chatStream = async () => ({ content: said2hAgo })
+  // 真机形状：companion/index.js 的适配层把事件文件 join('\n') 成字符串再给 chatter
+  const recentVoices = (n, sinceMs) => {
+    if (sinceMs && sinceMs <= 90 * 60 * 1000) return ''
+    return [said2hAgo].join('\n')
+  }
+  const swallowed = []
+  const said = []
+  const { createChatter } = require('../src/main/companion/chatter')
+  const inst = createChatter({
+    log: () => { },
+    cfgGet: () => ({ apiBaseUrl: 'http://x', apiModel: 'm', chatterVoiceOn: false }),
+    state: () => ({ quiet: 0 }),
+    isBusy: () => false,
+    say: async (t) => { said.push(t); return { estimateSeconds: 1 } },
+    note: () => { },
+    presence: () => 'here',
+    displeasure: () => 0,
+    recentVoices,
+    studyActive: () => false,
+    noteSwallowed: (t) => { swallowed.push(t) }
+  })
+  const origST = global.setTimeout
+  let tickFn = null
+  global.setTimeout = (fn, ms) => { if (!tickFn) tickFn = fn; return { unref: () => { } } }
+  const unfreeze = freezeDaytimeClock()
+  try {
+    inst.start()
+    await tickFn()
+  } finally {
+    unfreeze()
+    global.setTimeout = origST
+    inst.stop()
+    llm.chatStream = origChat
+  }
+  assert.deepStrictEqual(said, [], '字符串形状的 24h 镜也要拦住原句（不能崩 tick 后裸奔）')
+  assert.strictEqual(swallowed.length, 1, '字符串形状下照样进念头池')
+})
+
 test('对照组：内容真正不同的新句不被 24h 闸误伤', async () => {
   const said2hAgo = '手元はもう別の画面。切り替えの速さが、少し羨ましい。'
   const brandNew = 'このゲーム、宝括弧が閉まらないまま夜が来たね。'
