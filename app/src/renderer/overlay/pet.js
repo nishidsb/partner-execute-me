@@ -2500,6 +2500,7 @@ function setupChat () {
   let holdAt = 0
   const KEY = 'auraPetMicOn'
   const KEY_MODE = 'auraPetMicMode'
+  const KEY_SEEN = 'auraPetMicSeen' // 0.48.6 一次性迁移标记
   let micMode = localStorage.getItem(KEY_MODE) || 'always'
   let interruptOn = false
 
@@ -2795,12 +2796,14 @@ function setupChat () {
       audioCtx.createMediaStreamSource(stream).connect(analyser)
       vpAttach() // 0.48.0 声纹 PCM 采集挂上
       on = true
+      petDiagOnce('vp-mic-on', '语音捕捉已开（常驻倾听，VAD 断句 → 识别 → 发送）')
       mic.classList.add('on')
       show()
       startVad()
       hearReset()
       hearMicStop() // 语音麦接管：听觉复用它的 analyser，轻量流让位（避免双流）
     } catch (e) {
+      petDiagOnce('vp-mic-err', '开麦失败：' + (e.message || e.name))
       bubbleShow('⚠ 麦克风不可用: ' + (e.message || e.name))
       bubbleKeep()
       on = false
@@ -2808,6 +2811,7 @@ function setupChat () {
   }
   function micOff () {
     on = false
+    petDiagOnce('vp-mic-off', '语音捕捉已关（desired=' + micDesired + ' hosted=' + petHosted + '）')
     mic.classList.remove('on')
     clearInterval(vadTimer)
     vadTimer = null
@@ -2823,9 +2827,23 @@ function setupChat () {
   }
   /* 麦克风：用户意图（micDesired）与「当前是否真在录」（on）分开——
    * 角色被拖到别的屏时，旧屏关麦、新屏接管，但用户的开麦设置保持不变。
-   * 2.3：toggle/hold 模式不自动开麦（开麦只由显式交互触发）。 */
-  let micDesired = localStorage.getItem(KEY) === '1'
+   * 2.3：toggle/hold 模式不自动开麦（开麦只由显式交互触发）。
+   * 0.48.6：无历史记录时默认常驻倾听开（主人 11-09 拍板「我都是有麦的，
+   * 我直接说话」——他要的就是对着她说就能被听到；显式关过则尊重记录） */
+  // 0.48.6 一次性迁移：历史上的「关」可能只是当年随手点的（主人 16:39 前后都在她
+  // 面前直接说话但从没开过麦）——不清掉的话默认开永远不生效。迁移只跑一次，
+  // 之后主人显式关闭仍被尊重。
+  if (!localStorage.getItem(KEY_SEEN)) {
+    localStorage.removeItem(KEY)
+    localStorage.setItem(KEY, '1')
+    localStorage.setItem(KEY_SEEN, '1')
+  }
+  let micDesired = localStorage.getItem(KEY) != null
+    ? localStorage.getItem(KEY) === '1'
+    : (localStorage.setItem(KEY, '1'), true)
   function applyMic () {
+    // 0.48.6 决策留痕（无条件，节流）：此前全静默，「她听不到」没法分诊
+    petDiagOnce('vp-mic', '语音捕捉决策：mode=' + micMode + ' desired=' + micDesired + ' hosted=' + petHosted + ' on=' + on)
     if (micMode !== 'always') { if (!micDesired && on) micOff(); return }
     if (micDesired && petHosted && !on) micOn()
     else if ((!micDesired || !petHosted) && on) micOff()
