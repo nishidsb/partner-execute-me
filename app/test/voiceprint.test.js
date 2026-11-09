@@ -57,20 +57,43 @@ test('0.48.0 重采样：长度按比例、数值单调（线性插值）', () =
   assert.equal(same.length, 48000, '同采样率原样返回')
 })
 
+/** 0.48.8：测试音频要有振幅（全零会被静音修剪剪空）且够长（MIN_SEC 提到 1.2、注册闸 1.5） */
+function voicePcm (sec) {
+  const n = Math.round(16000 * sec)
+  const out = new Float32Array(n)
+  for (let i = 0; i < n; i++) out[i] = Math.sin(i / 10) * 0.5
+  return out
+}
+
+test('0.48.8 静音修剪：头尾静音剪掉、峰值自适应阈值、全零不炸', () => {
+  const full = new Float32Array(32000) // 2 秒
+  for (let i = 4000; i < 28000; i++) full[i] = Math.sin(i / 10) * 0.5 // 中间 1.5s 有声
+  const tr = vp.trimSilence(full, 16000)
+  assert.equal(tr.samples.length, 24000, '头尾各剪 0.25s')
+  assert.ok(Math.abs(tr.sec - 1.5) < 0.01, '有效语音时长正确')
+  // 全零：峰值 0 → 阈值 0 → s 走到头 → 空数组不炸
+  const z = vp.trimSilence(new Float32Array(16000), 16000)
+  assert.equal(z.samples.length, 0)
+})
+
 test('0.48.0 诚实降级：没模板/没引擎/太短都如实说，绝不猜', async () => {
   vp.resetForTest()
   vp.configure({ templatePath: path.join(tmpDir(), 'template.json'), modelPath: 'x' })
   // 没引擎
-  let r = vp.verifyPcm(new Float32Array(16000), 16000, 'mic')
+  let r = vp.verifyPcm(voicePcm(2), 16000, 'mic')
   assert.equal(r.ok, false)
   assert.match(r.reason, /引擎没就绪/)
   // 有引擎但音频太短
   vp._setExtractor(fakeExtractor(() => new Array(8).fill(0.1)))
-  r = vp.verifyPcm(new Float32Array(8000), 16000, 'mic') // 0.5 秒
+  r = vp.verifyPcm(voicePcm(0.5), 16000, 'mic') // 0.5 秒
   assert.equal(r.ok, false)
   assert.match(r.reason, /太短/)
+  // 有引擎、够长、但全是静音（修剪后空）→ 如实说有效语音太短
+  r = vp.verifyPcm(new Float32Array(32000), 16000, 'mic') // 2 秒全零
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /有效语音太短/)
   // 有引擎有音频但没模板、非注册模式 → 诚实说没注册
-  r = vp.verifyPcm(new Float32Array(16000), 16000, 'mic')
+  r = vp.verifyPcm(voicePcm(2), 16000, 'mic')
   assert.equal(r.ok, false)
   assert.match(r.reason, /还没注册声纹模板/)
 })
@@ -84,13 +107,18 @@ test('0.48.0 注册→验证全链：模板落盘可重载，owner/maybe/other �
   const E_B = [0, 1, 0, 0, 0, 0, 0, 0]
   let current = E_A
   vp._setExtractor(fakeExtractor(() => current))
-  const pcm = new Float32Array(16000)
+  const pcm = voicePcm(2) // 2 秒有声
   // 注册两段 A 的声音
   const r1 = vp.verifyPcm(pcm, 16000, 'mic')
   current = E_A2
   const r2 = vp.verifyPcm(pcm, 16000, 'mic')
   assert.equal(r1.enrolled, true)
   assert.equal(r2.samples, 2)
+  // 0.48.8 自洽闸：与模板差异太大的样本拒收（E_B 与 E_A 余弦=0）
+  current = E_B
+  const r3 = vp.verifyPcm(pcm, 16000, 'mic')
+  assert.equal(r3.ok, false)
+  assert.match(r3.reason, /差异太大/)
   // 模板已落盘且可重载
   assert.ok(fs.existsSync(path.join(dir, 'template.json')))
   vp.resetForTest()
@@ -151,7 +179,7 @@ test('0.48.0 隐私红线：模板只存嵌入向量，不存任何音频字节'
   const dir = tmpDir()
   vp.configure({ templatePath: path.join(dir, 'template.json'), modelPath: 'x', enroll: true })
   vp._setExtractor(fakeExtractor(() => new Array(8).fill(0.5)))
-  vp.verifyPcm(new Float32Array(16000), 16000, 'mic')
+  vp.verifyPcm(voicePcm(2), 16000, 'mic')
   const raw = fs.readFileSync(path.join(dir, 'template.json'), 'utf8')
   const j = JSON.parse(raw)
   assert.ok(j.embs && j.embs.length === 1 && j.dim === 8, '只有嵌入')

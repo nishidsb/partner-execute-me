@@ -27,7 +27,9 @@ const fs = require('fs')
 const path = require('path')
 
 const TARGET_SR = 16000
-const MIN_SEC = 1.0
+const MIN_SEC = 1.2 // 0.48.8：1.0 → 1.2（0.29~0.53 全 other 的教训：短语音嵌入方差大到同人都能算出 0.4）
+const ENROLL_MIN_SEC = 1.5 // 注册样本修剪后最少有效语音
+const ENROLL_COHESIVE = 0.45 // 注册样本与已有模板段的最低余弦（自洽闸）
 const SAME_DEFAULT = 0.72
 const MAYBE_DEFAULT = 0.55
 const BLOCK_TTL = 3 * 60 * 1000 // 「刚这句话的声音」注入保质期
@@ -187,13 +189,33 @@ async function ensureEngine (fetchFn) {
 /** 测试注入假引擎 */
 function _setExtractor (ext) { extractor = ext }
 
+/** 0.48.8 头尾静音修剪：静音污染嵌入（旧模板三段互相只有 0.43~0.76 的教训之一）。
+ * 阈值 = 峰值振幅的 3%（自适应增益，避免低音量说话被整段剪掉）。 */
+function trimSilence (samples, rate) {
+  const n = samples.length
+  if (!n) return { samples, sec: 0, trimmedSec: 0 }
+  let peak = 0
+  for (let i = 0; i < n; i++) { const a = Math.abs(samples[i]); if (a > peak) peak = a }
+  if (peak === 0) return { samples: new Float32Array(0), sec: 0, trimmedSec: n / rate } // 纯静音：peak=0 时阈值恒 0，循环剪不动
+  const th = peak * 0.03
+  let s = 0, e = n - 1
+  while (s < n && Math.abs(samples[s]) < th) s++
+  while (e > s && Math.abs(samples[e]) < th) e--
+  const out = samples.slice(s, e + 1)
+  return { samples: out, sec: out.length / rate, trimmedSec: (n - out.length) / rate }
+}
+
 function embedFromPcm (samples, sr) {
   if (!samples || !samples.length) return { ok: false, reason: '没有音频' }
   const rate = Number(sr) || TARGET_SR
   const sec = samples.length / rate
   if (sec < MIN_SEC) return { ok: false, reason: '音频太短（' + sec.toFixed(1) + ' 秒 < ' + MIN_SEC + ' 秒）' }
   if (!extractor) return { ok: false, reason: '声纹引擎没就绪' }
-  const w = rate === TARGET_SR ? samples : resampleLinear(samples, rate, TARGET_SR)
+  const w0 = rate === TARGET_SR ? samples : resampleLinear(samples, rate, TARGET_SR)
+  const tr = trimSilence(w0, TARGET_SR)
+  const w = tr.samples
+  const validSec = tr.sec
+  if (validSec < MIN_SEC) return { ok: false, reason: '有效语音太短（' + validSec.toFixed(1) + ' 秒，静音剪掉 ' + tr.trimmedSec.toFixed(1) + ' 秒）' }
   try {
     const st = extractor.createStream()
     st.acceptWaveform({ sampleRate: TARGET_SR, samples: w })
@@ -201,7 +223,8 @@ function embedFromPcm (samples, sr) {
     // Electron ≥21 V8 内存笼拒绝 external buffer，必须第二参 false（官方 FAQ 要求）
     const emb = extractor.compute(st, false)
     if (!emb || !emb.length) return { ok: false, reason: '嵌入提取为空' }
-    return { ok: true, emb: Array.from(emb), dim: emb.length, sec }
+    const norm = Math.sqrt(emb.reduce((s, x) => s + x * x, 0))
+    return { ok: true, emb: Array.from(emb), dim: emb.length, sec, validSec, norm }
   } catch (e) {
     return { ok: false, reason: '嵌入计算失败：' + (e && e.message).slice(0, 80) }
   }
@@ -235,12 +258,24 @@ function verifyPcm (samples, sr, via) {
 }
 
 function _enrollEmb (e) {
+  // 0.48.8 注册质量闸：旧模板三段互相 0.43~0.76（「对。」1 秒样本污染），
+  // 判定端全是 other。两道闸：①修剪后有效语音 ≥1.5s；②与已有模板段余弦 ≥0.45（自洽）
+  if (e.validSec < ENROLL_MIN_SEC) {
+    return { ok: false, reason: '注册样本有效语音太短（' + e.validSec.toFixed(1) + ' 秒 < ' + ENROLL_MIN_SEC + ' 秒，请说完整一句话）' }
+  }
   if (!tmpl) tmpl = { dim: e.dim, embs: [], n: 0, updatedAt: 0 }
+  if (tmpl.embs.length) {
+    let best = -1
+    for (const ref of tmpl.embs) { const c = cosine(e.emb, ref); if (c > best) best = c }
+    if (best < ENROLL_COHESIVE) {
+      return { ok: false, reason: '这段声音跟已收样本差异太大（余弦 ' + best.toFixed(2) + ' < ' + ENROLL_COHESIVE + '，请用平常音量再说一句）' }
+    }
+  }
   tmpl.embs.push(e.emb)
   tmpl.n = tmpl.embs.length
   tmpl.updatedAt = Date.now()
   const done = saveTemplate()
-  log('[voiceprint] 注册声纹样本 #' + tmpl.n + (done ? '（已落盘）' : '（写盘失败，只在内存）'))
+  log('[voiceprint] 注册声纹样本 #' + tmpl.n + '（有效 ' + e.validSec.toFixed(1) + 's norm=' + (e.norm || 0).toFixed(1) + '）' + (done ? '（已落盘）' : '（写盘失败，只在内存）'))
   lastEvent = { label: 'owner', sim: 1, at: Date.now(), via: 'enroll' }
   return { ok: true, speaker: 'owner', sim: 1, enrolled: true, samples: tmpl.n }
 }
@@ -271,7 +306,7 @@ function pcmFromB64 (b64) {
 
 module.exports = {
   configure, status, resetForTest, ensureEngine,
-  cosine, judge, resampleLinear,
+  cosine, judge, resampleLinear, trimSilence,
   embedFromPcm, verifyPcm, pcmFromB64, deleteTemplate, block,
   _setExtractor,
   TARGET_SR, MIN_SEC, SAME_DEFAULT, MAYBE_DEFAULT
