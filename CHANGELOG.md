@@ -1,5 +1,14 @@
 # 更新说明（CHANGELOG）
 
+## 0.49.4（2026-11-09）
+
+**vp 聋流看门狗：AudioContext 被挂起=整条语音链静默失败**
+
+- 主人 22:52：「好像彻底没办法听到我的声音了」——21:44（0.49.3 启动）到 22:51 整整一小时零语音事件：零 VAD、零声纹判定、零 ASR、零响度闸日志。流是开的，但听到的是数字静音。
+- **根因**：`micOn()` 的 `new AudioContext()` 没有 suspended→resume 处理。Chromium 自动播放策略：没有用户手势时创建即 suspended → analyser 恒读 128 → rms 恒 0 → VAD 永不触发且**零日志**（静默失败）。21:34 能用=主人亲手点过按钮有手势；重启后自动开麦（开麦状态持久化）没有手势=挂起。0.48.9 给 hearCtx 加过 resume——链路×2 老坑：只修了 hear 一侧，vp 流漏了（hear 当时复用 vp 的 analyser，vp 挂起=hear 感知也死）。
+- **修**：①开麦时 suspended 即 resume + 留痕（vp-ctx-resume / vp-ctx-state 无条件）；②startVad 聋流看门狗——rms<0.0005 连续 ~10 秒（真麦活着有 8-bit 底噪 rms≈0.003+，与挂起的恒 0 干净分离）→ 尝试恢复 + reportError('vp-deaf') 进主进程日志；有声即归零。
+- 测试：fix-04902 追加 2 例锁死；全量 1182 例 0 失败 + audit 零基线外 + wirecheck 过（ff14-e2e 1 例=外部代理 502，与本版无关）。
+
 ## 0.49.3（2026-11-09）
 
 **语音场景话术改事实式：声音真实到过耳朵**

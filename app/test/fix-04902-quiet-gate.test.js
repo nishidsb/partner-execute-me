@@ -68,3 +68,27 @@ test('p90 行为：噪音段（真机 21:02 口径）被拦，真声段（主人
   }
   assert.ok(speakLevel(speech) >= 0.045, '真声 p90=' + speakLevel(speech).toFixed(3) + ' ≥ 0.045 → 放行（均值口径会被停顿拉低，p90 不会）')
 })
+
+/* 0.49.4 聋流看门狗：21:44~22:51 实锤——重启后自动开麦（无用户手势）→
+ * Chromium 自动播放策略把 AudioContext 挂起 → analyser 恒读 128 → rms 恒 0，
+ * VAD 永不触发且零日志（静默失败一小时）。修=开麦 resume+state 留痕 + tick 内
+ * 连续全零看门狗（恢复+reportError）。0.48.9 只给 hearCtx 加过——链路×2 又犯。 */
+test('0.49.4 vp 音频上下文：suspended 必 resume 并留痕（state 日志）', () => {
+  const src = R('../src/renderer/overlay/pet.js')
+  assert.ok(src.includes("petDiagOnce('vp-ctx-resume'"), '挂起时 resume 并留痕')
+  assert.ok(src.includes("petDiagOnce('vp-ctx-state'"), '上下文 state 无条件留痕')
+  const createAt = src.indexOf('audioCtx = new AudioContext()')
+  const resumeAt = src.indexOf("petDiagOnce('vp-ctx-resume'")
+  assert.ok(createAt > 0 && resumeAt > createAt, 'resume 在创建之后')
+})
+
+test('0.49.4 startVad 聋流看门狗：连续全零→恢复+reportError，有声归零', () => {
+  const src = R('../src/renderer/overlay/pet.js')
+  assert.ok(src.includes('vadZeroRun'), '全零计数')
+  assert.ok(src.includes('vadZeroRun >= 84'), '连续 ~10s（120ms×84）触发')
+  assert.ok(src.includes("reportError('vp-deaf'"), '聋流留痕（主进程 main.log 可见）')
+  assert.ok(src.includes('vadZeroRun = 0'), '有声即归零')
+  const watchdogAt = src.indexOf('vadZeroRun >= 84')
+  const hearTickAt = src.indexOf('hearTick(rms)')
+  assert.ok(watchdogAt > 0 && hearTickAt > watchdogAt, '看门狗与 hearTick 同 tick（感知同源同护）')
+})

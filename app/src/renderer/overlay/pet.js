@@ -2586,12 +2586,35 @@ function setupChat () {
 
   function startVad () {
     const buf = new Uint8Array(analyser.fftSize)
+    let vadZeroRun = 0 // 0.49.4 聋流看门狗
+    let vadZeroReported = false
     vadTimer = setInterval(() => {
       analyser.getByteTimeDomainData(buf)
       let sum = 0
       for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v }
       const rms = Math.sqrt(sum / buf.length)
       const now = Date.now()
+      // 0.49.4 聋流看门狗：真麦有 8-bit 量化底噪（活着 rms≈0.003+）；audioCtx 被挂起时
+      // 恒读 128 → rms 恒 0。连续 ~10 秒全零 = 聋流，尝试恢复并留痕（主进程 main.log
+      // 可见——渲染层静默失败的老坑）。恢复成功即归零重来；每轮聋流只报一次。
+      if (rms < 0.0005) {
+        vadZeroRun++
+        if (vadZeroRun >= 84) {
+          if (audioCtx && audioCtx.state === 'suspended') {
+            try { audioCtx.resume().catch(() => {}) } catch { }
+          }
+          if (!vadZeroReported) {
+            vadZeroReported = true
+            try {
+              window.aura.reportError('vp-deaf', '语音流全零 ' + Math.round(vadZeroRun * 0.12) + 's（ctx=' +
+                (audioCtx ? audioCtx.state : '无') + '），已尝试恢复', '')
+            } catch { }
+          }
+        }
+      } else {
+        vadZeroRun = 0
+        vadZeroReported = false
+      }
       hearTick(rms)
       // 2.4 打断：她正在出声、你也开口 → 停她的语音 + 停生成（用户优先）
       if (rms > 0.045 && interruptOn) {
@@ -2845,6 +2868,19 @@ function setupChat () {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       audioCtx = new AudioContext()
+      // 0.49.4 Chromium 自动播放策略：没有用户手势时 AudioContext 创建即 suspended，
+      // analyser 恒读 128 → rms 恒 0 → VAD 永不触发且零日志（21:44~22:51 实锤：
+      // 重启后自动开麦整整一小时零语音事件， hear 同因共用 analyser 也报很安静）。
+      // 21:34 能用=主人亲手点过按钮有手势；0.48.9 只给 hearCtx 加了 resume——链路×2。
+      if (audioCtx.state === 'suspended') {
+        try {
+          await audioCtx.resume()
+          petDiagOnce('vp-ctx-resume', '语音音频上下文被自动播放策略挂起，已恢复（state=' + audioCtx.state + '）')
+        } catch (e) {
+          petDiagOnce('vp-ctx-resume-err', '恢复失败：' + (e.message || e.name))
+        }
+      }
+      petDiagOnce('vp-ctx-state', '语音音频上下文 state=' + audioCtx.state + '（suspended=读到的全是静音）')
       analyser = audioCtx.createAnalyser()
       analyser.fftSize = 1024
       audioCtx.createMediaStreamSource(stream).connect(analyser)
