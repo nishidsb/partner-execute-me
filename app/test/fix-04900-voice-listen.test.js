@@ -70,6 +70,13 @@ test('assistant 链：<listen> 协议与 silent 广播 + 静默轮跳过记账',
   assert.ok(idx.includes('if (!silentReply) {'), '静默轮跳过记账')
 })
 
+test('0.49.3 语音场景话术=事实式：声音真实到过耳朵（21:35 实锤她否了定义式话术）', () => {
+  const idx = read('src/main/assistant/index.js')
+  assert.ok(idx.includes('你的耳朵真实收到了这个声音'), '话术断言「声音到过」而非定义「你在听」')
+  assert.ok(idx.includes('下面的文字就是你听清的部分'), '文字=听清的部分（转写错字她知道是没听清）')
+  assert.ok(!idx.includes('这句是你在他旁边直接听到的话'), '旧定义式话术已退役')
+})
+
 test('preload：petChatSend 透传 voice 标记', () => {
   const pre = read('src/preload/overlay.js')
   assert.ok(pre.includes("petChatSend: (text, voice) => ipcRenderer.invoke('assistant:send', text, null, voice)"), 'voice 参数透传')
