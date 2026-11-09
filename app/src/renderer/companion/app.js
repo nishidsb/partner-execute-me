@@ -1170,6 +1170,12 @@ async function renderCpSettings () {
   $('cpApiBase').value = cs.apiBaseUrl || ''
   $('cpApiKey').value = cs.apiKey || ''
   $('cpApiModel').value = cs.apiModel || ''
+  // 0.50.0 本地大模型：回填 + 状态行（不阻塞页面）
+  if ($('cpLocalLlmOn')) {
+    $('cpLocalLlmOn').checked = cs.localLlmOn !== false
+    $('cpLocalLlmUrl').value = cs.localLlmUrl || 'http://127.0.0.1:11434/v1'
+    localLlmStatusRefresh().catch(() => { })
+  }
   // 建模接入以助手核心为准（聊天真正调用的 provider）；旧配置仅作兜底
   if (A) {
     try {
@@ -1807,6 +1813,9 @@ const cpGather = () => ({
   apiBaseUrl: $('cpApiBase').value.trim(),
   apiKey: $('cpApiKey').value.trim(),
   apiModel: $('cpApiModel').value.trim(),
+  // 0.50.0 本地大模型自动路由（副手+备胎）
+  localLlmOn: $('cpLocalLlmOn') ? $('cpLocalLlmOn').checked : true,
+  localLlmUrl: $('cpLocalLlmUrl') ? $('cpLocalLlmUrl').value.trim() : '',
   visionOn: $('cpVision').checked,
   petOn: $('cpPetOn').checked,
   readReply: $('cpReadReply').checked,
@@ -2750,6 +2759,23 @@ $('cpFetchModels').addEventListener('click', async () => {
     btn.textContent = t('api.fail')
   }
   setTimeout(() => { btn.textContent = t('api.fetch') }, 2500)
+})
+
+/* 0.50.0 本地大模型：状态行 + 探测按钮（先保存再探，探测结果即时显示） */
+async function localLlmStatusRefresh () {
+  const el = $('cpLocalLlmStatus')
+  if (!el || typeof window.companion.localLlmProbe !== 'function') return
+  el.textContent = '正在探测本地端点…'
+  try {
+    const s = await window.companion.localLlmProbe()
+    el.textContent = s.on
+      ? (s.online ? '✅ 本地在线，自动选用：' + (s.picked || '（无可用对话模型）') : '⚪ 本地端点没连上（' + s.url + '）——一切照旧走云端，不影响使用')
+      : '本地路由已关闭'
+  } catch (e) { el.textContent = '探测失败：' + (e && e.message) }
+}
+$('cpLocalLlmTest').addEventListener('click', async () => {
+  await cpSave()
+  await localLlmStatusRefresh()
 })
 function renderWorld () {
   const list = $('worldList')

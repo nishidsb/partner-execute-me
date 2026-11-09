@@ -256,6 +256,20 @@ async function init ({ logDir, dataRoot: root, bcast } = {}) {
   cfgMod = await import(IMP(CORE_ROOT + 'config.js'))
   vendorMod = await import(IMP(CORE_ROOT + 'vendors.js'))
   modelsMod = await import(IMP(CORE_ROOT + 'models/index.js'))
+  // 0.50.0 备胎位：云端失败 → 本地大模型顶上（主人拍板「副手+备胎」）。
+  // fallback 用 openaiCompat 直连本地端点（Ollama 等 /v1 兼容），返回同形状结果；
+  // 本地不在线/也失败 → 抛原错（照旧走云端错误分诊）。切换守卫（abort/已吐字）在
+  // models/index.js 的包装层里。
+  {
+    const localLlm = require('../companion/localLlm')
+    const oaiMod = await import(IMP(CORE_ROOT + 'models/openaiCompat.js'))
+    modelsMod.setChatFallback(async (opts, err) => {
+      const p = localLlm.pick()
+      if (!p) throw err
+      log('[assistant] 云端失败 → 本地大模型顶上（' + p.model + '）')
+      return oaiMod.chat({ ...opts, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model })
+    })
+  }
   const roleMod = await import(IMP(CORE_ROOT + 'roles/roleManager.js'))
   const memMod = await import(IMP(CORE_ROOT + 'memory/memoryStore.js'))
   const sessMod = await import(IMP(CORE_ROOT + 'core/session.js'))

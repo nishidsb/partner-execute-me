@@ -14,6 +14,14 @@ const RETRY_DELAYS_MS = [2000, 6000, 15000]
 
 function wait (ms) { return new Promise((r) => setTimeout(r, ms)) }
 
+/* 0.50.0 本地大模型自动路由（主人拍板：副手+备胎）。
+ * ROUTER 由 companion/index.js 注入（localLlm.pick）：本地在线才给参数，不在线 null。
+ *  - side：旁路小活（chatOnce=判读/记忆提炼）本地优先，本地失败回落云端；
+ *  - fallback：主对话（chatStream=她的声音）云主本地备——云端失败且流没吐过字才切
+ *    （吐过字再切=同一句话说两遍；主人主动中断也绝不切）。 */
+let ROUTER = null
+function setRouter (r) { ROUTER = r || null }
+
 /**
  * 打开一次补全请求；瞬态错误/网络抖动在收到响应头之前重试。
  * 已建立流（res.ok）之后发生的事不在本函数管辖内——那之后重试有重复说话风险。
@@ -49,7 +57,7 @@ async function openCompletion ({ url, headers, body, signal, label }) {
  * 流式对话。onDelta(text) 逐段回调；遇到工具调用时执行 tools 并自动续轮。
  * 返回 { content, toolResults }
  */
-async function chatStream ({ baseUrl, apiKey, model, messages, temperature = 0.8, tools, toolExec, signal, onDelta, maxRounds = 4 }) {
+async function chatStreamImpl ({ baseUrl, apiKey, model, messages, temperature = 0.8, tools, toolExec, signal, onDelta, maxRounds = 4 }) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const url = /\/chat\/completions$/.test(base) ? base : base + '/chat/completions'
   const headers = { 'Content-Type': 'application/json' }
@@ -155,6 +163,22 @@ async function chatStream ({ baseUrl, apiKey, model, messages, temperature = 0.8
   return { content, toolResults }
 }
 
+/** 0.50.0 主对话：云主本地备。云端在流吐字前失败（429/5xx/断网/超时）→ 本地顶上；
+ *  吐过字后失败不切（重复说话风险）；主人主动中断（signal.aborted）不切。 */
+async function chatStream (args) {
+  if (!ROUTER || typeof ROUTER.fallback !== 'function') return chatStreamImpl(args)
+  let emitted = false
+  const wrapped = args.onDelta ? (t) => { emitted = true; return args.onDelta(t) } : undefined
+  try {
+    return await chatStreamImpl({ ...args, onDelta: wrapped })
+  } catch (err) {
+    const fb = ROUTER.fallback()
+    if (!fb || (args.signal && args.signal.aborted) || emitted) throw err
+    log('[llm] 云端失败（' + String(err && err.message || err).slice(0, 90) + '）→ 本地模型顶上（' + fb.model + '）')
+    return chatStreamImpl({ ...args, baseUrl: fb.baseUrl, apiKey: fb.apiKey, model: fb.model })
+  }
+}
+
 /**
  * 一次性短问答（非流式）。
  *
@@ -164,7 +188,7 @@ async function chatStream ({ baseUrl, apiKey, model, messages, temperature = 0.8
  *
  * @returns {Promise<string>} 模型输出原文（空串表示没拿到内容，调用方应回退）
  */
-async function chatOnce ({ baseUrl, apiKey, model, messages, temperature = 0, maxTokens = 220, timeoutMs = 8000 }) {
+async function chatOnceImpl ({ baseUrl, apiKey, model, messages, temperature = 0, maxTokens = 220, timeoutMs = 8000 }) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   if (!base || !model) throw new Error('判读器缺少 baseUrl/model')
   const url = /\/chat\/completions$/.test(base) ? base : base + '/chat/completions'
@@ -211,6 +235,20 @@ async function chatOnce ({ baseUrl, apiKey, model, messages, temperature = 0, ma
   }
 }
 
+/** 0.50.0 旁路小活：本地优先（副手位）。本地失败回落云端；云端没配也一样——
+ *  本地在线时就算 apiBaseUrl 空着，判读/记忆提炼也能干活（以前直接抛「缺 baseUrl」）。 */
+async function chatOnce (args) {
+  const side = ROUTER && typeof ROUTER.side === 'function' ? ROUTER.side() : null
+  if (side) {
+    try {
+      return await chatOnceImpl({ ...args, baseUrl: side.baseUrl, apiKey: side.apiKey, model: side.model })
+    } catch (err) {
+      log('[llm] 本地判读失败（' + String(err && err.message || err).slice(0, 90) + '）→ 回落云端')
+    }
+  }
+  return chatOnceImpl(args)
+}
+
 /** 模型列表（本地端点 /v1/models），失败返回空数组 */
 async function listModels ({ baseUrl, apiKey }) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
@@ -227,4 +265,4 @@ async function listModels ({ baseUrl, apiKey }) {
   }
 }
 
-module.exports = { chatStream, chatOnce, listModels, RETRY_DELAYS_MS }
+module.exports = { chatStream, chatOnce, chatStreamImpl, chatOnceImpl, setRouter, listModels, RETRY_DELAYS_MS }

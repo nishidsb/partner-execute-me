@@ -282,6 +282,7 @@ window.AuraI18n.STRINGS.zh = {
     baseLabel: 'API 地址（OpenAI 兼容；本地 Ollama 填 http://127.0.0.1:11434/v1）',
     keyLabel: 'API Key（本地模型一般留空）',
     modelLabel: '模型',
+    localLabel: '本地大模型（自动路由：小活优先走它，云端出错自动顶上）',
     fetch: '获取模型列表',
     fetching: '获取中…',
     loaded: (n) => '已载入 ' + n + ' 个',

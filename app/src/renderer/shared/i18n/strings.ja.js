@@ -281,6 +281,7 @@ window.AuraI18n.STRINGS.ja = {
     baseLabel: 'API アドレス（OpenAI 互換；ローカル Ollama は http://127.0.0.1:11434/v1）',
     keyLabel: 'API キー（ローカルモデルなら通常空で OK）',
     modelLabel: 'モデル',
+    localLabel: 'ローカル大規模モデル（自動ルーティング：小タスクは優先、クラウド障害時は自動切替）',
     fetch: 'モデル一覧を取得',
     fetching: '取得中…',
     loaded: (n) => n + ' 件を読み込みました',

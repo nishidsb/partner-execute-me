@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('companion', {
   stop: () => ipcRenderer.invoke('companion:stop'),
   clearHistory: (id) => ipcRenderer.invoke('companion:clear-history', id),
   models: (baseUrl, apiKey) => ipcRenderer.invoke('companion:models', baseUrl, apiKey),
+  // 0.50.0 本地大模型：探测（强制重探并回状态）
+  localLlmProbe: () => ipcRenderer.invoke('companion:local-llm-probe'),
   settings: () => ipcRenderer.invoke('companion:settings'),
   // 0.45.14 今日互动统计
   interactStats: () => ipcRenderer.invoke('companion:interact-stats'),

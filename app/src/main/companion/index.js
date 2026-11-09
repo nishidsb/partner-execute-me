@@ -14,6 +14,16 @@ const { log } = require('../logger')
 const character = require('./character')
 const memory = require('./memory')
 const llm = require('./llm')
+/* 0.50.0 本地大模型自动路由（主人拍板：副手+备胎，端点 Ollama）。
+ * 副手=chatOnce 旁路小活本地优先；备胎=云端失败主对话自动顶上。
+ * 路由钩子只在调用瞬间读缓存（localLlm.pick），不阻塞；配置在 registerIpc 与
+ * patchCfg 两处同步。 */
+const localLlm = require('./localLlm')
+function applyLocalLlm () {
+  const c = cfg()
+  localLlm.configure({ on: c.localLlmOn !== false, url: c.localLlmUrl, model: c.localLlmModel })
+  llm.setRouter({ side: () => localLlm.pick(), fallback: () => localLlm.pick() })
+}
 const tools = require('./tools')
 /* 0.45.69 学习账本：学习期间的一切（抽查明细、补时、字数、时长）当场落盘。
  * 只进事件流不够——事件流要等日记定稿才成形，退出学习模式后问「今天学了多久」她答不出来。 */
@@ -429,6 +439,10 @@ function cfg () {
   return c
 }
 function patchCfg (patch) {
+  // 0.50.0 本地大模型配置变化即时生效
+  if (patch.localLlmOn !== undefined || patch.localLlmUrl !== undefined || patch.localLlmModel !== undefined) {
+    try { applyLocalLlm() } catch (e) { log('[localLlm] 重配失败：' + (e && e.message)) }
+  }
   /* 0.45.66：换了模型或接口就重新试一次「能不能看图」。
    * visionNoImage 是上次真机发图被 400 之后落的盘，跟着旧模型走的；不清掉的话
    * 主人换成能看图的模型，她还是一辈子走「看不到画面」的文本版眼睛。 */
@@ -3997,6 +4011,11 @@ function settingsView () {
 }
 
 function registerIpc () {
+  // 0.50.0 本地大模型自动路由：启动即按配置接线路由 + 后台首探（在线与否都不影响云端主路）
+  try {
+    applyLocalLlm()
+    localLlm.probe().catch(() => { })
+  } catch (e) { log('[localLlm] 初始化失败：' + (e && e.message)) }
   // 语音请求代理：启动时按配置初始化（空=跟随系统，direct=强制直连，其它=自定义规则）
   try { require('./tts').setTtsProxy(cfg().netProxy) } catch (err) { log('[companion] 初始化 TTS 代理失败:', err.message) }
   // 0.48.0 声纹：路径对齐 userData/voiceprint/，配置跟 global.companion 走；引擎后台预热
@@ -4210,6 +4229,12 @@ function registerIpc () {
   })
 
   ipcMain.handle('companion:models', async (_e, baseUrl, apiKey) => llm.listModels({ baseUrl, apiKey }))
+  // 0.50.0 本地大模型：设置页探测按钮 → 强制重探并回状态（在线/离线/自动选中的模型）
+  ipcMain.handle('companion:local-llm-probe', async () => {
+    applyLocalLlm()
+    await localLlm.probe({ force: true })
+    return localLlm.stats()
+  })
   // 0.18.0 M3 屏幕监控陪伴：状态/配置（getWatch 首次调用时按现有配置排定时器）
   ipcMain.handle('watch:status', () => getWatch().status())
   ipcMain.handle('watch:patch', (_e, p) => { const next = getWatch().patch(p || {}); return { ok: true, config: next } })

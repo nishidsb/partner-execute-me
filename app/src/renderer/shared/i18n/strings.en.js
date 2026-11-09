@@ -281,6 +281,7 @@ window.AuraI18n.STRINGS.en = {
     baseLabel: 'API URL (OpenAI-compatible; for local Ollama use http://127.0.0.1:11434/v1)',
     keyLabel: 'API key (usually empty for local models)',
     modelLabel: 'Model',
+    localLabel: 'Local LLM (auto-routing: side tasks prefer it; cloud failures fall back to it)',
     fetch: 'Fetch model list',
     fetching: 'Fetching…',
     loaded: (n) => 'Loaded ' + n + ' models',

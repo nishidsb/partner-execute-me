@@ -487,6 +487,15 @@
             <button id="cpFetchModels" class="cd-btn" data-i18n="api.fetch">获取模型列表</button>
           </div>
         </label>
+        <!-- 0.50.0 本地大模型自动路由：小活优先走本地，云端出错自动顶上——不再需要手动切换 -->
+        <label data-i18n="api.localLabel">本地大模型（自动路由：小活优先走它，云端出错自动顶上；本地 Ollama 地址 http://127.0.0.1:11434/v1）
+          <div style="display:flex;gap:8px;align-items:center">
+            <label class="cd-check" style="margin:0;white-space:nowrap"><input type="checkbox" id="cpLocalLlmOn" checked> <span>启用</span></label>
+            <input id="cpLocalLlmUrl" placeholder="http://127.0.0.1:11434/v1" style="flex:1">
+            <button id="cpLocalLlmTest" class="cd-btn">探测</button>
+          </div>
+          <div class="hint" id="cpLocalLlmStatus"></div>
+        </label>
         <h4 class="sp-sec" data-i18n="sec.generation">生成参数与能力</h4>
         <label data-i18n="api.effortLabel">思考力度（reasoningEffort；仅部分厂商/模型支持）
           <select id="cpEffort">
