@@ -198,7 +198,8 @@ function embedFromPcm (samples, sr) {
     const st = extractor.createStream()
     st.acceptWaveform({ sampleRate: TARGET_SR, samples: w })
     st.inputFinished()
-    const emb = extractor.compute(st)
+    // Electron ≥21 V8 内存笼拒绝 external buffer，必须第二参 false（官方 FAQ 要求）
+    const emb = extractor.compute(st, false)
     if (!emb || !emb.length) return { ok: false, reason: '嵌入提取为空' }
     return { ok: true, emb: Array.from(emb), dim: emb.length, sec }
   } catch (e) {

@@ -1,5 +1,9 @@
 # 更新说明（CHANGELOG）
 
+## 0.48.4（2026-11-09）
+
+- 声纹嵌入计算在 Electron 下必败修复：真机 PCM 全链打通后卡在最后一步——`嵌入计算失败：External buffers are not allowed`。根因：Electron ≥21 的 V8 内存笼拒绝 native 层分配的 external buffer（纯 Node 下没事，所以单测全绿、真机必炸）。修法按 sherpa-onnx 官方 FAQ：`extractor.compute(st, false)`（第二参 false = 结果拷进 V8 cage）。测试假引擎同步锁死：compute 丢第二参直接抛 Electron 同款错误，防回归。
+
 ## 0.48.3（2026-11-09）
 
 - PCM 解码空数组修复：链路透传修好后声纹被正确调用，但报「跳过：没有音频」——transcribe 里 `Int16Array.from(buf.buffer)` 喂 ArrayBuffer 读不到 `.length`，恒产长度 0 的空数组。解码收编为 `voiceprint.pcmFromB64`（byteOffset/length 切视图），单测固化（正弦往返/边界输入/坏写法清除）。

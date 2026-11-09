@@ -25,7 +25,11 @@ function fakeExtractor (embOf) {
         _w: () => w
       }
     },
-    compute (st) { return embOf(st._w()) }
+    compute (st, noExternalBuffer) {
+      // 0.48.4 锁死：Electron ≥21 下 compute 必须第二参 false（V8 内存笼拒绝 external buffer）
+      if (noExternalBuffer !== false) throw new Error('External buffers are not allowed')
+      return embOf(st._w())
+    }
   }
 }
 
