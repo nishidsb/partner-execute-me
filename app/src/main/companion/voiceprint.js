@@ -256,10 +256,22 @@ function block () {
   return who
 }
 
+/**
+ * base64(16bit PCM) → Float32Array(-1~1)。
+ * 0.48.3 单测固化：不能用 Int16Array.from(buf.buffer)——ArrayBuffer 没有 .length，
+ * from() 会产出长度 0 的空数组（15:57 真机「跳过：没有音频」的根因）；要用 byteOffset/length 切视图。
+ */
+function pcmFromB64 (b64) {
+  const buf = Buffer.from(String(b64 || ''), 'base64')
+  if (buf.length < 2) return new Float32Array(0)
+  const i16 = new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.length / 2))
+  return Float32Array.from(i16, (v) => v / 32768)
+}
+
 module.exports = {
   configure, status, resetForTest, ensureEngine,
   cosine, judge, resampleLinear,
-  embedFromPcm, verifyPcm, deleteTemplate, block,
+  embedFromPcm, verifyPcm, pcmFromB64, deleteTemplate, block,
   _setExtractor,
   TARGET_SR, MIN_SEC, SAME_DEFAULT, MAYBE_DEFAULT
 }

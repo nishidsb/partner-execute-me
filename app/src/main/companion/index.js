@@ -3618,8 +3618,7 @@ async function transcribe (base64, mime, pcmB64) {
         enroll: c.voiceprintEnroll === true,
         same: c.voiceprintSame, maybe: c.voiceprintMaybe
       })
-      const i16 = Int16Array.from(Buffer.from(String(pcmB64), 'base64').buffer)
-      const f32 = Float32Array.from(i16, (v) => v / 32768)
+      const f32 = voiceprint.pcmFromB64(pcmB64)
       const r = voiceprint.verifyPcm(f32, voiceprint.TARGET_SR, 'mic')
       if (r.ok) vp = { speaker: r.speaker, sim: r.sim, samples: r.samples, enrolled: r.enrolled }
       else log('[voiceprint] 跳过：' + (r.reason || '未知原因'))

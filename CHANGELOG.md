@@ -1,5 +1,9 @@
 # 更新说明（CHANGELOG）
 
+## 0.48.3（2026-11-09）
+
+- PCM 解码空数组修复：链路透传修好后声纹被正确调用，但报「跳过：没有音频」——transcribe 里 `Int16Array.from(buf.buffer)` 喂 ArrayBuffer 读不到 `.length`，恒产长度 0 的空数组。解码收编为 `voiceprint.pcmFromB64`（byteOffset/length 切视图），单测固化（正弦往返/边界输入/坏写法清除）。
+
 ## 0.48.2（2026-11-09）
 
 - 声纹链路透传修复：真机开麦后转写正常但声纹零日志——PCM 死在 ipcMain.handle（只收 base64/mime）和 transcribeQueued/pumpAsr 队列（不带 pcm）中间两层。三层全部透传，voiceprint.test.js 加防回归断言。

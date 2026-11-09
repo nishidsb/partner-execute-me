@@ -150,3 +150,23 @@ test('0.48.0 隐私红线：模板只存嵌入向量，不存任何音频字节'
   vp.deleteTemplate()
   assert.equal(vp.status().enrolled, false, 'deleteTemplate 一键撤回')
 })
+
+test('0.48.3 pcmFromB64：base64 解码不许产出空数组（15:57 真机「跳过：没有音频」的根因）', () => {
+  // 1 秒 16k 正弦 → Int16 → b64 → 解码回来必须满长度、幅值正确
+  const n = 16000
+  const src = new Float32Array(n)
+  for (let i = 0; i < n; i++) src[i] = 0.5 * Math.sin(2 * Math.PI * 220 * i / 16000)
+  const i16 = new Int16Array(n)
+  for (let i = 0; i < n; i++) i16[i] = src[i] < 0 ? src[i] * 0x8000 : src[i] * 0x7fff
+  const b64 = Buffer.from(new Uint8Array(i16.buffer)).toString('base64')
+  const out = vp.pcmFromB64(b64)
+  assert.equal(out.length, n, '解码长度必须等于样本数（不是 0，也不是字节数）')
+  assert.ok(Math.abs(out[100]) > 0.1, '幅值还原正确（-1~1）')
+  assert.equal(vp.pcmFromB64('').length, 0, '空输入 → 空（调用方诚实降级）')
+  assert.equal(vp.pcmFromB64('QQ==').length, 0, '单字节不足 2 字节 → 空（凑不出一个 Int16，诚实降级）')
+  assert.equal(vp.pcmFromB64('QQID').length, 1, '3 字节 → 1 样本（向下取整不炸）')
+  // 主进程不许再用 Int16Array.from(...buffer) 的坏写法
+  const main = fs.readFileSync(path.join(__dirname, '../src/main/companion/index.js'), 'utf8')
+  assert.ok(!main.includes('Int16Array.from(Buffer.from'), '坏解码写法已清除')
+  assert.ok(main.includes('voiceprint.pcmFromB64(pcmB64)'), 'transcribe 用单测固化的解码函数')
+})
