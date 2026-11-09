@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld('companion', {
   assetUrl: (p) => ipcRenderer.invoke('companion:asset-url', p),
   assetData: (p) => ipcRenderer.invoke('companion:asset-data', p),
   logImage: (name, dataUrl) => ipcRenderer.invoke('companion:log-image', name, dataUrl),
-  transcribe: (b64, mime) => ipcRenderer.invoke('companion:transcribe', b64, mime),
+  transcribe: (b64, mime, pcmB64) => ipcRenderer.invoke('companion:transcribe', b64, mime, pcmB64),
   tts: (text) => ipcRenderer.invoke('companion:tts', text),
   fishVoices: () => ipcRenderer.invoke('companion:fish-voices'),
   exportBackup: () => ipcRenderer.invoke('companion:export-backup'),

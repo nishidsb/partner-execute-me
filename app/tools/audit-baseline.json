@@ -60,6 +60,9 @@
     },
     "testOnly:src/main/companion/ttsLocal.js:_setEnsureServer": {
       "reason": "0.46.39 分片合成的测试注入点（绕开真实 python 进程拉起），产品侧固定走真 ensureServer 懒启动。"
+    },
+    "testOnly:src/main/companion/voiceprint.js:_setExtractor": {
+      "reason": "声纹测试的假引擎注入钩子（voiceprint.test.js 用 8 维假嵌入跑注册/验证全链，不让真模型 40MB 进单测）。产品代码走 ensureEngine 懒建真引擎。"
     }
   }
 }

@@ -1,5 +1,14 @@
 # 更新说明（CHANGELOG）
 
+## 0.48.0（2026-11-09）
+
+**声纹识别——「这句话是谁在说」（主人「语音识别不能只停留在说话转文字，我要的是能识别音色」；拍板：认人 + 三口接入）**：
+- 引擎：新模块 `companion/voiceprint.js`——sherpa-onnx-node（npm 预编译二进制，免 python 免 torch）+ 3D-Speaker ERes2Net 中文说话人验证模型（512 维嵌入，模型 ~40MB 首次使用时自动下载，github→代理逐路兜底）；比对 = 与模板各嵌入余弦取最大，阈值 owner≥0.72 / maybe≥0.55（真机标定）
+- 隐私（与画像三约束同构）：模板 = userData/voiceprint/template.json 只有嵌入向量、永不存原声；PCM 只在主进程内存瞬时算嵌入算完即弃、不落盘不出网；撤回 = 删模板文件（设置页 UI 留后续版）
+- 接线①（本次交付）：语音输入——渲染层 ScriptProcessor 录音期间同源采 16k PCM（与 webm 同一 speaking 括号天然对齐）→ petTranscribe 第三参数上送 → transcribe 验声纹 → 气泡诚实显示「✓ 他的声音 0.87 / ? 像 0.61 / ⚠ 不是 0.32」；判定注入 chatter decide【刚说话的声音】+ 回复 sections（不是他就别认错人）
+- 注册：config `global.companion.voiceprintEnroll: true` 后对麦说话即收样本，攒满 3 段自动落模板并收闸；**待接**：QQ 语音消息（silk 解码）、环境声 hear 通道连续声纹（任务挂起）
+- 测试：voiceprint.test.js ×6（余弦/阈值/重采样/诚实降级/注册验证全链含模板重载/隐私红线·接线锁死）；audit 基线 +1（_setExtractor 测试钩子）；全量 1164 例 1162 过 0 失败 + wirecheck 过
+
 ## 0.47.4（2026-11-09）
 
 **24h 一字不差闸真机接线修复（11-09 晨巡检抓到「tick 异常：longList.some is not a function」）**：

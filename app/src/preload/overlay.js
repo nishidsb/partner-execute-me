@@ -71,7 +71,7 @@ contextBridge.exposeInMainWorld('aura', {
   // 聊天面板显示时让 overlay 窗口可聚焦（收键盘），隐藏时切回不可聚焦
   petChatFocus: (on) => ipcRenderer.invoke('pet:chat-focus', on),
   petChatStop: () => ipcRenderer.invoke('companion:stop'),
-  petTranscribe: (b64, mime) => ipcRenderer.invoke('companion:transcribe', b64, mime),
+  petTranscribe: (b64, mime, pcmB64) => ipcRenderer.invoke('companion:transcribe', b64, mime, pcmB64),
   // 0.46.54 听觉：每秒一条声音特征摘要（响度/频段/起伏，几十字节数字，不是音频）
   hearSample: (f) => ipcRenderer.send('overlay:hear-sample', f),
   // 0.46.54 听觉开关状态（ hearOn=false 时渲染层不开听觉轻量流）

@@ -140,6 +140,8 @@ function createChatter (deps) {
   const mood = deps.mood || null
   // 0.46.54 听觉：耳朵里此刻的声音特征（安静无事 → 空串，这整段不进预算）
   const hear = deps.hear || null
+  // 0.48.0 声纹：最近一句验过的话「是谁在说」（没验过 → 空串，不进预算）
+  const voice = deps.voice || (() => '')
   // 0.47.0 共同生活的回响：她手头的小项目等旧线头（空串=没有，整段不进预算）
   const echoHint = deps.echoHint || (() => '')
   // 0.47.1 到点的约定（原闹钟看情况通道）：供料给她自己判断；说出口由宿主收账
@@ -236,6 +238,9 @@ function createChatter (deps) {
     // 但她听到的是声音特征不是对话内容——提示词里说清楚，别让她编「他说了什么」。
     let hearLine = ''
     try { hearLine = String((hear && hear()) || '') } catch { }
+    // 0.48.0 声纹：刚那句是不是他的声音（3 分钟内验过才有，别处处占预算）
+    let voiceLine = ''
+    try { voiceLine = String((voice && voice()) || '') } catch { }
     // 0.47.0 共同生活的回响：她手头的小项目（没有 → 空串，不进预算）
     let echoLine = ''
     try { echoLine = String(echoHint() || '') } catch { }
@@ -272,6 +277,8 @@ function createChatter (deps) {
           ...(moodLine ? [{ role: 'system', content: '【你此刻的心情底色】\n' + moodLine }] : []),
     // 0.46.54 听觉：她有耳朵了——环境声音的响度/特征/突变（安静且无事时不注入）
     ...(hearLine ? [{ role: 'system', content: '【你耳朵里的世界（此刻的环境声音；你听到的是声音特征，听不出谁在说什么内容，别编「他说了什么」）】\n' + hearLine }] : []),
+    // 0.48.0 声纹：刚那句话是谁的声音（3 分钟内验过才有；是他就自然当他在说，不是就别认错人）
+    ...(voiceLine ? [{ role: 'system', content: '【刚说话的声音（声纹判定）】\n' + voiceLine }] : []),
     // 0.47.0 共同生活的回响：旧线头有自然接点才捞，没接点就当没有
     ...(echoLine ? [{ role: 'system', content: '【共同经历的回响（有自然接点就顺口提半句，别硬提、别全倒出来）】\n' + echoLine }] : []),
     // 0.47.1 到点的约定：这条只有她自己知道——看他的状态决定提不提，提就用自己的话说

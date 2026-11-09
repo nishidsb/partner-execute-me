@@ -46,6 +46,7 @@ const presence = require('./presence')
 const rebuke = require('./rebuke')
 // 0.46.54 听觉通道：她终于有耳朵（响度/频段/动静节奏特征聚合，不录音不转写不出本机）
 const hear = require('./hear')
+const voiceprint = require('./voiceprint')
 let hearFirstLogged = false
 
 /* ---------------- 0.35.0 在场判定（全程序唯一真相） ----------------
@@ -719,6 +720,11 @@ function systemPrompt (char, userText) {
       const eb = echoBlockOf()
       if (eb) sections.push({ key: 'echo', priority: 44, text: eb })
     } catch { }
+    // 0.48.0 声纹：这句话是谁的声音（刚验过才有——是他就当他在说，不是就别认错人）
+    try {
+      const vb = voiceprint.block()
+      if (vb) sections.push({ key: 'voice', priority: 50, text: '【刚说话的声音（声纹判定）】\n' + vb })
+    } catch { }
     // 0.47.1 到点的约定（原闹钟）：他正好在说话 → 这轮给他看（看完即消费，不 nag）
     try {
       const db = duePlanBlock('reply')
@@ -1376,6 +1382,8 @@ function getChatter () {
     mood: () => { try { return getNeeds().moodBlock() } catch { return '' } },
     // 0.46.54 听觉：耳朵里此刻的声音（安静且无事 → 空串，不浪费预算不装模作样）
     hear: () => { try { return hear.block() } catch { return '' } },
+    // 0.48.0 声纹：最近验过的一句「是谁在说」（3 分钟内有效，没验过 → 空串）
+    voice: () => { try { return voiceprint.block() } catch { return '' } },
     // 0.46.0 自言自语系统：独白状态 + 此刻的活动素材（嘀咕要有内容依据）
     soliloquy: getSoliloquy(),
     activity: () => {
@@ -3598,7 +3606,39 @@ async function handleMessage (char, userText) {
 
 /* ---------------- ASR 转发（Whisper 兼容） ---------------- */
 
-async function transcribe (base64, mime) {
+async function transcribe (base64, mime, pcmB64) {
+  const c = cfg()
+  // 0.48.0 声纹：PCM 到了就验「是谁在说」（与转写互相独立——ASR 失败声纹照样算）。
+  // 只认 global.companion.voiceprintOn !== false；enroll 模式下顺带把样本收进模板。
+  let vp = null
+  if (pcmB64 && String(pcmB64).length > 64 && c.voiceprintOn !== false) {
+    try {
+      voiceprint.configure({
+        on: true,
+        enroll: c.voiceprintEnroll === true,
+        same: c.voiceprintSame, maybe: c.voiceprintMaybe
+      })
+      const i16 = Int16Array.from(Buffer.from(String(pcmB64), 'base64').buffer)
+      const f32 = Float32Array.from(i16, (v) => v / 32768)
+      const r = voiceprint.verifyPcm(f32, voiceprint.TARGET_SR, 'mic')
+      if (r.ok) vp = { speaker: r.speaker, sim: r.sim, samples: r.samples, enrolled: r.enrolled }
+      else log('[voiceprint] 跳过：' + (r.reason || '未知原因'))
+      // 注册模式：攒满 3 段自动收闸（config 置回 false，下次启动不会一直收样本）
+      if (r.ok && r.enrolled && r.samples >= 3) {
+        patchCfg({ voiceprintEnroll: false })
+        voiceprint.configure({ enroll: false })
+        log('[voiceprint] 声纹注册完成（3 段样本已入模板），voiceprintEnroll 已自动关掉')
+      }
+    } catch (e) {
+      log('[voiceprint] 验证异常：' + (e && e.message))
+    }
+  }
+  const r = await transcribeBase(base64, mime)
+  if (vp && r && r.ok) { r.speaker = vp.speaker; r.sim = vp.sim; if (vp.enrolled) { r.enrolled = true; r.samples = vp.samples } }
+  return r
+}
+
+async function transcribeBase (base64, mime) {
   const c = cfg()
   // 2.1 本地识别：麦克风录音直接喂 faster-whisper（与刷B站共用同一套 venv，完全离线）
   if (c.asrProvider === 'local') {
@@ -3908,6 +3948,22 @@ function settingsView () {
 function registerIpc () {
   // 语音请求代理：启动时按配置初始化（空=跟随系统，direct=强制直连，其它=自定义规则）
   try { require('./tts').setTtsProxy(cfg().netProxy) } catch (err) { log('[companion] 初始化 TTS 代理失败:', err.message) }
+  // 0.48.0 声纹：路径对齐 userData/voiceprint/，配置跟 global.companion 走；引擎后台预热
+  try {
+    const { app } = require('electron')
+    const vpDir = path.join(app.getPath('userData'), 'voiceprint')
+    const c0 = cfg()
+    voiceprint.configure({
+      modelPath: path.join(vpDir, 'eres2net.onnx'),
+      templatePath: path.join(vpDir, 'template.json'),
+      on: c0.voiceprintOn !== false,
+      enroll: c0.voiceprintEnroll === true,
+      same: c0.voiceprintSame, maybe: c0.voiceprintMaybe,
+      log
+    })
+    voiceprint.ensureEngine().catch(() => { }) // 后台预热（首次可能下模型），失败留 reason 由 verify 诚实降级
+    // 设置页 UI 暂未接：撤回途径=删 userData/voiceprint/template.json（导读已写明），状态看日志 [voiceprint]
+  } catch (e) { log('[voiceprint] 初始化失败：' + (e && e.message)) }
   // 0.24.0 电脑画像：原始缓存落 <userData>/pc-profile/，摘要落角色工作区 pc/
   try {
     const { app } = require('electron')

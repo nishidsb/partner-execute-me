@@ -2492,6 +2492,10 @@ function setupChat () {
   let chunks = []
   let speaking = false
   let silenceSince = 0
+  // 0.48.0 声纹：录音期间同源攒 16k PCM（ScriptProcessor 连续采，与 webm 同一 speaking 括号）
+  let vpProcessor = null
+  let vpSink = null
+  let vpPcm = []
   // 按住说话：press 的时刻（0=没按着）。按住期间不按静音自动发，松手才发一条
   let holdAt = 0
   const KEY = 'auraPetMicOn'
@@ -2510,6 +2514,8 @@ function setupChat () {
     const rec = recorder
     recorder = null
     speaking = false
+    // 0.48.0 声纹：把这段录音同源的 16k PCM 带给主进程（只算嵌入，不落盘不出网）
+    const pcmB64 = vpTakePcm()
     if (!rec || rec.state === 'inactive') return
     await new Promise((ok) => { rec.onstop = ok; rec.stop() })
     const blob = new Blob(chunks, { type: 'audio/webm' })
@@ -2520,7 +2526,7 @@ function setupChat () {
       // 录音刚结束就要给反馈：本地 whisper 冷启动要 2~4 秒，什么都不显示会被当成卡死
       bubbleShow('… 听到了，正在识别')
       bubbleKeep(20000)
-      const r = await window.aura.petTranscribe(b64, 'audio/webm')
+      const r = await window.aura.petTranscribe(b64, 'audio/webm', pcmB64)
       if (r && r.ok && r.text) {
         // 0.38.0 识别结果过滤：常开麦会对着静音/空调声断句，出来的「嗯。」「그.」
         // 直接进对话就是她莫名其妙回一句。只拦明显不对的，不猜内容。
@@ -2530,8 +2536,18 @@ function setupChat () {
           bubbleKeep(3000)
           return
         }
+        // 0.48.0 声纹结果：诚实显示「是谁在说」，主人一眼可见（不拦话——判错宁可漏不误）
+        if (r.enrolled && r.samples >= 3) bubbleShow('✓ 声纹注册完成（3 段样本）')
+        else if (r.enrolled) bubbleShow('✓ 声纹样本已收下（' + r.samples + '/3）')
+        else if (r.speaker === 'owner') bubbleShow('✓ 他的声音（' + Number(r.sim).toFixed(2) + '）')
+        else if (r.speaker === 'maybe') bubbleShow('? 像是他的声音（' + Number(r.sim).toFixed(2) + '）')
+        else if (r.speaker === 'other') bubbleShow('⚠ 不是他的声音（' + Number(r.sim).toFixed(2) + '）')
+        if (r.speaker) {
+          bubbleKeep(1500)
+          setTimeout(() => { try { bubbleShow('…'); bubbleKeep(20000) } catch { } }, 1500)
+        }
         generating = true
-        bubbleShow('…')
+        if (!r.speaker) bubbleShow('…')
         window.aura.petChatSend(verdict.text || r.text)
       } else if (r && r.ok) {
         // 识别通了但没文字：多半是太轻/太短/纯噪音，别静默吞掉
@@ -2636,6 +2652,66 @@ function setupChat () {
   // 语音麦的 VAD tick（120ms）路径
   function hearTick (rms) { if (analyser && audioCtx) hearSampleFrom(analyser, audioCtx, rms) }
 
+  /* ---- 0.48.0 声纹 PCM 采集 ----
+   * VAD 的 120ms 快照只有 fftSize≈21ms 的音频（缺 8 成），不能当声纹素材；
+   * ScriptProcessor 是连续回调，采到的流和 MediaRecorder 同一 speaking 括号、天然对齐。
+   * 16k Int16 base64 只算嵌入用：主进程内存瞬时算完即弃，不落盘不出网。
+   * （hear 的红线「音频不出渲染层」指特征听感通道；声纹通道是主人 11-09 拍板的
+   *   认人能力，音频不落盘不出网但进主进程内存——措辞已在导读更新。） */
+  function vpAttach () {
+    if (!audioCtx || !analyser || vpProcessor) return
+    try {
+      vpProcessor = audioCtx.createScriptProcessor(4096, 1, 1)
+      vpProcessor.onaudioprocess = (e) => {
+        if (speaking) vpPcm.push(new Float32Array(e.inputBuffer.getChannelData(0)))
+      }
+      analyser.connect(vpProcessor)
+      vpSink = audioCtx.createGain()
+      vpSink.gain.value = 0 // 不出声，只让回调跑起来
+      vpProcessor.connect(vpSink)
+      vpSink.connect(audioCtx.destination)
+    } catch (e) {
+      vpProcessor = null
+      try { window.aura.reportError('voiceprint', 'PCM 采集挂载失败：' + (e.message || e.name), '') } catch { }
+    }
+  }
+  function vpDetach () {
+    if (vpProcessor) { try { vpProcessor.disconnect() } catch { } vpProcessor.onaudioprocess = null; vpProcessor = null }
+    if (vpSink) { try { vpSink.disconnect() } catch { } vpSink = null }
+    vpPcm = []
+  }
+  /** 攒到的原始 PCM → 16k Int16 base64（主进程再转 Float32 喂引擎） */
+  function vpTakePcm () {
+    if (!vpPcm.length || !audioCtx) { vpPcm = []; return '' }
+    const sr = audioCtx.sampleRate
+    let total = 0
+    for (const c of vpPcm) total += c.length
+    const raw = new Float32Array(total)
+    let o = 0
+    for (const c of vpPcm) { raw.set(c, o); o += c.length }
+    vpPcm = []
+    // 线性重采样到 16k
+    const n = Math.max(1, Math.floor(raw.length * 16000 / sr))
+    const out = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const p = i * (raw.length - 1) / Math.max(1, n - 1)
+      const i0 = Math.floor(p)
+      const i1 = Math.min(raw.length - 1, i0 + 1)
+      out[i] = raw[i0] + (raw[i1] - raw[i0]) * (p - i0)
+    }
+    // Float32 → Int16
+    const i16 = new Int16Array(n)
+    for (let i = 0; i < n; i++) {
+      const v = Math.max(-1, Math.min(1, out[i]))
+      i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff
+    }
+    const bytes = new Uint8Array(i16.buffer)
+    let s = ''
+    const CH = 0x8000
+    for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH))
+    return btoa(s)
+  }
+
   /* 听觉流管理：
    * auto（默认）= 先麦（她听房间——外放的歌、键盘、说话都走空气声），麦失败自动退到
    *   系统回环（她听电脑自己发出的声音——主人戴耳机放歌/本机没麦时这是唯一的耳朵）；
@@ -2717,6 +2793,7 @@ function setupChat () {
       analyser = audioCtx.createAnalyser()
       analyser.fftSize = 1024
       audioCtx.createMediaStreamSource(stream).connect(analyser)
+      vpAttach() // 0.48.0 声纹 PCM 采集挂上
       on = true
       mic.classList.add('on')
       show()
@@ -2738,6 +2815,7 @@ function setupChat () {
     if (recorder && recorder.state === 'recording') { try { recorder.stop() } catch {} }
     recorder = null
     speaking = false
+    vpDetach() // 0.48.0 声纹采集摘除
     if (stream) stream.getTracks().forEach((t) => t.stop())
     stream = null
     if (audioCtx) { try { audioCtx.close() } catch {} }
